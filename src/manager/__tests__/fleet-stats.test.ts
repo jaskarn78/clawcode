@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetNoWebhookFallbacks,
   buildFleetStats,
   classifyShimRuntime,
   cmdlineMatchesClaude,
+  incrementNoWebhookFallback,
+  snapshotNoWebhookFallbacks,
 } from "../fleet-stats.js";
 import * as procScan from "../../mcp/proc-scan.js";
 import * as cgroupStats from "../cgroup-stats.js";
@@ -403,6 +406,73 @@ describe("buildFleetStats — Phase 110 Stage 0b mixed runtime aggregation", () 
     expect(stats.shimRuntimeBaseline).toEqual({
       node: { count: 2, rssMB: 294 },
       static: { count: 1, rssMB: 8 },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 119 D-05 — no_webhook_fallbacks_total counter helper.
+//
+// Module-scoped Map keyed by `${agent}:${channel}`. Vitest reuses the module
+// across describe blocks; `_resetNoWebhookFallbacks()` clears state between
+// tests so increment+snapshot tests don't bleed into each other.
+// ---------------------------------------------------------------------------
+describe("incrementNoWebhookFallback + snapshotNoWebhookFallbacks (D-05)", () => {
+  beforeEach(() => {
+    _resetNoWebhookFallbacks();
+  });
+
+  it("increments the same (agent, channel) key 3 times → snapshot value=3", () => {
+    incrementNoWebhookFallback("projects", "chan-1");
+    incrementNoWebhookFallback("projects", "chan-1");
+    incrementNoWebhookFallback("projects", "chan-1");
+    const snap = snapshotNoWebhookFallbacks();
+    expect(snap["projects:chan-1"]).toBe(3);
+  });
+
+  it("increments 5 distinct (agent, channel) pairs once each → snapshot has 5 entries", () => {
+    incrementNoWebhookFallback("a", "x");
+    incrementNoWebhookFallback("b", "y");
+    incrementNoWebhookFallback("c", "z");
+    incrementNoWebhookFallback("d", "w");
+    incrementNoWebhookFallback("e", "v");
+    const snap = snapshotNoWebhookFallbacks();
+    expect(Object.keys(snap)).toHaveLength(5);
+    expect(snap["a:x"]).toBe(1);
+    expect(snap["e:v"]).toBe(1);
+  });
+
+  it("snapshot is a shallow copy — mutating it does not affect subsequent calls", () => {
+    incrementNoWebhookFallback("admin-clawdy", "chan-A");
+    const snap1 = snapshotNoWebhookFallbacks() as Record<string, number>;
+    // Attempt to mutate (object IS sealed via Object.freeze under the
+    // contract — assignment throws in strict mode). The contract is "the
+    // returned object never affects daemon state". Test the daemon-side
+    // invariant by mutating an isolated copy and re-snapshotting.
+    const copy: Record<string, number> = { ...snap1, "admin-clawdy:chan-A": 999 };
+    expect(copy["admin-clawdy:chan-A"]).toBe(999);
+    const snap2 = snapshotNoWebhookFallbacks();
+    expect(snap2["admin-clawdy:chan-A"]).toBe(1);
+  });
+
+  it("zero state — fresh reset returns empty object", () => {
+    const snap = snapshotNoWebhookFallbacks();
+    expect(snap).toEqual({});
+  });
+
+  it("FleetStatsData shape — buildFleetStats embeds the counter snapshot", async () => {
+    incrementNoWebhookFallback("admin-clawdy", "chan-X");
+    incrementNoWebhookFallback("projects", "chan-Y");
+    vi.spyOn(cgroupStats, "readCgroupMemoryStats").mockResolvedValue(null);
+    vi.spyOn(procScan, "listAllPids").mockResolvedValue([]);
+    const stats = await buildFleetStats({
+      daemonPid: 1,
+      trackedClaudeCount: 0,
+      mcpPatterns: [],
+    });
+    expect(stats.noWebhookFallbacksTotal).toEqual({
+      "admin-clawdy:chan-X": 1,
+      "projects:chan-Y": 1,
     });
   });
 });

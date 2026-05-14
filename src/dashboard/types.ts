@@ -220,6 +220,26 @@ export type FleetStatsData = {
     readonly static?: { readonly count: number; readonly rssMB: number };
     readonly python?: { readonly count: number; readonly rssMB: number };
   } | null;
+  /**
+   * Phase 119 D-05 — `no_webhook_fallbacks_total{agent, channel}` counter.
+   *
+   * Monotonic counter since daemon start. Keyed by `${agent}:${channel}` so
+   * a single colon separator stays journalctl-grep friendly. Increments on
+   * every fallback dispatch (bot-direct path OR inbox-only return path) via
+   * the single helper `incrementNoWebhookFallback` in `fleet-stats.ts`. The
+   * webhook-success path does NOT increment — the counter measures fallback
+   * frequency, not delivery volume.
+   *
+   * JSON-safe by construction: typed as Record (not Map) so the IPC reply
+   * serializes correctly without a Map→Record adapter at the boundary. The
+   * snapshot is a shallow copy of the internal counter map — mutating the
+   * returned value never mutates daemon state.
+   *
+   * Optional for back-compat with pre-Phase-119 clients; the daemon always
+   * populates it (even at `{}`) post-Phase-119. Dashboard explicitly renders
+   * the empty-state, not absent-state.
+   */
+  readonly noWebhookFallbacksTotal?: Readonly<Record<string, number>>;
   /** Epoch ms — when this snapshot was taken. */
   readonly sampledAt: number;
 };

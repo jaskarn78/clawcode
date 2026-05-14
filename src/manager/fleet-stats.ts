@@ -180,6 +180,7 @@ export async function buildFleetStats(args: {
       claudeProcDrift: null,
       mcpFleet: [],
       shimRuntimeBaseline: null,
+      noWebhookFallbacksTotal: snapshotNoWebhookFallbacks(),
       sampledAt,
     };
   }
@@ -244,6 +245,7 @@ export async function buildFleetStats(args: {
     },
     mcpFleet,
     shimRuntimeBaseline: buildShimRuntimeBaseline(mcpFleet),
+    noWebhookFallbacksTotal: snapshotNoWebhookFallbacks(),
     sampledAt,
   };
 }
@@ -289,3 +291,48 @@ function buildShimRuntimeBaseline(
 export type _FleetStatsTestArgs = {
   readonly procInfos: ReadonlyArray<ProcInfo>;
 };
+
+// ---------------------------------------------------------------------------
+// Phase 119 D-05 — `no_webhook_fallbacks_total{agent, channel}` counter.
+//
+// Module-scoped singleton (mirrors how Phase 109's other fleet-stats
+// accumulators work — no DI plumbing through every IPC handler). Increment
+// is called from `daemon-post-to-agent-ipc.ts` at exactly two sites:
+//   1. Bot-direct fallback rung — when the bot client successfully delivers
+//      a message via plain-text fallback (no webhook available).
+//   2. Inbox-only return path — when neither webhook nor bot-direct path
+//      delivered, and the inbox is the final landing zone.
+//
+// `snapshotNoWebhookFallbacks()` returns a shallow copy as a plain
+// `Record<string, number>` so the IPC reply is JSON-safe by construction
+// (no Map→Record adapter needed at the boundary). The key shape
+// `${agent}:${channel}` keeps single-colon grep ergonomics for journalctl.
+// ---------------------------------------------------------------------------
+
+const noWebhookFallbacksCounter = new Map<string, number>();
+
+export function incrementNoWebhookFallback(
+  agent: string,
+  channel: string,
+): void {
+  const key = `${agent}:${channel}`;
+  const prev = noWebhookFallbacksCounter.get(key) ?? 0;
+  noWebhookFallbacksCounter.set(key, prev + 1);
+}
+
+export function snapshotNoWebhookFallbacks(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [key, value] of noWebhookFallbacksCounter) {
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Test-only reset. Module-scoped state survives across vitest `describe`
+ * blocks; tests that exercise the counter MUST call this in `beforeEach` so
+ * prior-test increments don't leak. Production callers never invoke this.
+ */
+export function _resetNoWebhookFallbacks(): void {
+  noWebhookFallbacksCounter.clear();
+}
