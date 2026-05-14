@@ -26,6 +26,8 @@ import {
   extractStructuredFacts,
   tier2FactsToChunks,
 } from "./tier2-haiku.js";
+import { truncateLargePayloads } from "./tier3-payload-truncator.js";
+import { summarizeAsProse } from "./tier3-prose.js";
 import type { BuildExtractorDeps, ExtractMemoriesFn } from "./types.js";
 
 const DEFAULT_MAX_CHUNKS = 50;
@@ -118,15 +120,37 @@ export function buildTieredExtractor(
       }
     }
 
-    const tier4Facts = dropped
+    // Tier 3 (Plan 04) — payload truncation + prose summary of the
+    // residual region (post-Tier-4-drop). Bulky tool_use/tool_result
+    // payloads collapse to deterministic stubs BEFORE the prose call so
+    // Haiku never sees base64 PDFs. The prose string is a SINGLE chunk
+    // that lands ahead of the verbatim Tier 4 chunks; on Haiku
+    // failure/timeout `summarizeAsProse` returns the fallback string,
+    // which is itself a valid summary — compaction degrades gracefully.
+    const truncated = truncateLargePayloads(dropped);
+
+    let tier3Chunk: string | null = null;
+    if (deps.tier3Summarize) {
+      const tier3Text = truncated.map(turnToFact).join("\n");
+      tier3Chunk = await summarizeAsProse(tier3Text, {
+        summarize: deps.tier3Summarize,
+        log: deps.log,
+        agentName: deps.agentName,
+        timeoutMs: deps.tier3TimeoutMs,
+      });
+    }
+
+    const tier4Facts = truncated
       .map(turnToFact)
       .filter((s) => s.length > 20);
 
-    // Order matters: preserved → tier2 facts → tier4 turns. Tier 2 rides
-    // ahead of Tier 4 so high-value facts survive the `maxChunks` cap.
+    // Order matters: preserved → tier2 facts → tier3 prose → tier4 turns.
+    // High-value structured + prose summaries ride ahead of raw turns so
+    // they survive the `maxChunks` cap.
     const combined = [
       ...preservedFacts,
       ...tier2Chunks,
+      ...(tier3Chunk ? [tier3Chunk] : []),
       ...tier4Facts,
     ].slice(0, maxChunks);
     return Object.freeze(combined);

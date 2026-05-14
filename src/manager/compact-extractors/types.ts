@@ -48,6 +48,16 @@ export type Tier2SummarizeFn = (
   opts: { readonly signal?: AbortSignal },
 ) => Promise<string>;
 
+/**
+ * Phase 125 Plan 04 — Tier 3 prose summarizer DI shape. Same call contract
+ * as `Tier2SummarizeFn`; kept as a distinct alias so the seam can route the
+ * two Haiku calls independently if cost or model selection diverges later.
+ */
+export type Tier3SummarizeFn = (
+  prompt: string,
+  opts: { readonly signal?: AbortSignal },
+) => Promise<string>;
+
 export type ExtractorDeps = Readonly<{
   preserveLastTurns: number;
   preserveVerbatimPatterns: readonly RegExp[];
@@ -95,4 +105,14 @@ export type BuildExtractorDeps = Readonly<{
   onTier2Facts?: (facts: Tier2Facts) => Promise<void>;
   /** Override per-Tier 2 timeout for tests. Production: 30s default. */
   tier2TimeoutMs?: number;
+  /**
+   * Phase 125 Plan 04 — optional Haiku-driven prose summarizer for the
+   * residual compactable region (post-Tier-2, post-Tier-4-drop). When
+   * undefined, the seam skips Tier 3 (back-compat with Plan 02/03 tests).
+   * When present, a single prose chunk lands AHEAD of the Tier 4 chunks
+   * so it survives the `maxChunks` cap.
+   */
+  tier3Summarize?: Tier3SummarizeFn;
+  /** Override per-Tier 3 timeout for tests. Production: 30s default. */
+  tier3TimeoutMs?: number;
 }>;
