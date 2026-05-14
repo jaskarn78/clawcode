@@ -22,6 +22,10 @@
  */
 import type { ConversationTurn } from "../../memory/compaction.js";
 import { dropNoiseTurns } from "./tier4-drop.js";
+import {
+  extractStructuredFacts,
+  tier2FactsToChunks,
+} from "./tier2-haiku.js";
 import type { BuildExtractorDeps, ExtractMemoriesFn } from "./types.js";
 
 const DEFAULT_MAX_CHUNKS = 50;
@@ -83,11 +87,48 @@ export function buildTieredExtractor(
       .map(turnToFact)
       .filter((s) => s.length > 0);
 
+    // Tier 2 (Plan 03) — Haiku-driven structured extraction. Optional;
+    // when `tier2Summarize` is absent (tests, back-compat) we fall through
+    // to Plan 02 behavior. Failure modes inside `extractStructuredFacts`
+    // return null — compaction never fails because Tier 2 failed.
+    let tier2Chunks: readonly string[] = [];
+    if (deps.tier2Summarize) {
+      const facts = await extractStructuredFacts(text, {
+        summarize: deps.tier2Summarize,
+        log: deps.log,
+        agentName: deps.agentName,
+        timeoutMs: deps.tier2TimeoutMs,
+      });
+      if (facts) {
+        tier2Chunks = tier2FactsToChunks(facts);
+        if (deps.onTier2Facts) {
+          try {
+            await deps.onTier2Facts(facts);
+          } catch (err) {
+            deps.log.warn(
+              {
+                agent: deps.agentName,
+                sentinel: "125-03-tier2-haiku",
+                error: (err as Error).message,
+              },
+              "[125-03-tier2-haiku] onTier2Facts side-effect failed (non-fatal)",
+            );
+          }
+        }
+      }
+    }
+
     const tier4Facts = dropped
       .map(turnToFact)
       .filter((s) => s.length > 20);
 
-    const combined = [...preservedFacts, ...tier4Facts].slice(0, maxChunks);
+    // Order matters: preserved → tier2 facts → tier4 turns. Tier 2 rides
+    // ahead of Tier 4 so high-value facts survive the `maxChunks` cap.
+    const combined = [
+      ...preservedFacts,
+      ...tier2Chunks,
+      ...tier4Facts,
+    ].slice(0, maxChunks);
     return Object.freeze(combined);
   };
 }

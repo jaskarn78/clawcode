@@ -79,4 +79,20 @@ export type BuildExtractorDeps = Readonly<{
   log: Logger;
   agentName: string;
   maxChunks?: number;
+  /**
+   * Phase 125 Plan 03 — optional Haiku-driven structured extractor.
+   * When undefined, seam falls through to Plan 02 (Tier 1 + Tier 4) only.
+   * When present, structured facts are flattened into the output chunks
+   * AHEAD of the Tier 4 turns so high-value facts survive `maxChunks`
+   * truncation.
+   */
+  tier2Summarize?: Tier2SummarizeFn;
+  /**
+   * Phase 125 Plan 03 — optional side-effect callback fired after Tier 2
+   * produces facts. Daemon owns the merge: read existing active-state.yaml,
+   * merge tier2 facts, write back. Seam stays FS-free.
+   */
+  onTier2Facts?: (facts: Tier2Facts) => Promise<void>;
+  /** Override per-Tier 2 timeout for tests. Production: 30s default. */
+  tier2TimeoutMs?: number;
 }>;
