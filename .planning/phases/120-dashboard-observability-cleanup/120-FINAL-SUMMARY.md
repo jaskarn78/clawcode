@@ -59,10 +59,18 @@ Total: 6 atomic commits, all `npm test` green for touched files at commit time.
 
 ## Tests
 
-- 20 dashboard SPA tests green (3 files: percentileCell, BenchmarksView tool-rollup, static-grep text-danger).
-- 72 IPC tests green (incl. widened parity sentinel + updated `IPC_METHODS` exact-array assertion).
-- 2 Plan 03 sentinel tests (`static-grep-iterateWithTracing`) green from prior session.
-- Dashboard SPA build clean (1.43s, `BenchmarksView-D6hpq2-b.js 34.39 kB`).
+Consolidated sweep across all touched test files (post all commits):
+
+```
+Test Files  6 passed (6)
+     Tests  58 passed (58)
+```
+
+Files: `percentileCell.test.tsx` (7), `BenchmarksView.tool-rollup.test.tsx`
+(8), `static-grep-text-danger.test.ts` (5), `protocol.test.ts` (34),
+`protocol-daemon-parity.test.ts` (2), `static-grep-iterateWithTracing.test.ts`
+(2). Dashboard SPA build clean (1.43s, `BenchmarksView-D6hpq2-b.js
+34.39 kB`).
 
 ## Deviations from plans
 
@@ -112,6 +120,6 @@ Total: 6 atomic commits, all `npm test` green for touched files at commit time.
 
 - All listed key-files exist on disk.
 - All listed commits resolve in `git log`.
-- 20+72 = 92 tests green across touched files (per latest run at 13:40 UTC).
+- 58 tests across 6 touched files green (final consolidated sweep at 13:42 UTC).
 - VERIFICATION.md verdict line matches one of the three sanctioned strings.
 - Diagnostic + CONTEXT D-03 carry the corrected column-name framing.
