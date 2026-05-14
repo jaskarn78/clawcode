@@ -27,6 +27,7 @@ import { join } from "node:path";
 import pino from "pino";
 
 import { MemoryStore } from "../../memory/store.js";
+import type { EmbeddingService } from "../../memory/embedder.js";
 import {
   CompactionManager,
   type ConversationTurn,
@@ -116,11 +117,15 @@ describe("handleCompactSession — integration (revised D-04)", () => {
       expect(vecCountBefore).toBe(5);
 
       // Build a real CompactionManager wired against the real store.
+      // CompactionManager only calls `embedder.embed()` (see compaction.ts:157);
+      // the rest of EmbeddingService is unused on this path, so we narrow the
+      // stub to match the test-stub pattern used elsewhere (e.g.
+      // session-summarizer.test.ts createMockEmbedder).
       const cm = new CompactionManager({
         memoryStore: store,
         embedder: {
           embed: async (text: string) => deterministicEmbedding(text),
-        },
+        } as unknown as EmbeddingService,
         sessionLogger,
         threshold: 0.7,
         log: SILENT_LOG,
