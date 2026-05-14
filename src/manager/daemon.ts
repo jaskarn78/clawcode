@@ -8114,6 +8114,72 @@ export async function startDaemon(
     deliveryDb.close();
     advisorBudgetDb.close();
     webhookManager.destroy();
+
+    // FIND-123-A.next T-03 — structural group-kill of every per-agent claude
+    // process tree BEFORE manager.stopAll(). The SDK's own close path
+    // (invoked by stopAll) lets MCP grandchildren reparent to PID 1; here
+    // we preempt that by killing the entire process group of each claude
+    // subprocess via the PID captured by makeDetachedSpawn (T-02).
+    //
+    // Why BEFORE stopAll, not after:
+    //   - stopAll's dispose() removes the SessionHandle from sessions,
+    //     which clears its pidSink in `close()`. By the time killAll
+    //     would run, every handle.getClaudePid() returns null.
+    //   - Issuing SIGTERM to the negative-PID FIRST guarantees the
+    //     claude tree (and its MCP grandchildren) receive the signal
+    //     while the daemon still owns the kill-permission grant
+    //     (PID 1 doesn't yet "own" the reparented children).
+    //
+    // Read each handle's claudePid via getClaudePid() — additive-optional
+    // on the SessionHandle TYPE, so legacy/mock handles without the
+    // wrapper silently skip and rely on the existing backstop reaper.
+    //
+    // killAgentGroup's negative-PID kill in mcpTracker.killAll() STAYS as
+    // additive defense-in-depth (research §Out-of-scope; advisor #6).
+    try {
+      const runningAgents = manager.getRunningAgents();
+      const claudePidSnapshot: Array<{ agent: string; claudePid: number }> = [];
+      for (const agentName of runningAgents) {
+        const handle = manager.getSessionHandle(agentName);
+        const pid = handle?.getClaudePid?.();
+        if (typeof pid === "number" && pid > 1) {
+          claudePidSnapshot.push({ agent: agentName, claudePid: pid });
+        }
+      }
+      for (const { agent, claudePid } of claudePidSnapshot) {
+        let killed = false;
+        try {
+          process.kill(-claudePid, "SIGTERM");
+          killed = true;
+        } catch (err) {
+          // ESRCH is benign (process group already gone); anything else
+          // gets logged but never blocks shutdown.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== "ESRCH") {
+            mcpLog.warn(
+              { agent, claudePid, err: String(err) },
+              "123-A-next-shutdown-pgkill: SIGTERM to claude process group failed",
+            );
+          }
+        }
+        mcpLog.info(
+          { agent, claudePid, killed },
+          "[123-A-next-shutdown-pgkill]",
+        );
+      }
+      // Grace period — let SIGTERM propagate before the SDK's normal close
+      // races with us in stopAll(). 1500ms matches the 2s window the
+      // existing shutdown-scan reaper uses (research §implementation).
+      if (claudePidSnapshot.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+      }
+    } catch (err) {
+      mcpLog.warn(
+        { err: String(err) },
+        "123-A-next-shutdown-pgkill: snapshot/dispatch failed (non-fatal — backstop reaper still runs)",
+      );
+    }
+
     await manager.stopAll();
     // Phase 999.14 MCP-04 — clear the reaper interval and SIGTERM/SIGKILL
     // any tracked MCP child PIDs that survived stopAll. Runs AFTER stopAll
