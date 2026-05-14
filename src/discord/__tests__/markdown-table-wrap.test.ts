@@ -127,4 +127,32 @@ describe("wrapMarkdownTablesInCodeFence", () => {
     const twice = wrapMarkdownTablesInCodeFence(once);
     expect(twice).toBe(once);
   });
+
+  it("MTW-11 (SC-3): a cell containing triple-backtick fence is wrapped with 4+ outer backticks", () => {
+    // 4-column table where one cell contains a literal ```bash fence.
+    // With a 3-backtick outer fence the embedded ``` would terminate the
+    // outer block early, breaking Discord rendering. Helper must escalate
+    // the outer fence to longest-inner-run + 1.
+    const input = [
+      "| Lang | Use | Example | Notes |",
+      "| ---- | --- | ------- | ----- |",
+      "| Bash | shell | ```bash ls ``` | safe |",
+      "| Py | logic | print('hi') | safe |",
+    ].join("\n");
+    const result = wrapMarkdownTablesInCodeFence(input);
+    // Outer fence must be at least 4 backticks — the cell contains a run
+    // of 3, so 4 is the minimum that prevents breakout.
+    const lines = result.split("\n");
+    const openFence = lines[0];
+    expect(openFence.startsWith("````")).toBe(true);
+    expect(openFence).toMatch(/^`{4,}text$/);
+    // The original cell content (with its inner ``` intact) survives.
+    expect(result).toContain("```bash ls ```");
+    // Closing fence matches the opening fence length.
+    const openLen = (openFence.match(/^`+/) ?? [""])[0].length;
+    const closeFence = "`".repeat(openLen);
+    expect(result.endsWith(closeFence)).toBe(true);
+    // Idempotent under SC-3 escalation — running twice produces same output.
+    expect(wrapMarkdownTablesInCodeFence(result)).toBe(result);
+  });
 });
