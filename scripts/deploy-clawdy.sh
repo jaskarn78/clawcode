@@ -8,12 +8,15 @@
 #      - vite build → dist/dashboard/spa/   (Phase 116 SPA, when present)
 #   2. rsync dist/cli/index.js → clawdy:~/clawcode-staging/index.js
 #      rsync dist/dashboard/spa/ → clawdy:~/clawcode-staging-spa/   (when present)
+#      rsync .planning/ → clawdy:~/clawcode-staging-planning/        (when present)
+#      rsync per-agent prompt-corpus → clawdy:~/clawcode-staging-agents/<name>/  (Phase 999.55)
 #   3. ssh + sudo -S         (password piped from ~/.clawcode-deploy-pw)
 #      - cp staging → /opt/clawcode/dist/cli/index.js
 #      - rsync --delete spa staging → /opt/clawcode/dist/dashboard/spa/  (when present)
 #      - chown -R clawcode:clawcode /opt/clawcode/dist/dashboard/spa
+#      - rsync (NO --delete) agent staging → /home/clawcode/.clawcode/agents/<name>/  (Phase 999.55)
 #      - systemctl restart clawcode (skip with --no-restart)
-#   4. md5 verification (daemon bundle); ls check (SPA bundle)
+#   4. md5 verification (daemon bundle); ls check (SPA bundle); presence check (per-agent AGENTS.md)
 #
 # Password file: ~/.clawcode-deploy-pw  (chmod 600, gitignored — never lives in repo).
 # When the password rotates, just overwrite the file:
@@ -50,6 +53,19 @@ PLANNING_DIR="$REPO_ROOT/.planning"
 PLANNING_STAGING="${CLAWCODE_DEPLOY_PLANNING_STAGING:-/home/jjagpal/clawcode-staging-planning}"
 PLANNING_DEPLOY="${CLAWCODE_DEPLOY_PLANNING_TARGET:-/opt/clawcode/.planning}"
 PLANNING_OWNER="${CLAWCODE_DEPLOY_PLANNING_OWNER:-clawcode:clawcode}"
+
+# Phase 999.55 — per-agent prompt-corpus rsync. Ships AGENTS.md / SOUL.md /
+# IDENTITY.md / USER.md / TOOLS.md / HEARTBEAT.md / BOOTSTRAP.md / skills/**
+# alongside the daemon binary. Allowlist-only: never touches memory/, state/,
+# telemetry, media, scripts — those are production-owned operational state.
+# Discovery: any dir under $AGENTS_LOCAL_ROOT that has AGENTS.md or SOUL.md.
+# Sync gate: only agents whose prod workspace dir already exists are synced
+# (we don't create new agents via deploy). Server-side rsync omits --delete
+# so the merge into the existing workspace leaves operational state intact.
+AGENTS_LOCAL_ROOT="${CLAWCODE_DEPLOY_AGENTS_LOCAL:-$HOME/.clawcode/agents}"
+AGENTS_REMOTE_ROOT="${CLAWCODE_DEPLOY_AGENTS_TARGET:-/home/clawcode/.clawcode/agents}"
+AGENTS_STAGING_ROOT="${CLAWCODE_DEPLOY_AGENTS_STAGING:-/home/jjagpal/clawcode-staging-agents}"
+AGENTS_OWNER="${CLAWCODE_DEPLOY_AGENTS_OWNER:-clawcode:clawcode}"
 
 DO_BUILD=1
 DO_RESTART=1
@@ -98,6 +114,36 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "  ssh $HOST 'sudo -S sh -c \"cp $STAGING_PATH $DEPLOY_PATH && rsync -a --delete $SPA_STAGING/ $SPA_DEPLOY/ && chown -R $SPA_OWNER $SPA_DEPLOY\"'"
   else
     echo "  ssh $HOST 'sudo -S cp $STAGING_PATH $DEPLOY_PATH'"
+  fi
+  # Phase 999.55 — dry-run preview for per-agent prompt-corpus.
+  # /home/clawcode/ is mode 750 owned by clawcode:clawcode — jjagpal can't
+  # traverse without sudo. One upfront `sudo ls` gets the prod agent list
+  # for membership checks instead of per-agent ssh test -d.
+  if [ -d "$AGENTS_LOCAL_ROOT" ]; then
+    echo "  --- per-agent prompt-corpus discovery (Phase 999.55) ---"
+    PROD_AGENT_LIST=$(printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' ls '$AGENTS_REMOTE_ROOT/' 2>/dev/null" 2>/dev/null | tr '\n' ' ')
+    for agent_dir in "$AGENTS_LOCAL_ROOT"/*/; do
+      [ -d "$agent_dir" ] || continue
+      agent_name=$(basename "$agent_dir")
+      if [ ! -f "$agent_dir/AGENTS.md" ] && [ ! -f "$agent_dir/SOUL.md" ]; then
+        echo "    ⊘ $agent_name (no prompt-corpus)"
+        continue
+      fi
+      # Membership check via word-boundary grep on the cached prod list.
+      if echo " $PROD_AGENT_LIST " | grep -q " $agent_name "; then
+        # List allowlisted files that would be synced.
+        echo "    → $agent_name (would rsync $AGENTS_LOCAL_ROOT/$agent_name/ → $AGENTS_REMOTE_ROOT/$agent_name/)"
+        for f in AGENTS.md HEARTBEAT.md SOUL.md IDENTITY.md USER.md TOOLS.md BOOTSTRAP.md; do
+          [ -f "$agent_dir/$f" ] && echo "        + $f"
+        done
+        if [ -d "$agent_dir/skills" ]; then
+          skill_count=$(find "$agent_dir/skills" -name "SKILL.md" 2>/dev/null | wc -l)
+          echo "        + skills/ ($skill_count SKILL.md files)"
+        fi
+      else
+        echo "    ⊘ $agent_name (no prod workspace at $AGENTS_REMOTE_ROOT/$agent_name)"
+      fi
+    done
   fi
   [ "$DO_RESTART" = 1 ] && echo "  ssh $HOST 'sudo -S systemctl restart $SERVICE_NAME'"
   exit 0
@@ -161,6 +207,65 @@ if [ -d "$PLANNING_DIR" ] && [ -f "$PLANNING_DIR/ROADMAP.md" ]; then
   echo "  ✓ planning staged ($PLANNING_FILES files)"
 fi
 
+# Phase 999.55 — Stage per-agent prompt-corpus. Loop over each dev-side
+# agent dir; for each one that (a) has AGENTS.md or SOUL.md and (b) has a
+# corresponding workspace dir on prod, rsync the allowlist to a per-agent
+# staging dir. Server-side copy (no --delete) happens in the sudo block
+# below. The allowlist is intentionally narrow — never sync memory/,
+# state/, .clawmetry-*, .backups/, media, scripts.
+DEPLOY_AGENTS=0
+AGENTS_TO_DEPLOY=()
+AGENTS_SKIPPED=()
+if [ -d "$AGENTS_LOCAL_ROOT" ]; then
+  # One upfront `sudo ls` of the prod agents dir — /home/clawcode/ is
+  # mode 750, so jjagpal can't traverse without sudo. Cache the list for
+  # the per-agent membership check below.
+  PROD_AGENT_LIST=$(printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' ls '$AGENTS_REMOTE_ROOT/' 2>/dev/null" 2>/dev/null | tr '\n' ' ')
+  for agent_dir in "$AGENTS_LOCAL_ROOT"/*/; do
+    [ -d "$agent_dir" ] || continue
+    agent_name=$(basename "$agent_dir")
+    # Discover gate: must have at least one prompt-corpus marker file.
+    if [ ! -f "$agent_dir/AGENTS.md" ] && [ ! -f "$agent_dir/SOUL.md" ]; then
+      AGENTS_SKIPPED+=("$agent_name(no-prompt-corpus)")
+      continue
+    fi
+    # Prod-existence gate: only sync if the agent's prod workspace already
+    # exists. Refuse to silently create new agent workspaces via deploy.
+    if ! echo " $PROD_AGENT_LIST " | grep -q " $agent_name "; then
+      AGENTS_SKIPPED+=("$agent_name(no-prod-workspace)")
+      continue
+    fi
+    AGENTS_TO_DEPLOY+=("$agent_name")
+  done
+
+  if [ "${#AGENTS_TO_DEPLOY[@]}" -gt 0 ]; then
+    DEPLOY_AGENTS=1
+    echo "→ Staging agent prompt-corpus to $HOST:$AGENTS_STAGING_ROOT/ (${#AGENTS_TO_DEPLOY[@]} agents)"
+    for agent_name in "${AGENTS_TO_DEPLOY[@]}"; do
+      ssh "$HOST" "mkdir -p '$AGENTS_STAGING_ROOT/$agent_name'" >/dev/null
+      # --delete on staging is safe (throwaway dir); allowlist ensures we
+      # only ship prompt-corpus. NB: include 'skills/' BEFORE 'skills/**'
+      # so rsync descends into the directory.
+      rsync -az --delete \
+        --include='AGENTS.md' \
+        --include='HEARTBEAT.md' \
+        --include='SOUL.md' \
+        --include='IDENTITY.md' \
+        --include='USER.md' \
+        --include='TOOLS.md' \
+        --include='BOOTSTRAP.md' \
+        --include='skills/' \
+        --include='skills/**' \
+        --exclude='*' \
+        "$AGENTS_LOCAL_ROOT/$agent_name/" "$REMOTE_USER@$HOST:$AGENTS_STAGING_ROOT/$agent_name/"
+    done
+    echo "  ✓ agent prompt-corpus staged: ${AGENTS_TO_DEPLOY[*]}"
+  fi
+  if [ "${#AGENTS_SKIPPED[@]}" -gt 0 ]; then
+    echo "  ⊘ agent prompt-corpus skipped: ${AGENTS_SKIPPED[*]}"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 3. sudo cp + restart
 # ---------------------------------------------------------------------------
@@ -180,6 +285,17 @@ if [ "$DEPLOY_PLANNING" = 1 ]; then
   # appear in the dashboard Tasks page.
   REMOTE_CMD="$REMOTE_CMD && mkdir -p '$PLANNING_DEPLOY' && rsync -a --delete '$PLANNING_STAGING/' '$PLANNING_DEPLOY/' && chown -R '$PLANNING_OWNER' '$PLANNING_DEPLOY'"
 fi
+if [ "$DEPLOY_AGENTS" = 1 ]; then
+  # Phase 999.55 — per-agent prompt-corpus merge. NO --delete here: we
+  # rsync the staging dir (which already holds only allowlisted files) into
+  # the existing prod workspace, merging by file. Operational state
+  # (memory/, state/, etc.) on prod is untouched because it's not in the
+  # staging tree to overwrite OR delete. chown each agent dir's
+  # newly-written files back to the daemon user.
+  for agent_name in "${AGENTS_TO_DEPLOY[@]}"; do
+    REMOTE_CMD="$REMOTE_CMD && rsync -a '$AGENTS_STAGING_ROOT/$agent_name/' '$AGENTS_REMOTE_ROOT/$agent_name/' && chown -R '$AGENTS_OWNER' '$AGENTS_REMOTE_ROOT/$agent_name/'"
+  done
+fi
 if [ "$DO_RESTART" = 1 ]; then
   REMOTE_CMD="$REMOTE_CMD && systemctl restart $SERVICE_NAME"
 fi
@@ -187,6 +303,7 @@ fi
 echo "→ Deploying to $DEPLOY_PATH"
 [ "$DEPLOY_SPA" = 1 ] && echo "→ Deploying SPA to $SPA_DEPLOY"
 [ "$DEPLOY_PLANNING" = 1 ] && echo "→ Deploying .planning/ to $PLANNING_DEPLOY"
+[ "$DEPLOY_AGENTS" = 1 ] && echo "→ Deploying agent prompt-corpus to $AGENTS_REMOTE_ROOT/{${AGENTS_TO_DEPLOY[*]}}"
 # -p prefix the prompt so sudo writes ONLY '' on the password line — keeps stdout clean.
 # The password is piped via stdin so it never appears on the SSH command line or in ps.
 printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' sh -c \"$REMOTE_CMD\"" 2>&1 | grep -v '^$' || true
@@ -225,6 +342,32 @@ if [ "$DEPLOY_PLANNING" = 1 ]; then
     exit 1
   fi
   echo "  ✓ planning verify (ROADMAP.md present)"
+fi
+
+if [ "$DEPLOY_AGENTS" = 1 ]; then
+  # Per-agent verify: confirm AGENTS.md md5 matches local. AGENTS.md is the
+  # most operator-visible prompt-corpus file; md5-match guarantees the rsync
+  # propagated. (Verifying every allowlist file would be overkill — AGENTS.md
+  # is the representative.) /home/clawcode/ is mode 750, so md5sum needs
+  # sudo — pipe the password the same way the deploy block does.
+  for agent_name in "${AGENTS_TO_DEPLOY[@]}"; do
+    LOCAL_AGENT_MD5=$(md5sum "$AGENTS_LOCAL_ROOT/$agent_name/AGENTS.md" 2>/dev/null | awk '{print $1}')
+    if [ -z "$LOCAL_AGENT_MD5" ]; then
+      # Local agent has no AGENTS.md (skipped agents). Should not reach
+      # here because the discovery loop already filtered them.
+      continue
+    fi
+    REMOTE_AGENT_MD5=$(printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' md5sum '$AGENTS_REMOTE_ROOT/$agent_name/AGENTS.md' 2>/dev/null | awk '{print \$1}'" 2>/dev/null)
+    if [ -z "$REMOTE_AGENT_MD5" ]; then
+      echo "  ⚠ agent verify ($agent_name): could not md5sum remote AGENTS.md (sudo failed?) — chown succeeded so the file is in place"
+      continue
+    fi
+    if [ "$LOCAL_AGENT_MD5" != "$REMOTE_AGENT_MD5" ]; then
+      echo "✗ agent verify failed for $agent_name — AGENTS.md md5 mismatch (local=$LOCAL_AGENT_MD5 remote=$REMOTE_AGENT_MD5)" >&2
+      exit 1
+    fi
+    echo "  ✓ agent verify ($agent_name): AGENTS.md md5 match"
+  done
 fi
 
 if [ "$DO_RESTART" = 1 ]; then
