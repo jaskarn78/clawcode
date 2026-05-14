@@ -300,6 +300,19 @@ export function resolveAgentConfig(
       env: {},
       // Phase 85 TOOL-01 — clawcode MCP is mandatory (default false).
       optional: false,
+      // Phase 999.54 (D-03a) — preload the clawcode MCP server's tools into
+      // the turn-1 prompt instead of deferring them behind ToolSearch.
+      // spawn_subagent_thread, post_to_agent, ask_advisor, memory_lookup are
+      // hot-path tools used by EVERY agent in the fleet; deferring them costs
+      // a full ToolSearch round-trip per first-use-per-session (~one turn of
+      // latency). The clawcode server is a local stdio spawn (sub-second), so
+      // the SDK's 5s connect-blocking side-effect (sdk.d.ts:1067-1076) is
+      // negligible. Operator-override semantics preserved: an agent yaml that
+      // declares `clawcode` explicitly in its `mcpServers:` block populates
+      // resolvedMcpMap BEFORE this `has("clawcode")` gate, skipping this
+      // auto-inject — so per-agent `alwaysLoad: false` (inline-object form)
+      // wins. NON-RELOADABLE per D-04: change takes effect on agent restart.
+      alwaysLoad: true,
     });
   }
 
