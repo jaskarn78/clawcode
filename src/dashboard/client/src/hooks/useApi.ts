@@ -136,6 +136,35 @@ export function useAgentActivity(
 }
 
 /**
+ * Phase 124 Plan 04 T-03 — fleet-wide heartbeat-status snapshot, including
+ * per-agent `session_tokens` and `last_compaction_at`. Polled at the same
+ * 30s cadence as the latency surface (operator-acceptable for the slow-
+ * moving telemetry the tile sparkline visualises). Component-side ring
+ * buffer in `AgentTile` derives the sparkline data from successive polls.
+ */
+export type HeartbeatAgentBlock = {
+  readonly zone?: string
+  readonly fillPercentage?: number
+  readonly session_tokens?: number | null
+  readonly last_compaction_at?: string | null
+  readonly checks?: Readonly<Record<string, unknown>>
+  readonly overall?: string
+}
+
+export type HeartbeatStatusPayload = {
+  readonly agents: Readonly<Record<string, HeartbeatAgentBlock>>
+}
+
+export function useHeartbeatStatus(): UseQueryResult<HeartbeatStatusPayload> {
+  return useQuery({
+    queryKey: ['heartbeat-status'],
+    queryFn: () => fetchJson<HeartbeatStatusPayload>('/api/heartbeat-status'),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  })
+}
+
+/**
  * Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort.
  *
  * Returns per-agent turn counts (24h + 7d) and last-turn timestamp,

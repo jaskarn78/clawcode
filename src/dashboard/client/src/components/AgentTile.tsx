@@ -17,7 +17,7 @@
  * those rows are conditionally rendered iff the daemon ever surfaces them.
  * Documented as plan deviations in 116-01-SUMMARY.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AreaChart, Area, ResponsiveContainer } from 'recharts'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -31,6 +31,7 @@ import {
   useAgentCache,
   useAgentLatency,
   useAgentActivity,
+  useHeartbeatStatus,
   type ActivityResponse,
 } from '@/hooks/useApi'
 import { ContextMeter } from './ContextMeter'
@@ -82,6 +83,69 @@ function ActivitySparkline(props: { readonly agentName: string }): JSX.Element {
             stroke="hsl(var(--primary))"
             fill="hsl(var(--primary))"
             fillOpacity={0.3}
+            strokeWidth={1.5}
+            isAnimationActive={false}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TokensSparkline — Phase 124 Plan 04 T-03.
+//
+// Renders a bounded ring buffer (≤60 samples) of `session_tokens` per
+// agent, fed by successive `useHeartbeatStatus` polls. Lives adjacent
+// to ActivitySparkline so operators see two orthogonal signals on each
+// tile: 24h turn count + recent context-token trend.
+//
+// Scope-bounded: no new SSE channel, no backend time-series; the
+// component derives the series locally from the existing poll cadence.
+// Empty buffer (first poll OR no data) → "no tokens yet" mono fallback.
+// ---------------------------------------------------------------------------
+const TOKENS_RING_SIZE = 60
+
+function TokensSparkline(props: { readonly agentName: string }): JSX.Element {
+  const q = useHeartbeatStatus()
+  const tokens = q.data?.agents?.[props.agentName]?.session_tokens ?? null
+  // Ring buffer kept in component state. Updates only on truthy numeric
+  // samples to avoid feeding null/undefined into the chart. A useRef
+  // dedup gate prevents double-push from React StrictMode re-renders.
+  const [buffer, setBuffer] = useState<ReadonlyArray<number>>([])
+  const lastSampleRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (typeof tokens !== 'number') return
+    if (lastSampleRef.current === tokens) return
+    lastSampleRef.current = tokens
+    setBuffer((prev) => {
+      const next = [...prev, tokens]
+      return next.length > TOKENS_RING_SIZE
+        ? next.slice(next.length - TOKENS_RING_SIZE)
+        : next
+    })
+  }, [tokens])
+
+  if (buffer.length === 0) {
+    return (
+      <div className="h-8 flex items-center text-[11px] font-mono text-fg-3">
+        no tokens yet
+      </div>
+    )
+  }
+  const chartData = buffer.map((v, i) => ({ i, v }))
+  return (
+    <div className="h-8 w-full" data-testid="agent-tile-tokens-sparkline">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={chartData} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
+          <Area
+            type="monotone"
+            dataKey="v"
+            stroke="hsl(var(--warn))"
+            fill="hsl(var(--warn))"
+            fillOpacity={0.25}
             strokeWidth={1.5}
             isAnimationActive={false}
             dot={false}
@@ -309,6 +373,18 @@ export function AgentTile(props: AgentTileProps): JSX.Element {
             24h activity
           </div>
           <ActivitySparkline agentName={agent.name} />
+        </div>
+
+        {/* Tokens sparkline — Phase 124 Plan 04 T-03.
+            Reads /api/heartbeat-status (session_tokens per agent),
+            maintains a 60-sample ring buffer in component state.
+            Warn-color stroke so it visually contrasts the activity
+            primary-color sparkline. */}
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-fg-3 mb-1 font-sans">
+            tokens
+          </div>
+          <TokensSparkline agentName={agent.name} />
         </div>
 
         <div className="flex items-center justify-between gap-3">

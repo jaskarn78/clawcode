@@ -535,6 +535,21 @@ async function handleRequest(
       return;
     }
 
+    // Phase 124 Plan 04 T-03 — heartbeat-status proxy for the dashboard.
+    // Surfaces per-agent zone, fillPercentage, session_tokens, and
+    // last_compaction_at. Read-only; safe to poll. The AgentTile's
+    // tokens sparkline derives its time series from successive polls
+    // via the `useHeartbeatStatus` hook + a component-side ring buffer.
+    if (method === "GET" && pathname === "/api/heartbeat-status") {
+      try {
+        const data = await sendIpcRequest(socketPath, "heartbeat-status", {});
+        sendJson(res, 200, data);
+      } catch {
+        sendJson(res, 503, { error: "Daemon not reachable" });
+      }
+      return;
+    }
+
     // One-shot health endpoint
     if (method === "GET" && pathname === "/api/health") {
       try {
