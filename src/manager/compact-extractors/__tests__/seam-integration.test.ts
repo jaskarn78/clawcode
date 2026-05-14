@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import pino from "pino";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import * as fsPromises from "node:fs/promises";
 import type { ConversationTurn } from "../../../memory/compaction.js";
+import { writeActiveStateYaml, readActiveStateYaml } from "../../active-state/yaml-writer.js";
+import { buildActiveStateBlock } from "../../active-state/builder.js";
+import type { Tier2Facts } from "../types.js";
 import {
   buildTieredExtractor,
   partitionForVerbatim,
@@ -244,6 +251,71 @@ criticalNumbers:
     const facts = await extract(turnsToText(toCompact));
     expect(facts.length).toBeGreaterThan(0);
     expect(facts.some((f) => f.startsWith("[tier2]"))).toBe(false);
+  });
+
+  it("end-to-end: tier2 YAML written to disk with active client merged in (SC-4)", async () => {
+    const sink = { entries: [] as unknown[] };
+    const log = makeLog(sink);
+    const baseDir = await mkdtemp(join(tmpdir(), "tier2-yaml-"));
+    try {
+      const cannedYaml = `activeClients: [Finmentum]
+decisions: []
+standingRulesChanged: []
+inFlightTasks: []
+drivePathsTouched: ["clients/Finmentum/"]
+criticalNumbers:
+  - context: "Finmentum AUM"
+    value: "$45M"
+`;
+      const onTier2Facts = async (facts: Tier2Facts): Promise<void> => {
+        const block = buildActiveStateBlock({
+          recentOperatorMessages: ["look at clients/Other/file"],
+          recentAgentTurns: [],
+          agentName: "sc4-agent",
+          clock: () => new Date("2026-05-14T15:00:00Z"),
+          tier2Facts: facts,
+        });
+        await writeActiveStateYaml("sc4-agent", block, {
+          baseDir,
+          fs: fsPromises,
+          clock: () => new Date("2026-05-14T15:00:00Z"),
+        });
+      };
+
+      const turns = buildSyntheticReplay().slice(0, 30);
+      const extract = buildTieredExtractor({
+        preserveLastTurns: 10,
+        preserveVerbatimPatterns: [],
+        preservedTurns: [],
+        clock: () => new Date(0),
+        log,
+        agentName: "sc4-agent",
+        tier2Summarize: async () => cannedYaml,
+        onTier2Facts,
+      });
+      const facts = await extract(turnsToText(turns));
+
+      // Memory.db chunks: integration with compaction.ts:151 means each chunk
+      // becomes a memory row. We assert chunk count > 0 to prove D-04 growth.
+      expect(facts.length).toBeGreaterThan(0);
+      expect(facts.some((f) => f.startsWith("[tier2]"))).toBe(true);
+
+      // YAML side-effect: operator-inspectable file exists, parses, and the
+      // tier2-derived client wins over the heuristic.
+      const yamlPath = join(baseDir, "sc4-agent", "state", "active-state.yaml");
+      const raw = await readFile(yamlPath, "utf8");
+      expect(raw).toContain("Finmentum");
+      const roundTripped = await readActiveStateYaml("sc4-agent", {
+        baseDir,
+        fs: fsPromises,
+      });
+      expect(roundTripped?.primaryClient).toBe("Finmentum");
+      expect(
+        roundTripped?.driveFoldersTouched.includes("clients/Finmentum/"),
+      ).toBe(true);
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
   });
 
   it("sentinel proof: [125-02-tier1-filter] and [125-02-tier4-drop] each log once", async () => {

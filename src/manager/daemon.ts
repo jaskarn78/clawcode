@@ -3385,9 +3385,53 @@ export async function startDaemon(
         allTurnsAuto,
         partitionDepsAuto,
       );
+      // Phase 125 Plan 03 — Tier 2 Haiku-driven structured extraction.
+      // Reuses summarizeWithHaiku (the same OAuth-Bearer Haiku path that
+      // session-summarizer uses in production — D-03). The onTier2Facts
+      // callback re-runs the active-state builder WITH the LLM-grounded
+      // facts and overwrites ~/.clawcode/agents/<agent>/state/active-state.yaml
+      // so SC-4's operator-inspectable file reflects the latest extraction.
+      const onTier2FactsAuto = async (facts: import("./compact-extractors/types.js").Tier2Facts): Promise<void> => {
+        try {
+          const { buildActiveStateBlock } = await import(
+            "./active-state/builder.js"
+          );
+          const { writeActiveStateYaml } = await import(
+            "./active-state/yaml-writer.js"
+          );
+          const fsPromises = await import("node:fs/promises");
+          const operatorMsgs = allTurnsAuto
+            .filter((t) => t.role === "user")
+            .slice(-5)
+            .map((t) => t.content);
+          // Note: builder accepts ConversationTurn from memory/conversation-types.
+          // Compaction turns are a structural subset (timestamp/role/content);
+          // builder reads only role/content/createdAt and tolerates absent
+          // fields via the heuristic regexes.
+          const block = buildActiveStateBlock({
+            recentOperatorMessages: operatorMsgs,
+            recentAgentTurns: allTurnsAuto as unknown as readonly import("../memory/conversation-types.js").ConversationTurn[],
+            agentName: agent,
+            clock: () => new Date(),
+            tier2Facts: facts,
+          });
+          await writeActiveStateYaml(agent, block, {
+            baseDir: activeStateBaseDir,
+            fs: fsPromises,
+            clock: () => new Date(),
+          });
+        } catch (err) {
+          log.warn(
+            { agent, error: (err as Error).message },
+            "[125-03-tier2-haiku] onTier2Facts (auto) failed (non-fatal)",
+          );
+        }
+      };
       const extractMemories = buildTieredExtractor({
         ...partitionDepsAuto,
         preservedTurns: preservedAuto,
+        tier2Summarize: (prompt, opts) => summarizeWithHaiku(prompt, opts),
+        onTier2Facts: onTier2FactsAuto,
       });
       // Phase 124 follow-up — same producer-side wire as the manual IPC
       // path. The auto-trigger fires from the heartbeat cycle and uses the
@@ -10653,9 +10697,47 @@ async function routeMethod(
         allTurnsIpc,
         partitionDepsIpc,
       );
+      // Phase 125 Plan 03 — Tier 2 Haiku-driven structured extraction
+      // (mirror of the auto-trigger site above; silent-path-bifurcation
+      // gate from Plan 02 continues to apply — BOTH sites updated in the
+      // same commit).
+      const onTier2FactsIpc = async (facts: import("./compact-extractors/types.js").Tier2Facts): Promise<void> => {
+        try {
+          const { buildActiveStateBlock } = await import(
+            "./active-state/builder.js"
+          );
+          const { writeActiveStateYaml } = await import(
+            "./active-state/yaml-writer.js"
+          );
+          const fsPromises = await import("node:fs/promises");
+          const operatorMsgs = allTurnsIpc
+            .filter((t) => t.role === "user")
+            .slice(-5)
+            .map((t) => t.content);
+          const block = buildActiveStateBlock({
+            recentOperatorMessages: operatorMsgs,
+            recentAgentTurns: allTurnsIpc as unknown as readonly import("../memory/conversation-types.js").ConversationTurn[],
+            agentName: agentName,
+            clock: () => new Date(),
+            tier2Facts: facts,
+          });
+          await writeActiveStateYaml(agentName, block, {
+            baseDir: join(homedir(), ".clawcode", "agents"),
+            fs: fsPromises,
+            clock: () => new Date(),
+          });
+        } catch (err) {
+          logger.warn(
+            { agent: agentName, error: (err as Error).message },
+            "[125-03-tier2-haiku] onTier2Facts (ipc) failed (non-fatal)",
+          );
+        }
+      };
       const extractMemories = buildExtIpc({
         ...partitionDepsIpc,
         preservedTurns: preservedIpc,
+        tier2Summarize: (prompt, opts) => summarizeWithHaiku(prompt, opts),
+        onTier2Facts: onTier2FactsIpc,
       });
       // Phase 124 follow-up — wire the producer-side turnStartedAt slot
       // into the handler's safety-budget gate. Build a 1-entry map at call

@@ -1,4 +1,5 @@
 import type { ConversationTurn } from "../../memory/conversation-types.js";
+import type { Tier2Facts } from "../compact-extractors/types.js";
 import type { ActiveStateBlock, BuildActiveStateInput } from "./types.js";
 
 const RULE_PATTERN = /\brule:|standing rule|from now on|always|never\b/i;
@@ -146,6 +147,48 @@ function capToFiftyLines(block: ActiveStateBlock): ActiveStateBlock {
   });
 }
 
+function mergeWithTier2(
+  heuristic: ActiveStateBlock,
+  facts: Tier2Facts,
+): ActiveStateBlock {
+  const tier2PrimaryClient =
+    facts.activeClients.length > 0 ? facts.activeClients[0] : null;
+
+  const tier2Tasks = facts.inFlightTasks.map((t) =>
+    t.state.length > 0 ? `${t.task} — ${t.state}` : t.task,
+  );
+  const mergedTasksSet = new Set<string>([
+    ...tier2Tasks,
+    ...heuristic.inFlightTasks,
+  ]);
+  const mergedTasks = Object.freeze([...mergedTasksSet].slice(0, 10));
+
+  const tier2Rules = facts.standingRulesChanged.map((r) =>
+    r.changedAt.length > 0 ? `${r.rule} @ ${r.changedAt}` : r.rule,
+  );
+  const mergedRulesSet = new Set<string>([
+    ...tier2Rules,
+    ...heuristic.standingRulesAddedToday,
+  ]);
+  const mergedRules = Object.freeze([...mergedRulesSet].slice(0, 10));
+
+  const mergedDriveSet = new Set<string>([
+    ...heuristic.driveFoldersTouched,
+    ...facts.drivePathsTouched,
+  ]);
+  const mergedDrive = Object.freeze([...mergedDriveSet].slice(0, 10));
+
+  return Object.freeze({
+    primaryClient: tier2PrimaryClient ?? heuristic.primaryClient,
+    inFlightTasks: mergedTasks,
+    standingRulesAddedToday: mergedRules,
+    driveFoldersTouched: mergedDrive,
+    lastOperatorMessages: heuristic.lastOperatorMessages,
+    lastAgentCommitments: heuristic.lastAgentCommitments,
+    generatedAt: heuristic.generatedAt,
+  });
+}
+
 export function buildActiveStateBlock(
   input: BuildActiveStateInput,
 ): ActiveStateBlock {
@@ -163,7 +206,7 @@ export function buildActiveStateBlock(
     extractPrimaryClient(input.recentOperatorMessages) ??
     extractPrimaryClient(operatorTurns.map((t) => t.content));
 
-  const block: ActiveStateBlock = Object.freeze({
+  const heuristicBlock: ActiveStateBlock = Object.freeze({
     primaryClient,
     inFlightTasks: extractInFlightTasks(assistantTurns),
     standingRulesAddedToday: extractStandingRulesToday(
@@ -177,5 +220,9 @@ export function buildActiveStateBlock(
     generatedAt: now.toISOString(),
   });
 
-  return capToFiftyLines(block);
+  const merged = input.tier2Facts
+    ? mergeWithTier2(heuristicBlock, input.tier2Facts)
+    : heuristicBlock;
+
+  return capToFiftyLines(merged);
 }
