@@ -3296,6 +3296,27 @@ export async function startDaemon(
 
   // 8b. (Moved to step 6-quinquies-a — Phase 60)
 
+  // Phase 999.36 sub-bug D — one-time migration of pre-Phase entries.
+  // Backfills lastDeliveryAt = lastActivity for bindings that pre-date
+  // the new gate. Idempotent: re-running on already-migrated bindings
+  // is a no-op. Runs BEFORE ThreadManager creation so any subsequent
+  // session-attach / sweep reads a registry where every binding has a
+  // lastDeliveryAt sentinel.
+  // REMOVE AFTER 999.36+1 milestone closes — bindings will be naturally
+  // migrated by then.
+  try {
+    const migration = await migrateBindingsForPhase999_36(THREAD_REGISTRY_PATH);
+    log.info(
+      { migrated: migration.migrated, total: migration.total },
+      "phase 999.36 thread-binding migration complete",
+    );
+  } catch (err) {
+    log.warn(
+      { error: (err as Error).message },
+      "phase 999.36 thread-binding migration failed (gate may refuse pre-existing bindings)",
+    );
+  }
+
   // 8c. Create ThreadManager for Discord thread session lifecycle
   const threadManager = new ThreadManager({
     sessionManager: manager,
