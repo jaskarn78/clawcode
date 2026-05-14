@@ -1,6 +1,6 @@
 # Backlog: deploy-clawdy.sh — agent-workspace prompt-corpus rsync
 
-## 999.54 — Extend `scripts/deploy-clawdy.sh` to ship per-agent prompt-corpus files alongside daemon binary + dashboard + `.planning/`
+## 999.55 — Extend `scripts/deploy-clawdy.sh` to ship per-agent prompt-corpus files alongside daemon binary + dashboard + `.planning/`
 
 Today `deploy-clawdy.sh` syncs three trees from dev → clawdy on every deploy:
 
@@ -111,3 +111,21 @@ Once this lands, the next `deploy-clawdy.sh` invocation will ship the local `e63
 ### Reporter
 
 Jas, 2026-05-14 (surfaced during Phase 119 Plan 04 closeout — operator's "can we just deploy it with the next deploy?" question revealed the gap).
+
+---
+
+## Closeout
+
+**Implemented:** `8b1fefe` — `feat(deploy-clawdy): per-agent prompt-corpus rsync stanza (999.55)` — 2026-05-14.
+
+Single-commit implementation. Dry-run output verified: 6 production agents detected (`finmentum`, `general`, `personal`, `projects`, `research`, `test-agent`); 2 local-only dev agents correctly skipped (`dev-canary`, `dev-control` — no `AGENTS.md`/`SOUL.md` markers).
+
+**Discovery refinement during implementation:** the original spec called for `ssh test -d` to gate prod-existence. In practice `/home/clawcode/` is mode 750 owned by `clawcode:clawcode`, so the unprivileged `jjagpal` SSH user can't traverse. Replaced with one upfront `sudo ls $AGENTS_REMOTE_ROOT/` and a cached membership check — one sudo call per deploy instead of N per-agent. Same security shape (sudo-only read of prod paths); better performance + clearer failure mode.
+
+**Same-day unblock:** Phase 119 SC-4. Once operator runs `scripts/deploy-clawdy.sh` (with or without `--no-build`/`--no-restart`), the next pass picks up `~/.clawcode/agents/projects/` @ `e634b7b` automatically — including the 3-site HEARTBEAT_OK suppression in `AGENTS.md`, the silence contract in `HEARTBEAT.md`, and the new `skills/cron-poll/SKILL.md`. Operator then surfaces the cron-recreation directive to the `projects` agent (Item B in `119-PHASE-SUMMARY.md`); 24h soak window starts.
+
+**Per-agent env-var overrides** added for future flexibility:
+- `CLAWCODE_DEPLOY_AGENTS_LOCAL` (default `$HOME/.clawcode/agents`)
+- `CLAWCODE_DEPLOY_AGENTS_TARGET` (default `/home/clawcode/.clawcode/agents`)
+- `CLAWCODE_DEPLOY_AGENTS_STAGING` (default `/home/jjagpal/clawcode-staging-agents`)
+- `CLAWCODE_DEPLOY_AGENTS_OWNER` (default `clawcode:clawcode`)
