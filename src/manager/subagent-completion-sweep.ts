@@ -132,6 +132,41 @@ export type TickArgs = ScanArgs & {
  * wires to `subagent_idle_warning` with dedupe). Failures are logged
  * but never propagate.
  */
+/**
+ * Phase 999.36 sub-bug D — pure handler for the quiescence-warning path.
+ *
+ * Deduped emission of `subagent_idle_warning` for a single candidate. The
+ * dedupe Map is owned by the caller (daemon's onTickAfter closure) so it
+ * survives across ticks. Returns "warned" if a warning was emitted,
+ * "deduped" if the candidate was suppressed.
+ *
+ * Pure side effects: mutates `emittedAt` Map, calls `log.info`. No I/O.
+ */
+export function handleSubagentQuiescenceWarning(args: {
+  readonly candidate: CompletionSweepCandidate;
+  readonly emittedAt: Map<string, number>;
+  readonly now: number;
+  readonly quiescenceMinutes: number;
+  readonly log: Logger;
+}): "warned" | "deduped" {
+  const warnDedupeMs = args.quiescenceMinutes * 60_000;
+  const lastWarn = args.emittedAt.get(args.candidate.threadId) ?? 0;
+  if (args.now - lastWarn < warnDedupeMs) {
+    return "deduped";
+  }
+  args.emittedAt.set(args.candidate.threadId, args.now);
+  args.log.info(
+    {
+      threadId: args.candidate.threadId,
+      sessionName: args.candidate.sessionName,
+      idleSec: args.candidate.idleSec,
+      quiescenceMinutes: args.quiescenceMinutes,
+    },
+    "subagent_idle_warning",
+  );
+  return "warned";
+}
+
 export async function tickSubagentCompletionSweep(
   args: TickArgs,
 ): Promise<void> {

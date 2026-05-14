@@ -90,7 +90,10 @@ import {
 import {
   relayAndMarkCompletedByAgentName,
 } from "./relay-and-mark-completed.js";
-import { tickSubagentCompletionSweep } from "./subagent-completion-sweep.js";
+import {
+  tickSubagentCompletionSweep,
+  handleSubagentQuiescenceWarning,
+} from "./subagent-completion-sweep.js";
 // Phase 108 — daemon-managed broker pooling 1password-mcp children across
 // agents. The broker owns ONE @takescake/1password-mcp child per unique
 // resolved OP_SERVICE_ACCOUNT_TOKEN; agents connect via per-process shim
@@ -7760,7 +7763,6 @@ export async function startDaemon(
         const threadRegistryForCompletion = await readThreadRegistry(
           THREAD_REGISTRY_PATH,
         );
-        const warnDedupeMs = quiescenceMinutes * 60_000;
         await tickSubagentCompletionSweep({
           sessions: sessionsForCompletion,
           bindings: threadRegistryForCompletion.bindings,
@@ -7770,23 +7772,15 @@ export async function startDaemon(
           onQuiescent: async (c) => {
             // Phase 999.36 sub-bug D (D-13) — quiescence is NOT a completion
             // signal. Emit a soft warning for operator visibility, deduped
-            // per-binding per-cycle, then return ok. Do NOT call relay.
-            const now = Date.now();
-            const lastWarn = idleWarningEmittedAt.get(c.threadId) ?? 0;
-            if (now - lastWarn < warnDedupeMs) {
-              return { ok: true, reason: "deduped" };
-            }
-            idleWarningEmittedAt.set(c.threadId, now);
-            mcpLog.info(
-              {
-                threadId: c.threadId,
-                sessionName: c.sessionName,
-                idleSec: c.idleSec,
-                quiescenceMinutes,
-              },
-              "subagent_idle_warning",
-            );
-            return { ok: true, reason: "warned" };
+            // per-binding per-cycle (in-memory Map). Do NOT call relay.
+            const result = handleSubagentQuiescenceWarning({
+              candidate: c,
+              emittedAt: idleWarningEmittedAt,
+              now: Date.now(),
+              quiescenceMinutes,
+              log: mcpLog,
+            });
+            return { ok: true, reason: result };
           },
         });
       } catch (err) {
