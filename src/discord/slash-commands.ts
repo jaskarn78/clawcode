@@ -2245,13 +2245,27 @@ export class SlashCommandHandler {
       return;
     }
 
-    // T-03 — dispatch the daemon `compact-session` IPC, render the success
-    // embed (T-04 adds try/catch for error-code + thrown-IPC paths).
-    const response = (await sendIpcRequest(
-      SOCKET_PATH,
-      "compact-session",
-      { agent },
-    )) as CompactSessionIpcResponse;
+    // T-03/T-04 — dispatch the daemon `compact-session` IPC. The daemon
+    // returns a discriminated union (`ok:true | ok:false` with one of four
+    // named error codes); on a thrown IPC error we synthesize an UNKNOWN
+    // entry so the embed renderer has a single uniform path. CLI parity:
+    // the same named codes surface from `clawcode session compact` (Plan
+    // 124-02), so the operator sees the same vocabulary in both surfaces.
+    let response: CompactSessionIpcResponse;
+    try {
+      response = (await sendIpcRequest(
+        SOCKET_PATH,
+        "compact-session",
+        { agent },
+      )) as CompactSessionIpcResponse;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-session-compact", agent, error: msg },
+        "compact-session IPC failed",
+      );
+      response = { ok: false, error: "UNKNOWN", message: msg };
+    }
     try {
       await interaction.editReply({
         embeds: [renderCompactEmbed(agent, response)],

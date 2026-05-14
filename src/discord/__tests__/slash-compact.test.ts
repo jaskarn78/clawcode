@@ -312,7 +312,7 @@ describe("Phase 124 Plan 03 — /clawcode-session-compact slash command", () => 
     });
   });
 
-  describe.skip("T-04 — error-code propagation (lands in T-04 commit)", () => {
+  describe("T-04 — error-code propagation", () => {
     const namedErrors = [
       "AGENT_NOT_RUNNING",
       "DAEMON_NOT_READY",
