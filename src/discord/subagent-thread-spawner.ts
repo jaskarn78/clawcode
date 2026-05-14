@@ -32,6 +32,16 @@ import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import { startTypingLoop } from "./subagent-typing-loop.js";
 
 /**
+ * Phase 999.36 sub-bug B (D-07) — index where the editor's visible message
+ * truncates with the "..." marker (slice(0, 1997) + "..."). Overflow loops
+ * MUST use this index as their starting cursor (NOT 2000) so the bytes the
+ * editor covered with "..." are recovered as overflow chunk 1's leading
+ * bytes. Pre-fix: cursor = 2000 dropped bytes 1997..1999 at every chunk
+ * seam.
+ */
+const EDITOR_TRUNCATE_INDEX = 1997;
+
+/**
  * Phase 100 GSD-06 — pure helper: extract the parent agent's GSD project
  * root from a ResolvedAgentConfig.
  *
@@ -793,7 +803,7 @@ export class SubagentThreadSpawner {
       // totalLength + chunksSent + fullySent + lastError so the failure
       // mode is observable in production logs.
       if (canEdit && text.length > 2000) {
-        let cursor = 2000;
+        let cursor = EDITOR_TRUNCATE_INDEX;
         let chunksSent = 0;
         let lastError: string | null = null;
         while (cursor < text.length) {
@@ -823,13 +833,9 @@ export class SubagentThreadSpawner {
             sessionName,
             threadId: thread.id,
             totalLength: text.length,
-            // Same chunk-boundary diag scheme as relayCompletionToParent
-            // above (see Plan 999.36-00 D-08 comment block there). Pinned
-            // here too so a single grep on the field name finds both call
-            // sites in one query.
-            editorCutoffIndex: 1997,
-            overflowStartCursor: 2000,
-            seamGapBytes: 2000 - 1997,
+            editorCutoffIndex: EDITOR_TRUNCATE_INDEX,
+            overflowStartCursor: EDITOR_TRUNCATE_INDEX,
+            seamGapBytes: 0,
             chunksSent,
             lastError,
             fullySent: cursor >= text.length,

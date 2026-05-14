@@ -561,11 +561,15 @@ describe("SubagentThreadSpawner", () => {
         c.msg.includes("subagent overflow chunks summary"),
       );
       expect(summaryLog).toBeDefined();
+      // Phase 121-02 sub-bug B fix (D-07) — overflowStartCursor now aligns
+      // with editorCutoffIndex (1997), and seamGapBytes is 0. Pre-fix
+      // values (cursor=2000, gap=3) confirmed the seam was real (Plan
+      // 121-01 diagnostic cycle); post-fix the seam is closed.
       expect(summaryLog!.obj).toMatchObject({
         totalLength: 5000,
         editorCutoffIndex: 1997,
-        overflowStartCursor: 2000,
-        seamGapBytes: 3,
+        overflowStartCursor: 1997,
+        seamGapBytes: 0,
         endReason: "drained",
       });
     });
