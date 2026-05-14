@@ -338,6 +338,10 @@ agents:
         Do NOT send `/clear`, do NOT recommend `/clear`, do NOT auto-reset at any threshold.
         Context management is manual — Jas or Ramy will reset when they choose to.
 
+        ## ✅ AUTO-COMPACT: ALLOWED
+        Auto-compaction at `0.7` is permitted; suggest compaction at 🟠/🔴 context-fill zones (operator visibility — does not consume the no-reset rule).
+        TODO(Phase 125): replace hardcoded `0.7` with dynamic substitution from per-agent `auto-compact-at` once the heartbeat prompt resolver supports placeholder interpolation.
+
         ## Every Heartbeat — Run This Check
 
         1. Call `session_status` to get current token usage
