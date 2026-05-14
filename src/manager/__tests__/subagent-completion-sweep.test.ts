@@ -163,37 +163,35 @@ describe("tickSubagentCompletionSweep", () => {
   });
 
   it("noops when enabled=false", async () => {
-    const relayAndMarkCompleted = vi.fn();
+    const onQuiescent = vi.fn();
     await tickSubagentCompletionSweep({
       sessions: [session()],
       bindings: [binding()],
       ...DEFAULT_SCAN,
       enabled: false,
       log: cap.log,
-      relayAndMarkCompleted,
+      onQuiescent,
     });
-    expect(relayAndMarkCompleted).not.toHaveBeenCalled();
+    expect(onQuiescent).not.toHaveBeenCalled();
     expect(cap.lines()).toEqual([]);
   });
 
   it("noops when CLAWCODE_SUBAGENT_COMPLETION_DISABLE=1", async () => {
     process.env.CLAWCODE_SUBAGENT_COMPLETION_DISABLE = "1";
-    const relayAndMarkCompleted = vi.fn();
+    const onQuiescent = vi.fn();
     await tickSubagentCompletionSweep({
       sessions: [session()],
       bindings: [binding()],
       ...DEFAULT_SCAN,
       enabled: true,
       log: cap.log,
-      relayAndMarkCompleted,
+      onQuiescent,
     });
-    expect(relayAndMarkCompleted).not.toHaveBeenCalled();
+    expect(onQuiescent).not.toHaveBeenCalled();
   });
 
-  it("invokes relayAndMarkCompleted per candidate (happy path)", async () => {
-    const relayAndMarkCompleted = vi
-      .fn()
-      .mockResolvedValue({ ok: true });
+  it("invokes onQuiescent per candidate (Phase 999.36 sub-bug D — quiescence is observational)", async () => {
+    const onQuiescent = vi.fn().mockResolvedValue({ ok: true });
     await tickSubagentCompletionSweep({
       sessions: [session(), session({ name: SUB_NAME_2 })],
       bindings: [
@@ -207,40 +205,42 @@ describe("tickSubagentCompletionSweep", () => {
       ...DEFAULT_SCAN,
       enabled: true,
       log: cap.log,
-      relayAndMarkCompleted,
+      onQuiescent,
     });
-    expect(relayAndMarkCompleted).toHaveBeenCalledTimes(2);
-    expect(relayAndMarkCompleted).toHaveBeenCalledWith("thread-1");
-    expect(relayAndMarkCompleted).toHaveBeenCalledWith("thread-2");
+    expect(onQuiescent).toHaveBeenCalledTimes(2);
+    // Handler receives a CompletionSweepCandidate (not threadId)
+    const firstArg = onQuiescent.mock.calls[0]![0] as { threadId: string };
+    const secondArg = onQuiescent.mock.calls[1]![0] as { threadId: string };
+    expect(firstArg.threadId).toBe("thread-1");
+    expect(secondArg.threadId).toBe("thread-2");
 
+    // The sweep itself no longer logs "firing completion relay" —
+    // operator-visibility is the handler's concern now.
     const lines = cap.lines();
-    const relayLogs = lines.filter(
-      (l) =>
-        l.component === "subagent-completion-sweep" && l.action === "relayed",
-    );
-    expect(relayLogs).toHaveLength(2);
+    expect(
+      lines.find((l) => l.msg === "subagent quiescent — firing completion relay"),
+    ).toBeUndefined();
   });
 
-  it("logs info when relay reports ok=false (race tolerated)", async () => {
-    const relayAndMarkCompleted = vi
+  it("does not log error when onQuiescent reports ok=false (handler return ignored)", async () => {
+    const onQuiescent = vi
       .fn()
-      .mockResolvedValue({ ok: false, reason: "binding-gone" });
+      .mockResolvedValue({ ok: false, reason: "deduped" });
     await tickSubagentCompletionSweep({
       sessions: [session()],
       bindings: [binding()],
       ...DEFAULT_SCAN,
       enabled: true,
       log: cap.log,
-      relayAndMarkCompleted,
+      onQuiescent,
     });
-    expect(relayAndMarkCompleted).toHaveBeenCalledTimes(1);
+    expect(onQuiescent).toHaveBeenCalledTimes(1);
     const lines = cap.lines();
-    expect(lines.find((l) => l.action === "skip")).toBeDefined();
-    expect(lines.find((l) => l.level === 50)).toBeUndefined(); // no error
+    expect(lines.find((l) => l.level === 50)).toBeUndefined();
   });
 
   it("logs error level for unexpected throws but does not propagate", async () => {
-    const relayAndMarkCompleted = vi
+    const onQuiescent = vi
       .fn()
       .mockRejectedValueOnce(new Error("disk full"));
     await expect(
@@ -250,16 +250,17 @@ describe("tickSubagentCompletionSweep", () => {
         ...DEFAULT_SCAN,
         enabled: true,
         log: cap.log,
-        relayAndMarkCompleted,
+        onQuiescent,
       }),
     ).resolves.toBeUndefined();
     const errors = cap.lines().filter((l) => l.level === 50);
     expect(errors).toHaveLength(1);
     expect(errors[0]!.err).toBe("disk full");
+    expect(errors[0]!.action).toBe("onQuiescent-failed");
   });
 
   it("continues to the next candidate after a failure on the first", async () => {
-    const relayAndMarkCompleted = vi
+    const onQuiescent = vi
       .fn()
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce({ ok: true });
@@ -276,8 +277,8 @@ describe("tickSubagentCompletionSweep", () => {
       ...DEFAULT_SCAN,
       enabled: true,
       log: cap.log,
-      relayAndMarkCompleted,
+      onQuiescent,
     });
-    expect(relayAndMarkCompleted).toHaveBeenCalledTimes(2);
+    expect(onQuiescent).toHaveBeenCalledTimes(2);
   });
 });

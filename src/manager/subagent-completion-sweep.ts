@@ -99,19 +99,24 @@ export type TickArgs = ScanArgs & {
   readonly enabled: boolean;
   readonly log: Logger;
   /**
-   * Side effect: invoke the spawner's relay-and-mark-completed flow.
-   * Production wires this to a closure that calls
-   * `subagentThreadSpawner.relayCompletionToParent(threadId)` then
-   * persists `binding.completedAt` to the thread registry. Tests
-   * pass a `vi.fn()`.
+   * Per-candidate handler. Phase 999.36 sub-bug D changed the contract:
+   * the sweep is NO LONGER a relay-firing path. The handler is now the
+   * operator-visibility hook — production wires this to emit a
+   * `subagent_idle_warning` log line with in-memory dedupe so a stuck
+   * subagent doesn't generate a warning every tick. Tests pass a
+   * `vi.fn()`.
    *
-   * Resolves to `{ ok: true }` if relay actually fired,
-   * `{ ok: false, reason }` for tolerated races (binding gone,
-   * already completed). Throws only on unexpected errors — caller
-   * logs at error level.
+   * Real completion paths: explicit `subagent_complete` tool,
+   * `postInitialMessage` delivery-confirmed stamp, OR session-end
+   * backstop. Quiescence is observational only.
+   *
+   * Resolves to `{ ok: true }` on every invocation (the handler is
+   * a soft observer, not a side-effect operator). Reserved for
+   * forward-compat with handlers that might surface a result. Throws
+   * only on unexpected errors — caller logs at error level.
    */
-  readonly relayAndMarkCompleted: (
-    threadId: string,
+  readonly onQuiescent: (
+    c: CompletionSweepCandidate,
   ) => Promise<{ readonly ok: boolean; readonly reason?: string }>;
 };
 
@@ -120,11 +125,12 @@ export type TickArgs = ScanArgs & {
  *
  * In disabled state (yaml `enabled: false` OR env kill-switch): noop.
  *
- * Otherwise: scan candidates, log one warn per candidate, invoke the
- * relay-and-mark-completed callback. Failures are logged but never
- * propagate — wiring is `setInterval` in production and a thrown error
- * would crash the tick loop (matches Phase 109-B / 999.X reaper
- * invariant).
+ * Otherwise: scan candidates, invoke onQuiescent per candidate. The
+ * sweep itself does NOT log "firing completion relay" anymore (Phase
+ * 999.36 sub-bug D — quiescence is no longer a completion signal). The
+ * onQuiescent handler is the operator-visibility surface (production
+ * wires to `subagent_idle_warning` with dedupe). Failures are logged
+ * but never propagate.
  */
 export async function tickSubagentCompletionSweep(
   args: TickArgs,
@@ -136,43 +142,19 @@ export async function tickSubagentCompletionSweep(
   if (candidates.length === 0) return;
 
   for (const c of candidates) {
-    args.log.warn(
-      {
-        component: "subagent-completion-sweep",
-        action: "relayed",
-        agent: c.sessionName,
-        sessionName: c.sessionName,
-        threadId: c.threadId,
-        idleSec: c.idleSec,
-      },
-      "subagent quiescent — firing completion relay",
-    );
     try {
-      const result = await args.relayAndMarkCompleted(c.threadId);
-      if (!result.ok) {
-        args.log.info(
-          {
-            component: "subagent-completion-sweep",
-            action: "skip",
-            agent: c.sessionName,
-            sessionName: c.sessionName,
-            threadId: c.threadId,
-            reason: result.reason,
-          },
-          "completion-sweep skipped (race tolerated)",
-        );
-      }
+      await args.onQuiescent(c);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       args.log.error(
         {
           component: "subagent-completion-sweep",
-          action: "relayed",
+          action: "onQuiescent-failed",
           agent: c.sessionName,
           threadId: c.threadId,
           err: msg,
         },
-        "completion-sweep relay failed unexpectedly",
+        "completion-sweep onQuiescent handler failed unexpectedly",
       );
     }
   }

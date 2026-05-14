@@ -89,7 +89,6 @@ import {
 // idempotent relay-and-stamp flow.
 import {
   relayAndMarkCompletedByAgentName,
-  relayAndMarkCompletedByThreadId,
 } from "./relay-and-mark-completed.js";
 import { tickSubagentCompletionSweep } from "./subagent-completion-sweep.js";
 // Phase 108 — daemon-managed broker pooling 1password-mcp children across
@@ -7598,6 +7597,12 @@ export async function startDaemon(
     const sweepEnabled = idleMs > 0 && subagentThreadSpawner != null;
     // 2026-05-08 hotfix: snapshot for TS narrowing post-TDZ-fix (outer is `let`).
     const sweepSpawner = subagentThreadSpawner;
+    // Phase 999.36 sub-bug D — dedupe quiescence warnings per binding so
+    // a stuck subagent doesn't generate a warning every quiescenceMinutes.
+    // Map keyed by threadId; value = timestamp of last warning emitted.
+    // In-memory only (resets on daemon restart — quiescence resumes from
+    // a fresh sweep cycle which is acceptable).
+    const idleWarningEmittedAt = new Map<string, number>();
     const onTickAfter = async () => {
       if (sweepEnabled && sweepSpawner) {
         try {
@@ -7724,15 +7729,19 @@ export async function startDaemon(
           "subagent-session reaper tick failed (non-fatal)",
         );
       }
-      // Phase 999.25 — subagent completion quiescence sweep. Walks
-      // running subagent sessions whose binding has been idle past
-      // `quiescenceMinutes` (default 5) AND haven't relayed yet
-      // (`completedAt === null/undefined`); fires
-      // relayCompletionToParent + stamps completedAt. Reads
-      // `config.defaults.subagentCompletion` lazily on each tick, so
-      // yaml hot-reload of `quiescenceMinutes` / `enabled` takes effect
-      // on the next sweep without daemon restart (closure-capture fix
-      // from PR #8 makes the live `config` reference current).
+      // Phase 999.36 sub-bug D — subagent quiescence sweep. Phase 999.25
+      // wired this to fire `relayCompletionToParent` after `quiescenceMinutes`
+      // of inactivity, which caused the premature-relay class: a mid-think
+      // subagent (between tool calls, 5+ min wait) had its completion summary
+      // posted to the parent's main channel while the actual final chunks
+      // never arrived (compound with sub-bug B truncation). Phase 999.36
+      // re-classes quiescence as observational: emit a soft
+      // `subagent_idle_warning` log line (in-memory dedupe per binding per
+      // quiescenceMinutes cycle) for operator visibility — do NOT fire relay,
+      // do NOT autoArchive.
+      //
+      // Real completion paths now: explicit `subagent_complete` tool,
+      // `postInitialMessage` delivery-confirmed stamp, OR session-end backstop.
       try {
         const scCfg = (config.defaults as {
           subagentCompletion?: {
@@ -7751,43 +7760,33 @@ export async function startDaemon(
         const threadRegistryForCompletion = await readThreadRegistry(
           THREAD_REGISTRY_PATH,
         );
+        const warnDedupeMs = quiescenceMinutes * 60_000;
         await tickSubagentCompletionSweep({
           sessions: sessionsForCompletion,
           bindings: threadRegistryForCompletion.bindings,
           quiescenceMinutes,
           enabled: completionEnabled,
           log: mcpLog.child({ subsystem: "subagent-completion-sweep" }),
-          relayAndMarkCompleted: async (threadId: string) => {
-            // Phase 999.36 sub-bug D diag (D-12) — quiescence-sweep
-            // firing log. quiescenceMinutes is the live-config snapshot
-            // captured above so the value matches what the sweep just
-            // tested against. idleSeconds is left out here (binding lives
-            // inside the sweep tick, not in this closure) — Plan 02 will
-            // pull it from the binding shape if needed.
+          onQuiescent: async (c) => {
+            // Phase 999.36 sub-bug D (D-13) — quiescence is NOT a completion
+            // signal. Emit a soft warning for operator visibility, deduped
+            // per-binding per-cycle, then return ok. Do NOT call relay.
+            const now = Date.now();
+            const lastWarn = idleWarningEmittedAt.get(c.threadId) ?? 0;
+            if (now - lastWarn < warnDedupeMs) {
+              return { ok: true, reason: "deduped" };
+            }
+            idleWarningEmittedAt.set(c.threadId, now);
             mcpLog.info(
               {
-                threadId,
-                source: "quiescence-sweep",
+                threadId: c.threadId,
+                sessionName: c.sessionName,
+                idleSec: c.idleSec,
                 quiescenceMinutes,
               },
-              "[diag] subagent-complete-fired",
+              "subagent_idle_warning",
             );
-            return relayAndMarkCompletedByThreadId(
-              {
-                readThreadRegistry: () =>
-                  readThreadRegistry(THREAD_REGISTRY_PATH),
-                writeThreadRegistry: (next) =>
-                  writeThreadRegistry(THREAD_REGISTRY_PATH, next),
-                relayCompletionToParent: subagentThreadSpawner
-                  ? (tid) =>
-                      subagentThreadSpawner.relayCompletionToParent(tid)
-                  : null,
-                now: () => Date.now(),
-                log: mcpLog.child({ subsystem: "subagent-completion" }),
-                enabled: completionEnabled,
-              },
-              threadId,
-            );
+            return { ok: true, reason: "warned" };
           },
         });
       } catch (err) {
