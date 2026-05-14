@@ -3341,6 +3341,15 @@ export async function startDaemon(
             .slice(0, 20),
         );
       };
+      // Phase 124 follow-up — same producer-side wire as the manual IPC
+      // path. The auto-trigger fires from the heartbeat cycle and uses the
+      // same safety-budget gate so an in-flight long turn does not stall
+      // the heartbeat task. Both sites read getTurnStartedAt — divergence
+      // would let one path skip the gate.
+      const turnStartedAtAuto = (() => {
+        const ts = manager.getTurnStartedAt(agent);
+        return ts !== null ? new Map([[agent, ts]]) : new Map<string, number>();
+      })();
       const autoResult = await handleCompactSession(
         { agent },
         {
@@ -3372,6 +3381,7 @@ export async function startDaemon(
           extractMemories,
           log,
           daemonReady: true,
+          turnStartedAt: turnStartedAtAuto,
         },
       );
       if (autoResult.ok === true) {
@@ -10514,6 +10524,16 @@ async function routeMethod(
             .slice(0, 20),
         );
       };
+      // Phase 124 follow-up — wire the producer-side turnStartedAt slot
+      // into the handler's safety-budget gate. Build a 1-entry map at call
+      // time from SessionManager.getTurnStartedAt(); when no turn is in
+      // flight (or the agent is not running) the map stays empty and the
+      // gate falls through. `maxTurnAgeMs` is left to its 10-min default
+      // per CONTEXT D-03 step 2.
+      const turnStartedAtIpc = (() => {
+        const ts = manager.getTurnStartedAt(agentName);
+        return ts !== null ? new Map([[agentName, ts]]) : new Map<string, number>();
+      })();
       const compactResult = await handleCompactSession(
         { agent: agentName },
         {
@@ -10552,6 +10572,7 @@ async function routeMethod(
           extractMemories,
           log: logger,
           daemonReady: true,
+          turnStartedAt: turnStartedAtIpc,
         },
       );
       // Phase 124 Plan 04 T-01 — record into the in-memory log so

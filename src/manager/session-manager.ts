@@ -1872,6 +1872,23 @@ export class SessionManager {
     return handle.hasActiveTurn();
   }
 
+  /**
+   * Phase 124 follow-up — surface the in-flight turn's start timestamp.
+   *
+   * Mirrors the `hasActiveTurn` shape: returns null when the agent is not
+   * running, the handle predates the primitive (legacy mocks / wrapSdkQuery
+   * paths), or no turn is in-flight. Read by the daemon's `compact-session`
+   * dep-builder to enforce the ERR_TURN_TOO_LONG safety budget — the
+   * handler resolves it through a per-agent `ReadonlyMap<string, number>`,
+   * but the source of truth is the handle's slot, not a daemon-side map.
+   */
+  getTurnStartedAt(name: string): number | null {
+    const handle = this.sessions.get(name);
+    if (!handle) return null;
+    if (typeof handle.getTurnStartedAt !== "function") return null;
+    return handle.getTurnStartedAt();
+  }
+
   async restartAgent(name: string, config: ResolvedAgentConfig): Promise<void> {
     // Phase 90.1 hotfix — tolerate "agent not running" at the stop step.
     // Previously, restartAgent threw when called on a stopped agent, forcing
