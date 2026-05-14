@@ -738,6 +738,96 @@ export function renderDreamEmbed(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 124 Plan 03 — /clawcode-session-compact helpers (admin gate + embed
+// renderer). Pure exported function so the slash-compact tests exercise the
+// embed shape without instantiating SlashCommandHandler. Mirrors the
+// /clawcode-dream helper shape (DreamIpcResponse + renderDreamEmbed).
+// ---------------------------------------------------------------------------
+
+/**
+ * IPC response shape for the daemon's `compact-session` method. Mirrors the
+ * `CompactSessionResult` discriminated union exported from
+ * `src/manager/daemon-compact-session-ipc.ts`. Re-declared here so the slash
+ * module doesn't pull in the manager's internal type graph (keeps the import
+ * direction clean — Discord layer reads daemon contract via IPC shape only).
+ */
+export type CompactSessionIpcResponse =
+  | {
+      readonly ok: true;
+      readonly tokens_before: number | null;
+      readonly tokens_after: number | null;
+      readonly summary_written: boolean;
+      readonly forked_to: string;
+      readonly memories_created: number;
+    }
+  | {
+      readonly ok: false;
+      readonly error:
+        | "DAEMON_NOT_READY"
+        | "AGENT_NOT_RUNNING"
+        | "AGENT_NOT_INITIALIZED"
+        | "ERR_TURN_TOO_LONG"
+        | "UNKNOWN";
+      readonly message?: string;
+    };
+
+/**
+ * Render the ephemeral embed for `/clawcode-session-compact`.
+ *
+ * Success (`ok:true`) → green (0x2ecc71), 5 fields populated from the IPC
+ * response (tokens_before, tokens_after, summary_written yes/no,
+ * forked_to, memories_created). `null` tokens render as `n/a`.
+ *
+ * Error (`ok:false`) → red (0xe74c3c), description carries the error code
+ * verbatim so the operator sees CLI parity (the same error names surface
+ * from `clawcode session compact` via Plan 124-02). Optional `message`
+ * appended as a second line.
+ *
+ * Pure function — no side effects, no IPC, no clock. Pinned by T03-H2,
+ * T03-H3, T04-E1 in slash-compact.test.ts.
+ */
+export function renderCompactEmbed(
+  agent: string,
+  response: CompactSessionIpcResponse,
+): EmbedBuilder {
+  if (response.ok) {
+    const embed = new EmbedBuilder()
+      .setTitle(`💠 Compaction complete: ${agent}`)
+      .setColor(0x2ecc71)
+      .setTimestamp();
+    const fmtTokens = (n: number | null): string =>
+      n === null ? "n/a" : String(n);
+    embed.addFields(
+      { name: "Tokens before", value: fmtTokens(response.tokens_before), inline: true },
+      { name: "Tokens after", value: fmtTokens(response.tokens_after), inline: true },
+      {
+        name: "Summary written",
+        value: response.summary_written ? "yes" : "no",
+        inline: true,
+      },
+      { name: "Forked to", value: `\`${response.forked_to}\``, inline: false },
+      {
+        name: "Memories created",
+        value: String(response.memories_created),
+        inline: true,
+      },
+    );
+    return embed;
+  }
+  // Error path — red embed; error code verbatim in description.
+  const embed = new EmbedBuilder()
+    .setTitle(`💠 Compaction failed: ${agent}`)
+    .setColor(0xe74c3c)
+    .setTimestamp();
+  const lines = [`\`${response.error}\``];
+  if (response.message !== undefined && response.message.length > 0) {
+    lines.push(response.message);
+  }
+  embed.setDescription(lines.join("\n"));
+  return embed;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 96 Plan 05 PFS- — /clawcode-probe-fs helpers (FsProbeOutcome embed
 // renderer). 11th application of the inline-handler-short-circuit pattern.
 // Pure exported function so the slash-commands tests exercise it without
@@ -1394,6 +1484,17 @@ export class SlashCommandHandler {
     // EmbedBuilder render via the pure renderDreamEmbed helper (above).
     if (commandName === "clawcode-dream") {
       await this.handleDreamCommand(interaction);
+      return;
+    }
+
+    // Phase 124 Plan 03 — /clawcode-session-compact inline handler.
+    // Admin-only ephemeral. Mirrors the /clawcode-dream pattern: gates on
+    // isAdminClawdyInteraction BEFORE deferReply so non-admins never see
+    // the IPC call land. Routes through the daemon's `compact-session` IPC
+    // method (Plan 124-01 daemon edge wires handleCompactSession). Render
+    // via the pure renderCompactEmbed helper exported below.
+    if (commandName === "clawcode-session-compact") {
+      await this.handleCompactCommand(interaction);
       return;
     }
 
@@ -2093,6 +2194,69 @@ export class SlashCommandHandler {
       this.log.error(
         { command: "clawcode-dream", error: (error as Error).message },
         "failed to send dream embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 124 Plan 03 — handle /clawcode-session-compact.
+   *
+   * Admin-only ephemeral. Mirrors handleDreamCommand structurally:
+   *   1. Admin gate via isAdminClawdyInteraction BEFORE deferReply — non-admins
+   *      get an instant "Admin-only command" reply (zero IPC, zero LLM cost).
+   *   2. deferReply ephemerally so Discord doesn't time out the interaction
+   *      while the daemon performs compaction (which can take several seconds
+   *      for a multi-MB session JSONL).
+   *   3. T-03 will replace the placeholder editReply below with the actual
+   *      `sendIpcRequest(SOCKET_PATH, "compact-session", {agent})` dispatch.
+   *   4. T-04 will add error-code propagation + thrown-IPC handling.
+   */
+  private async handleCompactCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    // Admin gate FIRST — no IPC, no defer for non-admins.
+    if (
+      !isAdminClawdyInteraction(interaction, {
+        adminUserIds: this.adminUserIds,
+        routingTable: this.routingTable,
+        resolvedAgents: this.resolvedAgents,
+      })
+    ) {
+      try {
+        await interaction.reply({
+          content: "Admin-only command",
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const agent = interaction.options.getString("agent", true);
+
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-session-compact", error: (error as Error).message },
+        "failed to defer compact reply",
+      );
+      return;
+    }
+
+    // T-02 placeholder — T-03 swaps for the IPC call + success embed; T-04
+    // wraps in try/catch for error-code propagation. Touching this method
+    // until then is a no-op interactively (admin gate is the only behavior
+    // the test asserts at this commit).
+    try {
+      await interaction.editReply({
+        content: `(placeholder) /clawcode-session-compact ${agent} — IPC dispatch lands in T-03.`,
+      });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-session-compact", error: (error as Error).message },
+        "failed to send compact placeholder",
       );
     }
   }

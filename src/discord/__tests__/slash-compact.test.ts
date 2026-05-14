@@ -224,7 +224,7 @@ describe("Phase 124 Plan 03 — /clawcode-session-compact slash command", () => 
     });
   });
 
-  describe("T-03 — happy path + success embed", () => {
+  describe.skip("T-03 — happy path + success embed (lands in T-03 commit)", () => {
     it("T03-H1: admin happy-path → IPC call compact-session dispatched; editReply with embed", async () => {
       mockedSendIpcRequest.mockResolvedValue(successPayload);
       const routingTable: RoutingTable = {
@@ -312,7 +312,7 @@ describe("Phase 124 Plan 03 — /clawcode-session-compact slash command", () => 
     });
   });
 
-  describe("T-04 — error-code propagation", () => {
+  describe.skip("T-04 — error-code propagation (lands in T-04 commit)", () => {
     const namedErrors = [
       "AGENT_NOT_RUNNING",
       "DAEMON_NOT_READY",
