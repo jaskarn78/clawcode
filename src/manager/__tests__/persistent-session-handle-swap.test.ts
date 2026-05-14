@@ -391,4 +391,61 @@ describe("createPersistentSessionHandle — swap() epoch boundary", () => {
 
     await handle.close();
   });
+
+  it("mid-turn swap queues behind the in-flight turn (tool-chain-intact invariant)", async () => {
+    // Fires a long-running turn through epoch 0, then invokes swap WHILE
+    // the turn is still iterating. The SerialTurnQueue is depth-1; the
+    // swap call enqueues and resolves only after the turn completes.
+    // Pins: the result of the in-flight turn returns from epoch 0's
+    // controller (not the post-swap one), and the swap's epoch increment
+    // happens AFTER the turn's result, never interleaved.
+    const { sdkMock, controllers } = buildHarness();
+    const handle = createPersistentSessionHandle(
+      sdkMock as unknown as SdkModule,
+      {},
+      "mid-turn-sid",
+    );
+
+    // Start the turn but do NOT emit a result yet — the turn iterates
+    // pending on driverIter.next() until we push it below.
+    const turnPromise = handle.sendAndCollect("long-running");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // While the turn is in-flight, invoke swap. It must enqueue (depth-1)
+    // and NOT resolve until the turn resolves.
+    expect(handle.hasActiveTurn()).toBe(true);
+    let swapResolved = false;
+    const swapPromise = handle.swap?.("mid-turn-fork-sid").then(() => {
+      swapResolved = true;
+    });
+
+    // Yield a few microtasks; the swap MUST still be pending.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(swapResolved).toBe(false);
+    expect(handle.sessionId).toBe("mid-turn-sid"); // not yet swapped
+    expect(handle.getEpoch?.()).toBe(0);
+
+    // Now emit the assistant + result for the in-flight turn through the
+    // epoch-0 controller. The turn resolves with the epoch-0 text.
+    emitStockTurn(controllers[0], {
+      text: "in-flight-reply",
+      sessionId: "mid-turn-sid",
+    });
+    const result = await turnPromise;
+    expect(result).toBe("in-flight-reply");
+
+    // The swap now runs and completes.
+    await swapPromise;
+    expect(swapResolved).toBe(true);
+    expect(handle.sessionId).toBe("mid-turn-fork-sid");
+    expect(handle.getEpoch?.()).toBe(1);
+    // The in-flight turn's user message was received by the epoch-0
+    // controller, not the post-swap one.
+    expect(controllers[0].receivedUserMessages).toEqual(["long-running"]);
+    expect(controllers[1].receivedUserMessages).toEqual([]);
+
+    await handle.close();
+  });
 });
