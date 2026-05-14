@@ -1340,6 +1340,15 @@ export const agentSchema = z.object({
    */
   advisor: agentAdvisorOverrideSchema.optional(),
   /**
+   * Phase 124 Plan 02 D-06 — per-agent override for the auto-compaction
+   * trigger ratio (0..1). When omitted, loader's `resolveAutoCompactAt`
+   * falls through to `defaults['auto-compact-at']` (zod default 0.7).
+   * Plan 125 consumes the resolved value to gate auto-compaction; Phase
+   * 124 only ships the schema + loader resolver so `clawcode reload`
+   * picks up edits without a daemon restart.
+   */
+  "auto-compact-at": z.number().min(0).max(1).optional(),
+  /**
    * Phase 999.25 — wake-order priority for boot-time auto-start.
    *
    * Lower numbers boot first. Agents without `wakeOrder` boot LAST in YAML
@@ -1928,6 +1937,14 @@ export const defaultsSchema = z.object({
   // backend to gate IPC dispatch; Plan 117-08 reads the same backend for
   // the capability manifest. See `advisorConfigSchema` block above.
   advisor: advisorConfigSchema.optional(),
+  // Phase 124 Plan 02 D-06 — fleet-wide auto-compaction trigger ratio.
+  // Plan 125 consumes the resolved value to decide when to fire compaction
+  // automatically; Phase 124 only ships the schema + reload integration.
+  // Default 0.7 (70% of context window). Per-agent override via
+  // `agentSchema['auto-compact-at']` cascades over this. Hyphenated key
+  // matches the YAML surface; the resolved type exposes the camelCase
+  // `autoCompactAt` field (see `loader.ts` resolver).
+  "auto-compact-at": z.number().min(0).max(1).default(0.7),
   // Phase 115 D-08 + D-09 — embedding-v2 migration knobs. Default values
   // match the Phase 115 D-09 cost discipline: 5% CPU budget, 50-row
   // batch. These are knobs not constants; operator can dial both via
@@ -2318,6 +2335,9 @@ export const configSchema = z.object({
     // current dual-mode behavior (both `/` and `/dashboard/v2/` reachable);
     // operator flips to TRUE manually via `clawcode config set`.
     dashboardCutoverRedirect: false,
+    // Phase 124 Plan 02 D-06 — fleet-wide auto-compaction trigger ratio
+    // mirror for the configSchema-default-when-`defaults`-omitted fallback.
+    "auto-compact-at": 0.7,
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   triggers: triggersConfigSchema,

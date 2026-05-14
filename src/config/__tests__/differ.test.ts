@@ -98,6 +98,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
     },
     mcpServers: {},
     agents: [

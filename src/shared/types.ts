@@ -46,6 +46,15 @@ export type ResolvedAgentConfig = {
    */
   readonly greetCoolDownMs: number;
   /**
+   * Phase 124 Plan 02 D-06 — ALWAYS populated by loader.ts from
+   * `agent['auto-compact-at'] ?? defaults['auto-compact-at']` (zod default
+   * 0.7). The auto-compaction trigger ratio (0..1) of the context window.
+   * Plan 125 consumes this to decide when to fire compaction automatically;
+   * Phase 124 only ships the schema + loader resolver + this field so that
+   * `clawcode reload` picks up YAML edits without a daemon restart.
+   */
+  readonly autoCompactAt: number;
+  /**
    * Phase 96 D-05 — per-agent fileAccess override. UNDEFINED when the agent
    * does not declare it (loader does not inherit defaults here — defaults
    * are merged by `resolveFileAccess(agent, cfg, defaults)` at IPC handler

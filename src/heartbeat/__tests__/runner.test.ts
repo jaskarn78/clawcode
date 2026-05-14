@@ -101,6 +101,7 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -206,6 +207,7 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -331,6 +333,7 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -395,6 +398,7 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -444,6 +448,7 @@ describe("HeartbeatRunner", () => {
         allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
         greetOnRestart: true, // Phase 89 GREET-07
         greetCoolDownMs: 300_000, // Phase 89 GREET-10
+        autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
@@ -633,6 +638,7 @@ describe("HeartbeatRunner", () => {
         allowedModels: ["haiku", "sonnet", "opus"],
         greetOnRestart: true,
         greetCoolDownMs: 300_000,
+        autoCompactAt: 0.7, // Phase 124 D-06
         memoryAutoLoad: true,
         memoryRetrievalTopK: 5,
         memoryScannerEnabled: true,

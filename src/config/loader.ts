@@ -514,6 +514,11 @@ export function resolveAgentConfig(
     // default), so the falsy-free `??` fallback is safe.
     greetOnRestart: agent.greetOnRestart ?? defaults.greetOnRestart,
     greetCoolDownMs: agent.greetCoolDownMs ?? defaults.greetCoolDownMs,
+    // Phase 124 Plan 02 D-06 — per-agent auto-compaction trigger ratio
+    // cascades over defaults; both are populated by zod (defaults via
+    // .default(0.7), agent leaves undefined when omitted). Plan 125
+    // consumes this to gate auto-compaction firing.
+    autoCompactAt: resolveAutoCompactAt(agent, defaults),
     // Phase 96 D-05 — propagate per-agent fileAccess into ResolvedAgentConfig
     // so daemon IPC handler (probe-fs / list-fs-status) and downstream
     // consumers see the per-agent override. When the agent omits the field,
@@ -1136,6 +1141,28 @@ export function resolveAdvisorCaching(
     ttl:
       agent?.advisor?.caching?.ttl ?? defaults?.advisor?.caching?.ttl ?? "5m",
   };
+}
+
+/**
+ * Phase 124 Plan 02 D-06 — resolve the auto-compaction trigger ratio for an
+ * agent. Falls through:
+ *   per-agent['auto-compact-at'] → defaults['auto-compact-at'] → 0.7.
+ *
+ * Schema enforces range 0..1 at parse time, so any value reaching this
+ * resolver is in-range. Plan 125 consumes the resolved value to decide
+ * when to fire auto-compaction; Phase 124 only ships the schema + this
+ * resolver so `clawcode reload` picks up YAML edits without a daemon
+ * restart (the loader re-resolves on every config-watcher fire).
+ */
+export function resolveAutoCompactAt(
+  agent: { "auto-compact-at"?: number } | undefined,
+  defaults: { "auto-compact-at"?: number } | undefined,
+): number {
+  return (
+    agent?.["auto-compact-at"] ??
+    defaults?.["auto-compact-at"] ??
+    0.7
+  );
 }
 
 /**

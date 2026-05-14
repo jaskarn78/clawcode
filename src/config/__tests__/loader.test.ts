@@ -98,6 +98,7 @@ describe("resolveAgentConfig", () => {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -657,6 +658,7 @@ describe("resolveAgentConfig - mcpServers", () => {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
   };
 
   const sharedMcpServers = {
@@ -1636,6 +1638,7 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
   };
 
   afterEach(() => {
@@ -2048,6 +2051,7 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
     };
   }
 
@@ -2199,6 +2203,7 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
     };
   }
 
@@ -2454,6 +2459,7 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       autoStart: true, // Phase 100 follow-up
       // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
       dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
     };
   }
 

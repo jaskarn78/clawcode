@@ -29,6 +29,7 @@ function makeAgentConfig(): ResolvedAgentConfig {
     allowedModels: ["haiku", "sonnet", "opus"],
     greetOnRestart: true,
     greetCoolDownMs: 300_000,
+    autoCompactAt: 0.7, // Phase 124 D-06
     memoryAutoLoad: true,
     memoryRetrievalTopK: 5,
     memoryScannerEnabled: true,
