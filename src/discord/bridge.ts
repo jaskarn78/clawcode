@@ -193,6 +193,16 @@ export class DiscordBridge {
   private running = false;
   private readonly recentlySent: Set<string> = new Set();
   /**
+   * Phase 119 A2A-03 hotfix 2026-05-14 — tracks message IDs that have been
+   * QUEUED (backoff retry or QUEUE_FULL coalesce). IN_FLIGHT (👍) and
+   * DELIVERED (✅) transitions only fire for messages in this set — i.e.,
+   * messages that took the queue path. Fast-path messages (direct dispatch,
+   * no queue) get no icons. Operator-visible result: ⏳→👍→✅ progression
+   * for queued messages only; nothing on every-message responses.
+   * Cleaned up on DELIVERED/FAILED to bound memory.
+   */
+  private readonly queuedMessageIds: Set<string> = new Set();
+  /**
    * Phase 100 follow-up — per-agent pending-message coalescer.
    *
    * Operator-reported bug 2026-04-28: rapid-fire messages while the agent is
@@ -860,14 +870,12 @@ export class DiscordBridge {
       this.sessionManager.advisorEvents.on("advisor:invoked", onInvoked);
       this.sessionManager.advisorEvents.on("advisor:resulted", onResulted);
 
-      // Phase 119 A2A-03 hotfix 2026-05-14 — icon transitions disabled at
-      // every call site. Original wiring was overly broad: fired on EVERY
-      // user→agent turn, not just A2A turns. Operator pain: ⏳→👍→✅
-      // appeared on every response in admin-clawdy + agent channels.
-      // State-machine module at queue-state-icon.ts kept intact (tested
-      // infrastructure); re-enable behind a per-agent config flag or A2A-
-      // turn detection gate in a follow-up phase.
-      // (was: void this.transitionIcon(message, "IN_FLIGHT");)
+      // Phase 119 A2A-03 — IN_FLIGHT (👍) transition. Only fires if this
+      // message was previously QUEUED (rode the queue path); fast-path
+      // messages get no icons. See queuedMessageIds field comment.
+      if (this.queuedMessageIds.has(message.id)) {
+        void this.transitionIcon(message, "IN_FLIGHT");
+      }
 
       try {
         if (this.turnDispatcher) {
@@ -963,9 +971,13 @@ export class DiscordBridge {
           await this.sendResponse(message, response, sessionName);
         }
         this.log.info({ agent: sessionName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
-        // Phase 119 A2A-03 hotfix 2026-05-14 — disabled (see IN_FLIGHT site
-        // above for full rationale).
-        // (was: void this.transitionIcon(message, "DELIVERED");)
+        // Phase 119 A2A-03 — DELIVERED (✅) transition. Only fires if this
+        // message rode the queue path (was previously QUEUED → IN_FLIGHT).
+        // Cleans up the set membership to bound memory.
+        if (this.queuedMessageIds.has(message.id)) {
+          void this.transitionIcon(message, "DELIVERED");
+          this.queuedMessageIds.delete(message.id);
+        }
       } else if (!messageRef.current) {
         this.log.warn({ agent: sessionName, channel: channelId }, "agent returned empty response");
       }
@@ -1039,6 +1051,9 @@ export class DiscordBridge {
         }, delayMs);
         // Phase 119 A2A-03 — QUEUED while agent comes back online. Kept
         // (operator-useful signal: fires only on backoff retry, NOT every msg).
+        // Hotfix 2026-05-14 — record in queuedMessageIds so the eventual
+        // IN_FLIGHT/DELIVERED transitions fire (gated on prior-QUEUED).
+        this.queuedMessageIds.add(message.id);
         void this.transitionIcon(message, "QUEUED");
         return;
       }
@@ -1063,9 +1078,13 @@ export class DiscordBridge {
       if (coalesced) {
         // Phase 119 A2A-03 \u2014 coalesced into per-agent queue; \u23f3 kept
         // (operator-useful: only fires on QUEUE_FULL, NOT every msg).
+        // Hotfix 2026-05-14 \u2014 record so eventual IN_FLIGHT/DELIVERED fire.
+        this.queuedMessageIds.add(message.id);
         void this.transitionIcon(message, "QUEUED");
       } else {
         // Phase 119 A2A-03 \u2014 terminal failure; \u274c kept (operator-useful).
+        // Hotfix 2026-05-14 \u2014 clean up any queued-tracking for this msg.
+        this.queuedMessageIds.delete(message.id);
         void this.transitionIcon(message, "FAILED");
       }
     }
