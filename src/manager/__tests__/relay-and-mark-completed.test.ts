@@ -40,6 +40,10 @@ function binding(overrides: Partial<ThreadBinding> = {}): ThreadBinding {
     sessionName: SUB,
     createdAt: NOW - 30 * 60_000,
     lastActivity: NOW - 10 * 60_000,
+    // Phase 999.36 sub-bug D — default fixtures pass the delivery gate.
+    // Tests asserting the gate's no-stamp branch override this with
+    // `lastDeliveryAt: undefined` or `null` explicitly.
+    lastDeliveryAt: NOW - 5 * 60_000,
     ...overrides,
   };
 }

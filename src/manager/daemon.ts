@@ -115,6 +115,8 @@ import {
   getBindingForThread,
   getBindingForSession,
   getBindingsForAgent,
+  stampLastDeliveryAt,
+  migrateBindingsForPhase999_36,
 } from "../discord/thread-registry.js";
 import { collectAllOpRefs } from "./secrets-collector.js";
 import { applySecretsDiff } from "./secrets-watcher-bridge.js";
@@ -9676,8 +9678,7 @@ async function routeMethod(
             // Phase 999.36 sub-bug D diag (D-12) — session-end firing log.
             // This path fires when the subagent's claude session naturally
             // ends and neither the explicit-tool nor quiescence-sweep
-            // beat it to the relay. Plan 02 will use this tag to confirm
-            // session-end is the intended terminal path (not premature).
+            // beat it to the relay.
             logger.info(
               {
                 source: "session-end",
@@ -9686,6 +9687,32 @@ async function routeMethod(
               },
               "[diag] subagent-complete-fired",
             );
+            // Phase 999.36 sub-bug D backstop — session-end is
+            // delivery-equivalent. If the agent's session ended without an
+            // explicit lastDeliveryAt stamp (crash mid-stream, manual stop,
+            // etc.), the operator still deserves notification. Stamp delivery
+            // now so markRelayCompleted's gate passes.
+            try {
+              const stamp = await stampLastDeliveryAt(
+                THREAD_REGISTRY_PATH,
+                result.threadId,
+                Date.now(),
+              );
+              if (!stamp.ok) {
+                logger.warn(
+                  { threadId: result.threadId, reason: stamp.reason },
+                  "session-end backstop lastDeliveryAt stamp failed (relay may refuse)",
+                );
+              }
+            } catch (err) {
+              logger.warn(
+                {
+                  threadId: result.threadId,
+                  error: (err as Error).message,
+                },
+                "session-end backstop lastDeliveryAt stamp threw (relay may refuse)",
+              );
+            }
             await subagentThreadSpawner.relayCompletionToParent(result.threadId);
           }
         } catch (err) {

@@ -36,7 +36,8 @@ export type RelayAndMarkCompletedResult =
   | { readonly ok: true; readonly reason: "already-completed" }
   | { readonly ok: false; readonly reason: "no-binding" }
   | { readonly ok: false; readonly reason: "disabled" }
-  | { readonly ok: false; readonly reason: "spawner-unavailable" };
+  | { readonly ok: false; readonly reason: "spawner-unavailable" }
+  | { readonly ok: false; readonly reason: "delivery-not-confirmed" };
 
 export type RelayAndMarkCompletedDeps = {
   readonly readThreadRegistry: () => Promise<ThreadBindingRegistry>;
@@ -87,6 +88,24 @@ export async function relayAndMarkCompletedByThreadId(
   const binding = registry.bindings[idx]!;
   if (binding.completedAt !== undefined && binding.completedAt !== null) {
     return { ok: true, reason: "already-completed" };
+  }
+
+  // Phase 999.36 sub-bug D (D-13) — gate completion on delivery
+  // confirmation. Without this, a tool-result-with-no-followup or a
+  // heartbeat-quiescence sweep can fire the relay before the subagent's
+  // actual final chunks reach Discord — operator sees confident "Phase 2
+  // complete" while the last 2 minutes of work silently disappeared
+  // (compound failure with sub-bug B).
+  //
+  // Backstop: the session-end callback in daemon.ts stamps
+  // lastDeliveryAt = Date.now() before invoking relayCompletionToParent,
+  // treating session-end as delivery-equivalent (the agent has stopped
+  // streaming; whatever was delivered is the final state).
+  if (
+    binding.lastDeliveryAt === undefined ||
+    binding.lastDeliveryAt === null
+  ) {
+    return { ok: false, reason: "delivery-not-confirmed" };
   }
 
   await deps.relayCompletionToParent(threadId);
