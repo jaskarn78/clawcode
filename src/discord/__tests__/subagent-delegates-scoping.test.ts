@@ -175,6 +175,11 @@ describe("Phase 106 DSCOPE — subagent config strips `delegates`", () => {
   });
 
   afterEach(async () => {
+    // Phase 999.36 sub-bug D — postInitialMessage now stamps lastDeliveryAt
+    // via fs I/O in the fire-and-forget `void` chain; settle before rm to
+    // avoid an ENOTEMPTY race when writeThreadRegistry's mkdir recreates
+    // the parent directory after rm starts.
+    await new Promise((r) => setTimeout(r, 50));
     await rm(tmpDir, { recursive: true, force: true });
   });
 

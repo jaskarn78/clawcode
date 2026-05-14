@@ -15,6 +15,7 @@ import {
   removeBinding,
   getBindingForThread,
   getBindingsForAgent,
+  stampLastDeliveryAt,
 } from "./thread-registry.js";
 import { logger } from "../shared/logger.js";
 import { ManagerError } from "../shared/errors.js";
@@ -366,6 +367,11 @@ export class SubagentThreadSpawner {
         { channelId: binding.parentChannelId },
       );
       await editor.flush();
+
+      // Phase 999.36 sub-bug D — NOT stamping lastDeliveryAt here. This flush
+      // is the PARENT's main-channel summary post — the subagent's own binding
+      // delivery was already stamped in postInitialMessage's finally-adjacent
+      // block. Stamping here would double-stamp.
 
       // Defense-in-depth: if dispatch returned empty AND no chunk fired,
       // we have no post. Distinct from the 5 pre-dispatch silent-return
@@ -830,6 +836,33 @@ export class SubagentThreadSpawner {
             endReason: lastError ? "send-failed" : "drained",
           },
           "subagent overflow chunks summary",
+        );
+      }
+
+      // Phase 999.36 sub-bug D (D-13) — stamp lastDeliveryAt AFTER the
+      // final text + overflow chunks have fully drained to Discord. The
+      // stamp gates markRelayCompleted from firing the subagent_complete
+      // event — without this stamp, the relay path will refuse to mark
+      // complete, preventing the premature-relay class.
+      //
+      // Failure to stamp is logged but non-fatal — the session-end callback
+      // is the backstop (treats session-end as delivery-equivalent).
+      try {
+        const stampResult = await stampLastDeliveryAt(
+          this.registryPath,
+          thread.id,
+          Date.now(),
+        );
+        if (!stampResult.ok) {
+          this.log.warn(
+            { threadId: thread.id, sessionName, reason: stampResult.reason },
+            "subagent lastDeliveryAt stamp failed (non-fatal — session-end backstop will fire)",
+          );
+        }
+      } catch (err) {
+        this.log.warn(
+          { threadId: thread.id, sessionName, error: (err as Error).message },
+          "subagent lastDeliveryAt stamp threw (non-fatal)",
         );
       }
     } catch (err) {
