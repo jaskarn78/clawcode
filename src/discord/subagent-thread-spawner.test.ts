@@ -194,6 +194,11 @@ describe("SubagentThreadSpawner", () => {
   });
 
   afterEach(async () => {
+    // Phase 999.36 sub-bug D — postInitialMessage now stamps lastDeliveryAt
+    // via fs I/O in the fire-and-forget `void` chain; settle before rm to
+    // avoid an ENOTEMPTY race when writeThreadRegistry's mkdir recreates
+    // the parent directory after rm starts.
+    await new Promise((r) => setTimeout(r, 50));
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -334,6 +339,11 @@ describe("SubagentThreadSpawner", () => {
         parentAgentName: "agent-a",
         threadName: "task-to-cleanup",
       });
+
+      // Phase 999.36 sub-bug D — settle the void postInitialMessage chain
+      // (which now writes lastDeliveryAt) BEFORE cleanup so the stamp's
+      // read-modify-write doesn't race cleanup's removeBinding write.
+      await new Promise((r) => setTimeout(r, 50));
 
       await spawner.cleanupSubagentThread(result.threadId);
 
@@ -1555,6 +1565,11 @@ describe("spawnInThread with delegateTo", () => {
   });
 
   afterEach(async () => {
+    // Phase 999.36 sub-bug D — postInitialMessage now stamps lastDeliveryAt
+    // via fs I/O in the fire-and-forget `void` chain; settle before rm to
+    // avoid an ENOTEMPTY race when writeThreadRegistry's mkdir recreates
+    // the parent directory after rm starts.
+    await new Promise((r) => setTimeout(r, 50));
     await rm(tmpDir, { recursive: true, force: true });
   });
 
