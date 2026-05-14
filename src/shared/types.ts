@@ -55,6 +55,23 @@ export type ResolvedAgentConfig = {
    */
   readonly autoCompactAt: number;
   /**
+   * Phase 125 Plan 02 — count of trailing turns the verbatim gate ALWAYS
+   * preserves during auto-compaction. Populated by loader.ts from
+   * `agent.preserveLastTurns ?? defaults.preserveLastTurns ?? 10`. Range
+   * 1..100 (zod-validated). Optional at the type level for back-compat
+   * with existing ResolvedAgentConfig test factories (consumers default
+   * to 10).
+   */
+  readonly preserveLastTurns?: number;
+  /**
+   * Phase 125 Plan 02 (SC-8) — per-agent verbatim regex patterns. The
+   * loader compiles each pattern string once via `new RegExp(p)`; invalid
+   * patterns reject at config-resolve time (loader throws). UNDEFINED
+   * when neither agent nor defaults provide entries — daemon treats this
+   * as the empty pattern set.
+   */
+  readonly preserveVerbatimPatterns?: readonly RegExp[];
+  /**
    * Phase 96 D-05 — per-agent fileAccess override. UNDEFINED when the agent
    * does not declare it (loader does not inherit defaults here — defaults
    * are merged by `resolveFileAccess(agent, cfg, defaults)` at IPC handler

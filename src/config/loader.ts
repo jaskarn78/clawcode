@@ -519,6 +519,11 @@ export function resolveAgentConfig(
     // .default(0.7), agent leaves undefined when omitted). Plan 125
     // consumes this to gate auto-compaction firing.
     autoCompactAt: resolveAutoCompactAt(agent, defaults),
+    // Phase 125 Plan 02 — verbatim-gate knobs. preserveLastTurns ALWAYS
+    // resolves (default 10); preserveVerbatimPatterns is undefined when
+    // neither side provides entries (back-compat — non-Finmentum agents).
+    preserveLastTurns: resolvePreserveLastTurns(agent, defaults),
+    preserveVerbatimPatterns: resolvePreserveVerbatimPatterns(agent, defaults),
     // Phase 96 D-05 — propagate per-agent fileAccess into ResolvedAgentConfig
     // so daemon IPC handler (probe-fs / list-fs-status) and downstream
     // consumers see the per-agent override. When the agent omits the field,
@@ -1163,6 +1168,43 @@ export function resolveAutoCompactAt(
     defaults?.["auto-compact-at"] ??
     0.7
   );
+}
+
+/**
+ * Phase 125 Plan 02 — resolve the per-agent verbatim-gate count. Cascades
+ * agent → defaults → 10 (Phase 125 BACKLOG-SOURCE Tier 1 default).
+ */
+export function resolvePreserveLastTurns(
+  agent: { preserveLastTurns?: number } | undefined,
+  defaults: { preserveLastTurns?: number } | undefined,
+): number {
+  return agent?.preserveLastTurns ?? defaults?.preserveLastTurns ?? 10;
+}
+
+/**
+ * Phase 125 Plan 02 (SC-8) — compile per-agent verbatim regex patterns once
+ * at config-resolve. Invalid regex throws (caller surfaces as a config-load
+ * error, NOT a silent at-runtime failure). The merge is per-agent-overrides-
+ * defaults (full replacement, not concatenation — matches the cascade
+ * convention used elsewhere in this loader).
+ */
+export function resolvePreserveVerbatimPatterns(
+  agent: { preserveVerbatimPatterns?: readonly string[] } | undefined,
+  defaults: { preserveVerbatimPatterns?: readonly string[] } | undefined,
+): readonly RegExp[] | undefined {
+  const raw = agent?.preserveVerbatimPatterns ?? defaults?.preserveVerbatimPatterns;
+  if (!raw || raw.length === 0) return undefined;
+  const compiled: RegExp[] = [];
+  for (const p of raw) {
+    try {
+      compiled.push(new RegExp(p));
+    } catch (err) {
+      throw new Error(
+        `preserveVerbatimPatterns: invalid regex ${JSON.stringify(p)}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return Object.freeze(compiled);
 }
 
 /**

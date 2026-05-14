@@ -1349,6 +1349,23 @@ export const agentSchema = z.object({
    */
   "auto-compact-at": z.number().min(0).max(1).optional(),
   /**
+   * Phase 125 Plan 02 — per-agent count of trailing conversation turns
+   * preserved VERBATIM during auto-compaction. Resolves to defaults
+   * (`preserveLastTurns`) when omitted; final fallback is 10. Range
+   * 1..100. Plan 02's `partitionForVerbatim` gate ALWAYS preserves these
+   * turns regardless of tier 4 drop rules.
+   */
+  preserveLastTurns: z.number().int().min(1).max(100).optional(),
+  /**
+   * Phase 125 Plan 02 (SC-8) — per-agent verbatim regex patterns. Any
+   * turn whose `content` matches ANY pattern bypasses tier 4 drop. The
+   * loader compiles each entry once at resolve time and rejects invalid
+   * regex at config-load. Default `[]` (back-compat — existing agents
+   * see no behavior change). Finmentum agents will populate the
+   * Finmentum-specific patterns (`\\bAUM\\b`, `\\$[0-9]`) via YAML.
+   */
+  preserveVerbatimPatterns: z.array(z.string().min(1)).optional(),
+  /**
    * Phase 999.25 — wake-order priority for boot-time auto-start.
    *
    * Lower numbers boot first. Agents without `wakeOrder` boot LAST in YAML
@@ -1945,6 +1962,12 @@ export const defaultsSchema = z.object({
   // matches the YAML surface; the resolved type exposes the camelCase
   // `autoCompactAt` field (see `loader.ts` resolver).
   "auto-compact-at": z.number().min(0).max(1).default(0.7),
+  // Phase 125 Plan 02 — fleet-wide defaults for the tier 1 verbatim gate.
+  // Optional (consumer-side fallback to 10 / []) for back-compat with
+  // existing DefaultsConfig test factories. Per-agent overrides cascade
+  // via `agentSchema.preserveLastTurns` / `agentSchema.preserveVerbatimPatterns`.
+  preserveLastTurns: z.number().int().min(1).max(100).optional(),
+  preserveVerbatimPatterns: z.array(z.string().min(1)).optional(),
   // Phase 115 D-08 + D-09 — embedding-v2 migration knobs. Default values
   // match the Phase 115 D-09 cost discipline: 5% CPU budget, 50-row
   // batch. These are knobs not constants; operator can dial both via
