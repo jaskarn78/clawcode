@@ -2087,12 +2087,19 @@ export async function startDaemon(
   // clockTicksPerSec }) without re-reading /proc/stat per call.
   let mcpBootTimeUnix: number | undefined;
   let mcpClockTicksPerSec: number | undefined;
+  // FIND-123-A — hoisted so the shutdown-scan reap (post-killAll) can run a
+  // synchronous orphan sweep against the same configured patterns/uid that
+  // the boot-scan + periodic reaper use. Without the shutdown-side sweep,
+  // `mcp-server-mysql` grandchildren reparent to PID 1 on `systemctl restart`
+  // and persist for up to one reaper-tick interval (≥60s, observed 9 min).
+  let mcpPatterns: RegExp | undefined;
+  let mcpUid: number | undefined;
   if (Object.keys(mcpServersConfig).length > 0) {
     try {
       mcpBootTimeUnix = await readBootTimeUnix();
       mcpClockTicksPerSec = readClockTicksPerSec();
-      const mcpPatterns = buildMcpCommandRegexes(mcpServersConfig);
-      const mcpUid = process.getuid?.() ?? -1;
+      mcpPatterns = buildMcpCommandRegexes(mcpServersConfig);
+      mcpUid = process.getuid?.() ?? -1;
       // Phase 999.15 TRACK-06 — late-bound reconcileAgent closure for
       // tracker.killAgentGroup. Pattern from Phase 100 follow-up
       // triggerDeliveryFn — closure captures the LIVE `mcpTracker` ref so
@@ -8124,6 +8131,36 @@ export async function startDaemon(
         mcpLog.error(
           { err: String(err) },
           "mcp tracker killAll failed during shutdown (non-fatal)",
+        );
+      }
+    }
+    // FIND-123-A — synchronous orphan sweep AFTER killAll. ClawCode does
+    // not own the `claude` subprocess spawn (the Claude Agent SDK does,
+    // non-detached) so the tracker's negative-pid kills in killAll silently
+    // ESRCH on MCP-wrapper PIDs that share the daemon's pgid. When claude
+    // exits, its `mcp-server-mysql` grandchildren reparent to PID 1 and
+    // wait up to one reaper interval (≥60s, observed 9 min) before the
+    // periodic sweep on the next daemon boot reaps them. Running reapOrphans
+    // here, at the exact moment we know the orphans have just appeared,
+    // closes the window. 2s grace is sufficient — these processes were
+    // alive seconds ago and SIGTERM-then-SIGKILL is the same path the
+    // periodic reaper already exercises.
+    if (mcpTracker && mcpPatterns !== undefined && mcpUid !== undefined
+        && mcpBootTimeUnix !== undefined && mcpClockTicksPerSec !== undefined) {
+      try {
+        await reapOrphans({
+          uid: mcpUid,
+          patterns: mcpPatterns,
+          clockTicksPerSec: mcpClockTicksPerSec,
+          bootTimeUnix: mcpBootTimeUnix,
+          reason: "shutdown-scan",
+          log: mcpLog,
+          graceMs: 2_000,
+        });
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "mcp shutdown-scan reap failed (non-fatal)",
         );
       }
     }

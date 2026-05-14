@@ -1,9 +1,14 @@
 /**
  * Phase 999.14 — orphan MCP server reaper.
  *
- * Two callsites share one scanner:
+ * Three callsites share one scanner:
  *   - MCP-03: 60s periodic sweep (startOrphanReaper)
  *   - MCP-05: one-shot at boot (reapOrphans with reason='boot-scan')
+ *   - FIND-123-A: one-shot at daemon shutdown after mcpTracker.killAll
+ *     (reapOrphans with reason='shutdown-scan'). ClawCode does not own the
+ *     `claude` subprocess spawn so the tracker's negative-pid kills cannot
+ *     reach `mcp-server-mysql` grandchildren; the shutdown sweep is the
+ *     deterministic backstop that closes the reparent-to-PID-1 window.
  *
  * Filter: ppid===1 AND uid===configuredUid AND cmdline matches union regex
  * AND age >= minAgeSeconds (default 5; prevents racing freshly-spawned MCPs
@@ -15,7 +20,7 @@
  *
  * Canonical log shape (pinned by tests + CONTEXT.md):
  *   { component: "mcp-reaper", action: "sigterm" | "sigkill", pid, cmdline,
- *     reason: "orphan-ppid-1" | "boot-scan", graceMs?, msg }
+ *     reason: "orphan-ppid-1" | "boot-scan" | "shutdown-scan", graceMs?, msg }
  */
 
 import type { Logger } from "pino";
@@ -27,7 +32,7 @@ import {
 } from "./proc-scan.js";
 
 /** Reaper trigger source — used as the canonical `reason` log field. */
-export type ReaperReason = "orphan-ppid-1" | "boot-scan";
+export type ReaperReason = "orphan-ppid-1" | "boot-scan" | "shutdown-scan";
 
 /** A single orphan candidate returned by scanForOrphanMcps. */
 export type OrphanCandidate = {
