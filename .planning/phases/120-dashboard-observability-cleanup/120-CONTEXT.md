@@ -35,7 +35,18 @@ Cells where the percentile is NULL (no data) render with `text-danger` styling �
 When an agent has zero spans in the window, the table renders a row of NULL cells instead of an explicit empty-state message. Pure UX hygiene.
 
 ### DASH-04 — Split-latency producer regression (Phase 115-08-class)
-`prep_latency_ms`, `tool_latency_ms`, `model_latency_ms` columns are NULL in production. Two writers exist for these — `persistent-session-handle.ts:iterateUntilResult` (canonical, production path) and `session-adapter.ts:iterateWithTracing` (test-only fixture path). Production silently switched to the test-only writer at some commit post-115-08; the columns went NULL because the test fixture never executes in production. **Silent-path-bifurcation pattern.** Fix: static-grep regression test that asserts the production call site is the canonical writer.
+[RECONCILED 2026-05-14] Original framing named `prep_latency_ms`,
+`tool_latency_ms`, `model_latency_ms` — those columns do not exist in
+`src/`. Real schema (`trace-store.ts:846`) has `tool_execution_ms`,
+`tool_roundtrip_ms`, `parallel_tool_call_count` (Phase 115-08 columns,
+written by `Turn.addToolExecutionMs` etc. from `persistent-session-handle.ts:iterateUntilResult`).
+The silent-path-bifurcation regression sentinel still applies and has
+shipped (Plan 03, commit `ba33aa9`): `session-adapter.ts:iterateWithTracing`
+is barred from production paths. A separate `addToolExecutionMs`-gating
+regression (139 post-deploy traces with tool spans but NULL `tool_execution_ms`,
+vs 93 populated) surfaced during reconciliation — deferred as architectural
+(see `120-DIAGNOSTIC.md` §"DASH-04 disambiguation"). Plan 03 ships the
+sentinel; the gating fix is out of Phase 120 scope.
 
 ### DASH-05 — `clawcode tool-latency-audit` CLI verification
 Phase 106 hotfix `fa72303` fixed an "Invalid Request" error. DASH-05 closes the loop: verify the CLI exits 0 with valid JSON against a non-empty trace window on clawdy.
@@ -57,7 +68,16 @@ Captured result lands in the phase verification artifact (`120-DIAGNOSTIC.md`) B
 Same component (`BenchmarksView.tsx` or sibling), same render-path, same machine cycle tests all three. Mirror the Phase 999.36 bundle pattern.
 
 ### D-03 — DASH-04 ships SEPARATELY with a static-grep regression test
-The static-grep test is the anti-pattern prevention mechanism per `feedback_silent_path_bifurcation`. It asserts that producer code references `persistent-session-handle.ts:iterateUntilResult` and that any reference to `session-adapter.ts:iterateWithTracing` outside of test files fails the test. This prevents a future commit from silently bifurcating again.
+[RECONCILED 2026-05-14] The static-grep test is the anti-pattern prevention
+mechanism per `feedback_silent_path_bifurcation`. It asserts that no
+production-path file references `session-adapter.ts:iterateWithTracing`
+(test fixture only). The pinned canonical producer is
+`persistent-session-handle.ts:iterateUntilResult` which writes the Phase
+115-08 columns `tool_execution_ms`, `tool_roundtrip_ms`,
+`parallel_tool_call_count` (NOT `prep_latency_ms` / `tool_latency_ms` /
+`model_latency_ms` — those names never existed in `src/`). The sentinel
+prevents a future commit from silently bifurcating; the canonical-name
+correctness is a separate concern owned by the deferred follow-up phase.
 
 ### D-04 — DASH-05 is verification-only, no new code
 Phase 106 hotfix already shipped. Phase 120 just captures the verification artifact: invoke the CLI on clawdy against a non-empty window, assert exit 0 + valid JSON, attach output to phase verification.

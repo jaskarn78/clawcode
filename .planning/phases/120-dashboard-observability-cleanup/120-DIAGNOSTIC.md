@@ -1,8 +1,20 @@
 # Phase 120 — Diagnostic SQL Results
 
-**Run:** 2026-05-14 ~03:56 UTC (immediately post-deploy of v2.9 build `4e96c24`)
+**Initial run:** 2026-05-14 ~03:56 UTC (post-deploy of v2.9 build `4e96c24`)
+**Reconciled:** 2026-05-14 (column-name framing corrected, disambiguation query added)
 **Source DBs:** Per-agent `traces.db` files under `/home/clawcode/.clawcode/agents/<agent>/traces.db`
-**Probes run:** admin-clawdy (slug-form DB) + Admin Clawdy (display-name-form DB)
+
+## TL;DR after reconciliation
+
+- **DASH-01:** non-reproducible from the data. Names well-formed; SQL strips
+  the `tool_call.` prefix correctly; React renders `{r.tool}`. Ship the
+  defensive `(unnamed)` fallback only.
+- **DASH-04:** the original framing (`prep_latency_ms` / `tool_latency_ms` /
+  `model_latency_ms`) is **wrong** — those columns do not exist anywhere in
+  `src/`. Real schema has `tool_execution_ms` / `tool_roundtrip_ms` /
+  `parallel_tool_call_count` (Phase 115-08 columns). Disambiguation shows a
+  real but **different** producer gap (see below) — deferred as architectural.
+- **DASH-02 / DASH-03:** confirmed real, frontend-only fixes.
 
 ## Findings
 
@@ -26,41 +38,96 @@ admin-clawdy traces.db (3761 rows total):
   - Distinct names <= 11: end_to_end, first_token, receive  (same pattern)
 ```
 
-**Conclusion:** Tool-name rendering issues in the BenchmarksView rollup table are NOT caused by the SQL guard. Every `tool_call.*` name in trace_spans is well-formed (no empty, no NULL, no truncated). The shortest tool_call name (`tool_call.Bash`) is 14 chars — already above the 11-char guard.
+**Followup SQL check (`perToolPercentiles` query path, `trace-store.ts:966`):**
+`SUBSTR(s.name, 11)` strips first 10 chars (`tool_call.` is exactly 10 chars
+including the dot). For `tool_call.Bash` this yields `Bash`. The query is
+correct. The frontend renders `{r.tool}` directly (`BenchmarksView.tsx:305`).
 
-**Root cause must be downstream of the database:**
-- Frontend rendering issue in `BenchmarksView.tsx` (most likely)
-- IPC string-binding marshaling
-- SQL JOIN dropping rows (group-by aggregation)
-- Display layer truncation
+**Verdict — DASH-01 is NON-REPRODUCIBLE.** No SQL bug, no IPC binding loss,
+no emitter blank-name. The reported symptom isn't visible in production data
+or in the production code path. Ship the defensive `(unnamed)` fallback
+(attributable label instead of silent blank if a future regression appears)
+and document non-reproduction. Don't fabricate a fix to satisfy the plan.
 
-Plan 120-02 (frontend bundle) should focus on the JOIN/aggregation path and the React render path. NOT on the SQL guard.
+### DASH-04 column-name framing was WRONG
 
-### DASH-04 split-latency producer regression — CONFIRMED catastrophically broken
+`grep -rn 'prep_latency\|tool_latency_ms\|model_latency' src/` → 0 matches.
+The columns named in the original DASH-04 framing do not exist anywhere in
+the codebase.
 
+The actual `traces` table columns (Phase 115-08, `trace-store.ts:846-848`)
+are:
+
+- `tool_execution_ms` — sum of per-tool `tool_call.<name>` durations
+- `tool_roundtrip_ms` — wall-clock from `tool_use` emit → next assistant msg
+- `parallel_tool_call_count` — MAX parallel batch size across the turn
+
+These are written by `Turn.addToolExecutionMs` / `addToolRoundtripMs` /
+`recordParallelToolCallCount` — invoked from
+`persistent-session-handle.ts:iterateUntilResult` (the canonical producer)
+and gated on actual tool calls firing.
+
+`end_to_end` span `metadata_json` is `"{}"` **by design** —
+`iterateUntilResult:394` opens it with `{}` and never calls `setMetadata`.
+Empty metadata on end_to_end spans is not a regression.
+
+### DASH-04 disambiguation — real but DIFFERENT regression
+
+Production query against `Admin Clawdy/traces.db` (post-2026-05-01):
+
+```sql
+SELECT COUNT(*) FROM traces t
+WHERE t.tool_execution_ms IS NULL
+  AND t.started_at > '2026-05-01'
+  AND EXISTS (SELECT 1 FROM trace_spans s
+              WHERE s.turn_id = t.id AND s.name LIKE 'tool_call.%');
+-- 139
+
+SELECT COUNT(*) FROM traces WHERE tool_execution_ms IS NOT NULL
+  AND started_at > '2026-05-01';
+-- 93
+
+SELECT started_at, tool_execution_ms, tool_roundtrip_ms, parallel_tool_call_count
+FROM traces WHERE tool_execution_ms IS NOT NULL ORDER BY started_at DESC LIMIT 3;
+-- 2026-05-14T03:56:24.420Z | 189295 | 47226 | 1
+-- 2026-05-14T03:54:37.659Z | 310702 |  47327 | 1
+-- 2026-05-14T00:04:48.155Z | 201499 |  38079 | 1
+
+SELECT started_at FROM traces ORDER BY started_at DESC LIMIT 1;
+-- 2026-05-14T12:48:32.863Z (NULL on all three split-latency cols)
 ```
-admin-clawdy:
-  - 507 end_to_end spans total
-  - 0 of them have any latency metadata in metadata_json
-  - Most recent: 2026-04-21T03:47:10Z (over 3 weeks old)
 
-Admin Clawdy:
-  - 348 end_to_end spans total
-  - 0 of them have any latency metadata in metadata_json
-  - Most recent: 2026-05-14T03:56:24Z (literally just now, post-deploy)
-  - Every metadata_json: "{}"
-```
+139 traces had `tool_call.*` spans but `tool_execution_ms` IS NULL. 93 traces
+populated the column correctly. The latest NULL trace is post-deploy
+(2026-05-14T12:48); latest non-NULL is pre-deploy (2026-05-14T03:56).
 
-**Conclusion:** The producer that should write `prep_latency_ms`, `tool_latency_ms`, `model_latency_ms` into `end_to_end` span metadata is NOT executing on production. Every end_to_end span has empty metadata. This is silent-path-bifurcation (Phase 115-08-class regression) — the canonical writer drifted; the test fixture writer is being used silently.
+**This is a real producer gap — but not the silent-path-bifurcation pattern**
+the original DASH-04 framing predicted. The canonical writer
+(`iterateUntilResult`) is on the production path (Plan 03 T-01 confirmed),
+the static-grep sentinel (Plan 03 T-02, commit `ba33aa9`) pins it. Yet some
+post-deploy turns with tool spans skip the `addToolExecutionMs` call.
 
-Plan 120-03 (DASH-04 producer pin + static-grep regression) is HIGH-PRIORITY and the root cause is exactly as CONTEXT D-03 predicted.
+**Disposition — DEFERRED.** Plan 120 closes with the sentinel + frontend
+fixes; the addToolExecutionMs gating regression is architectural (Rule 4 —
+new producer-side fix-up requires investigation of every callsite,
+potentially new code paths, and is not "dashboard observability cleanup").
+Tracked under `deferred-items.md` for a follow-up phase.
 
-## Green-light verdicts for Phase 120 plans
+## Green-light verdicts for Phase 120 plans (reconciled)
 
-- **Plan 120-02 (DASH-01/02/03 frontend bundle):** GREEN — but T-01 (DASH-01) should target the frontend rendering / IPC marshaling path, NOT the SQL guard. The guard is not the bug.
-- **Plan 120-03 (DASH-04 producer pin):** GREEN — high priority. Producer is silently dead. The pin will restore split-latency telemetry across all agents.
-- **Plan 120-04 (DASH-05 CLI verification):** GREEN — independent of the above.
+- **Plan 120-02 (DASH-01/02/03 frontend bundle):**
+  - DASH-01: ship the defensive `(unnamed)` fallback only — no SQL/IPC fix
+    needed (non-repro).
+  - DASH-02: ship `percentileCell` utility + static-grep sentinel.
+  - DASH-03: change empty-state string to the literal
+    `"No tool spans recorded in window"` per CONTEXT D-06.
+- **Plan 120-03 (DASH-04 producer pin):** COMPLETE (commit `ba33aa9`,
+  `83837cf`). T-03 smoke result is the disambiguation query above.
+- **Plan 120-04 (DASH-05 CLI verification):** GREEN — independent.
 
 ## Verification artifact
 
-Captured by main session 2026-05-14 03:56 UTC. Probe SQL ran read-only over SSH against `/home/clawcode/.clawcode/agents/{admin-clawdy,Admin Clawdy}/traces.db`. No writes, no daemon restart, no side effects.
+Captured by main session 2026-05-14 03:56 UTC + reconciliation pass
+2026-05-14. Probe SQL ran read-only over SSH against
+`/home/clawcode/.clawcode/agents/{admin-clawdy,Admin Clawdy}/traces.db`.
+No writes, no daemon restart, no side effects.
