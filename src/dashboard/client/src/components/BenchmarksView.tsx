@@ -869,6 +869,154 @@ function MemorySection(props: {
 // Page shell
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase 119 D-05 — No-webhook fallbacks tile.
+//
+// Reads `noWebhookFallbacksTotal` from /api/fleet-stats and renders a
+// 15-minute rolling delta. The counter itself is monotonic since daemon
+// start; the tile tracks the operator-visible "fallbacks in the last 15
+// minutes" window by snapshotting the first poll inside the window and
+// subtracting it from the latest.
+//
+// SLO-breach styling (`text-danger`) renders when delta > 0 — operators
+// see fallbacks as a visible alarm rather than silently-absorbed signal.
+// Empty state ("no fallbacks") renders explicitly when the field is
+// present but zero, so a stuck `useFleetStats` query is visibly distinct
+// from a quiet 15-minute window.
+// ---------------------------------------------------------------------------
+
+type FleetStatsPayload = {
+  readonly noWebhookFallbacksTotal?: Readonly<Record<string, number>>
+}
+
+const FALLBACK_WINDOW_MS = 15 * 60 * 1000
+
+function sumFallbacks(map: Readonly<Record<string, number>> | undefined): number {
+  if (!map) return 0
+  let total = 0
+  for (const v of Object.values(map)) total += v
+  return total
+}
+
+function NoWebhookFallbacksTile(): JSX.Element {
+  const fleetQ = useFleetStats()
+  const fleet = fleetQ.data as FleetStatsPayload | undefined
+  const counter = fleet?.noWebhookFallbacksTotal
+  const currentTotal = sumFallbacks(counter)
+
+  // Roll the 15-minute window client-side. The first poll inside an active
+  // window seeds `windowStartValue`; subsequent polls compute the delta
+  // against that seed. Once the window expires the seed re-anchors to the
+  // current value, so a fallback burst from 24h ago doesn't ghost-trigger
+  // the SLO-breach styling.
+  const windowRef = useRef<{ seedValue: number; seedAt: number } | null>(null)
+  const [delta, setDelta] = useState(0)
+
+  useEffect(() => {
+    if (counter === undefined) return
+    const now = Date.now()
+    const seed = windowRef.current
+    if (seed === null || now - seed.seedAt >= FALLBACK_WINDOW_MS) {
+      windowRef.current = { seedValue: currentTotal, seedAt: now }
+      setDelta(0)
+      return
+    }
+    setDelta(Math.max(0, currentTotal - seed.seedValue))
+  }, [counter, currentTotal])
+
+  // Per-pair breakdown for the operator's hover context. Sorted by count
+  // descending so the noisiest (agent, channel) pair surfaces first.
+  const pairs = useMemo(() => {
+    if (!counter) return [] as ReadonlyArray<readonly [string, number]>
+    return Object.entries(counter)
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1])
+  }, [counter])
+
+  const isBreach = delta > 0
+  const valueClass = isBreach
+    ? 'text-danger data text-2xl font-display font-bold'
+    : 'text-fg-3 data text-2xl font-display font-bold'
+
+  return (
+    <Card
+      className="bg-bg-elevated border-bg-s3 text-fg-1"
+      data-testid="benchmarks-no-webhook-fallbacks"
+    >
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h2 className="font-display text-base font-bold">
+              No-webhook fallbacks (15min)
+            </h2>
+            <p className="text-xs text-fg-3 font-sans mt-0.5">
+              <code className="data">no_webhook_fallbacks_total</code> rolling
+              delta over a 15-minute window. Increments on every bot-direct
+              fallback OR inbox-only return path.{' '}
+              <span className="text-danger">Non-zero = SLO breach</span>.
+            </p>
+          </div>
+          <Badge
+            variant="outline"
+            className={
+              isBreach
+                ? 'font-mono text-[10px] border-danger text-danger'
+                : 'font-mono text-[10px]'
+            }
+          >
+            since deploy: {currentTotal}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {fleetQ.isLoading && (
+          <p className="text-fg-2 font-sans text-sm">Loading…</p>
+        )}
+        {fleetQ.isError && (
+          <p className="text-danger font-sans text-sm">
+            Failed to load fleet stats — daemon unreachable.
+          </p>
+        )}
+        {!fleetQ.isLoading && !fleetQ.isError && counter !== undefined && (
+          <div className="space-y-2">
+            <div>
+              <span className={valueClass}>{delta}</span>
+              <span className="text-fg-3 font-sans text-sm ml-2">
+                fallbacks in last 15min
+              </span>
+            </div>
+            {pairs.length === 0 && (
+              <p className="text-fg-3 font-sans text-xs">
+                No fallbacks recorded — webhook delivery path healthy.
+              </p>
+            )}
+            {pairs.length > 0 && (
+              <ul className="flex flex-wrap gap-2 mt-2">
+                {pairs.map(([key, value]) => (
+                  <li key={key}>
+                    <Badge
+                      variant="outline"
+                      className="font-mono text-[11px] border-bg-s3 text-fg-2"
+                    >
+                      <span className="text-fg-1 mr-1">{key}</span>
+                      <span className="text-fg-3">{value}×</span>
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {!fleetQ.isLoading && !fleetQ.isError && counter === undefined && (
+          <p className="text-fg-3 font-sans text-xs">
+            Counter not yet exposed by daemon (pre-Phase-119 build).
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function BenchmarksView(): JSX.Element {
   const agentsQ = useAgents()
   const activityQ = useFleetActivitySummary()
@@ -931,6 +1079,11 @@ export function BenchmarksView(): JSX.Element {
           </span>
         </div>
       </div>
+
+      {/* Phase 119 D-05 — no-webhook fallbacks tile. Surfaced near the top
+          alongside the per-agent tool latency rollup so an SLO breach is
+          visible on the operator's first scan of the page. */}
+      <NoWebhookFallbacksTile />
 
       <ToolRollupSection
         agent={effectiveAgent}
