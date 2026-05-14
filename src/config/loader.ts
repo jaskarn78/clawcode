@@ -300,6 +300,19 @@ export function resolveAgentConfig(
       env: {},
       // Phase 85 TOOL-01 — clawcode MCP is mandatory (default false).
       optional: false,
+      // Phase 999.54 (D-03a) — preload the clawcode MCP server's tools into
+      // the turn-1 prompt instead of deferring them behind ToolSearch.
+      // spawn_subagent_thread, post_to_agent, ask_advisor, memory_lookup are
+      // hot-path tools used by EVERY agent in the fleet; deferring them costs
+      // a full ToolSearch round-trip per first-use-per-session (~one turn of
+      // latency). The clawcode server is a local stdio spawn (sub-second), so
+      // the SDK's 5s connect-blocking side-effect (sdk.d.ts:1067-1076) is
+      // negligible. Operator-override semantics preserved: an agent yaml that
+      // declares `clawcode` explicitly in its `mcpServers:` block populates
+      // resolvedMcpMap BEFORE this `has("clawcode")` gate, skipping this
+      // auto-inject — so per-agent `alwaysLoad: false` (inline-object form)
+      // wins. NON-RELOADABLE per D-04: change takes effect on agent restart.
+      alwaysLoad: true,
     });
   }
 
@@ -476,12 +489,37 @@ export function resolveAgentConfig(
         // Both fields optional; undefined when YAML omitted them.
         ...(s.description ? { description: s.description } : {}),
         ...(s.accessPattern ? { accessPattern: s.accessPattern } : {}),
+        // Phase 999.54 (D-01a) — propagate yaml-declared alwaysLoad from
+        // mcpServerSchema (Plan 01) into ResolvedAgentConfig.mcpServers[].
+        // Spread-conditional preserves byte-stable deep-equality for the
+        // existing fleet (RESEARCH.md Pitfall 3). `=== true` matches the
+        // `s.optional === true` strict-boolean idiom one line above (line
+        // 486) — avoids accidental coercion of stringly-typed values.
+        ...(s.alwaysLoad === true ? { alwaysLoad: true as const } : {}),
       });
     } catch (err) {
       if (!onMcpResolutionError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       onMcpResolutionError({ agent: agent.name, server: s.name, message });
     }
+  }
+
+  // Phase 999.54 (D-05a) — emit one structured log per agent listing
+  // servers marked alwaysLoad: true. Operator grep target on clawdy
+  // systemd journal: `journalctl -u clawcode | grep phase999.54-resolver`.
+  // Single line per agent at resolution time; quiet when no servers
+  // are marked (empty list → no log line, keeps fleet logs clean).
+  const alwaysLoadServers = mcpServers
+    .filter((s) => s.alwaysLoad === true)
+    .map((s) => s.name);
+  if (alwaysLoadServers.length > 0) {
+    console.info(
+      "phase999.54-resolver",
+      JSON.stringify({
+        agent: agent.name,
+        alwaysLoadServers,
+      }),
+    );
   }
 
   const resolvedWorkspace =
