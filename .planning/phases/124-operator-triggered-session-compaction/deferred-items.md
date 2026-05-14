@@ -37,3 +37,20 @@ git stash && npx vitest run src/config/__tests__/schema.test.ts 2>&1 | grep "PR1
 **Out-of-scope rationale:** None of these failures are caused by the Plan 124-02 changes (schema field, loader resolver, fixture patches, yaml split, regression test). Per executor rules (`SCOPE BOUNDARY`): log here, do not fix.
 
 **Suggested follow-up:** Operator triages the master-flaky list separately. Phase 124-03 (Discord `/compact` admin command) will need a clean `src/discord/__tests__/slash-commands.test.ts` baseline before it can land.
+
+## DEFERRED-124-B — Pre-existing tsc error in compact-session-integration.test.ts
+
+**Discovered:** Plan 124-03 execution (2026-05-14)
+
+**File:** `src/manager/__tests__/compact-session-integration.test.ts:121`
+
+**Symptom:** `error TS2740: Type '{ embed: (text: string) => Promise<Float32Array<ArrayBufferLike>>; }' is missing the following properties from type 'EmbeddingService': pipeline, warmPromise, warmup, warmupV2, and 6 more.`
+
+**Reproduce on master (independent of Plan 124-03 changes):**
+```
+git stash --include-untracked && npx tsc --noEmit 2>&1 | grep compact-session-integration ; git stash pop
+```
+
+**Out-of-scope rationale:** Pre-existing tsc error on the 124-01 integration test, not caused by Plan 124-03's slash-command addition (which only touches `src/discord/`). Per executor `SCOPE BOUNDARY`: log here, do not fix. The test still runs (`vitest` is JavaScript-eval'd; `tsc --noEmit` strict-mode discrepancy doesn't block runtime).
+
+**Suggested follow-up:** Either widen the `EmbeddingService` mock fixture to include `pipeline`/`warmPromise`/etc., or change the mock cast strategy in 124-01's test. Owner: whichever phase next touches that test file (likely Phase 125 when the tiered extractor lands).

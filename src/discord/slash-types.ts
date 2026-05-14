@@ -712,4 +712,41 @@ export const CONTROL_COMMANDS: readonly SlashCommandDef[] = [
     ],
     defaultMemberPermissions: "0",
   },
+  // Phase 124 Plan 03 — operator-facing session compaction trigger. Admin-only
+  // ephemeral. Mirrors the Phase 95 /clawcode-dream precedent shape (control:
+  // true, ipcMethod routes through daemon dispatch, defaultMemberPermissions:
+  // "0" hides the command from non-admin Discord users at the API surface).
+  //
+  // Naming note (Rule 3): operator-requested `/compact` and the obvious
+  // alternative `/clawcode-compact` are BOTH reserved.
+  //   - `compact` is in native-cc-commands.ts ALLOWED_NATIVES (line 68) as a
+  //     prompt-channel passthrough to the SDK's /compact.
+  //   - `clawcode-compact` is what the native-CC registration loop produces by
+  //     prefixing the SDK name (`clawcode-${cmd.name}` at
+  //     native-cc-commands.ts:177); mergeAndDedupe is native-wins
+  //     (slash-commands.ts:1050) so any DEFAULT entry with that name is
+  //     silently displaced at register time.
+  //   - `/clawcode-session-compact` is safe and gives Discord/CLI parity with
+  //     the operator-facing `clawcode session compact <agent>` CLI primitive
+  //     shipped in Plan 124-02.
+  //
+  // Wire contract — handler at slash-commands.ts handleCompactCommand routes
+  // `sendIpcRequest(SOCKET_PATH, "compact-session", { agent })` to the daemon
+  // dispatch case at daemon.ts:10320 (Plan 124-01).
+  {
+    name: "clawcode-session-compact",
+    description: "Compact an agent's session (admin-only; mirrors `clawcode session compact <agent>` CLI)",
+    claudeCommand: "",
+    control: true,
+    ipcMethod: "compact-session",
+    options: [
+      {
+        name: "agent",
+        type: 3, // STRING
+        description: "Agent name to compact",
+        required: true,
+      },
+    ],
+    defaultMemberPermissions: "0",
+  },
 ] as const;
