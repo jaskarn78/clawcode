@@ -279,3 +279,69 @@ describe("WebhookManager.send — markdown table wrapping (regression for 100-fu
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
+
+// Phase 122 — sendAsAgent embed description must be table-wrapped at the
+// chokepoint. Uses a stand-in object that mimics EmbedBuilder's data slot
+// and setDescription mutator so we can assert the wrap without depending
+// on discord.js's real EmbedBuilder.
+describe("WebhookManager.sendAsAgent — embed description wrap (Phase 122)", () => {
+  beforeEach(() => {
+    sendMock.mockReset();
+    sendMock.mockResolvedValue({ id: "msg-id" });
+    destroyMock.mockClear();
+  });
+
+  function makeEmbedWithDescription(initial: string) {
+    const state: { description: string } = { description: initial };
+    const builder = {
+      data: state,
+      setDescription(next: string) {
+        state.description = next;
+        return this;
+      },
+    };
+    return builder as unknown as import("discord.js").EmbedBuilder;
+  }
+
+  it("WHM-WRAP-EMBED-1: embed.description containing a markdown table is wrapped before send", async () => {
+    const manager = makeManager();
+    const table = [
+      "| Plan | Limit |",
+      "| ---- | ----- |",
+      "| SIMPLE IRA | $16,500 |",
+      "| Solo 401(k) | $23,500 |",
+    ].join("\n");
+    const embed = makeEmbedWithDescription(table);
+
+    await manager.sendAsAgent("test-agent", "Sender", undefined, embed);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const payload = sendMock.mock.calls[0][0] as { embeds: unknown[] };
+    const dispatchedEmbed = payload.embeds[0] as { data: { description: string } };
+    expect(dispatchedEmbed.data.description).toContain("```text");
+    expect(dispatchedEmbed.data.description).toContain("| Plan | Limit |");
+  });
+
+  it("WHM-WRAP-EMBED-2: empty description is left alone (no setDescription call needed)", async () => {
+    const manager = makeManager();
+    const embed = makeEmbedWithDescription("");
+
+    await manager.sendAsAgent("test-agent", "Sender", undefined, embed);
+
+    const payload = sendMock.mock.calls[0][0] as { embeds: unknown[] };
+    const dispatchedEmbed = payload.embeds[0] as { data: { description: string } };
+    expect(dispatchedEmbed.data.description).toBe("");
+  });
+
+  it("WHM-WRAP-EMBED-3: pure-prose description passes through unchanged (idempotent)", async () => {
+    const manager = makeManager();
+    const prose = "Hello — no tables here. Just words.";
+    const embed = makeEmbedWithDescription(prose);
+
+    await manager.sendAsAgent("test-agent", "Sender", undefined, embed);
+
+    const payload = sendMock.mock.calls[0][0] as { embeds: unknown[] };
+    const dispatchedEmbed = payload.embeds[0] as { data: { description: string } };
+    expect(dispatchedEmbed.data.description).toBe(prose);
+  });
+});

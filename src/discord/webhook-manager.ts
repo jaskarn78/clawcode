@@ -183,6 +183,16 @@ export class WebhookManager {
     embed: EmbedBuilder,
   ): Promise<string> {
     const client = this.getOrCreateClient(targetAgent, webhookUrl);
+    // Phase 122 single-chokepoint wrap for embed bodies. Mutates the embed
+    // in place via setDescription so the wrap rides on the same EmbedBuilder
+    // the caller (or reprovision retry) hands us. Idempotent because
+    // wrapMarkdownTablesInCodeFence is pure + idempotent. embed.data is
+    // optional-chained because test doubles can hand us a minimal toJSON
+    // shape; real EmbedBuilder always has .data.
+    const description = embed.data?.description;
+    if (typeof description === "string" && description.length > 0) {
+      embed.setDescription(wrapMarkdownTablesInCodeFence(description));
+    }
     const result = await client.send({
       embeds: [embed],
       username: senderDisplayName,
