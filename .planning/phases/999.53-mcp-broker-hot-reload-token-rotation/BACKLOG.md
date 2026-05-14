@@ -74,3 +74,49 @@ When `agents.*.mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN` changes via C
 ### Reporter
 
 Jas, 2026-05-14 (surfaced after the Finmentum-Service token rotation forced a daemon restart even though only 5 of 14 agents were affected).
+
+---
+
+## Architectural blocker — Plan 94-08 / config-mutator infra (2026-05-14 evening, mid-investigation)
+
+Found while sizing the implementation: the SDK seam this backlog assumes (`broker.rotateAgentToken` is the whole story) is incomplete. The chain of primitives needed is:
+
+```
+ConfigWatcher diff for OP_SERVICE_ACCOUNT_TOKEN
+  → SecretsResolver re-resolves op:// (works today)
+  → tokenHashToRawToken map needs new hash → rawToken (not updated today)
+  → daemon needs to push new env into the live MCP child (NO API EXISTS)
+  → MCP child re-reads env at next request, sends new tokenHash to broker
+  → broker rebinds via existing Phase 999.26 logic at broker.ts:209-245 (works today)
+```
+
+The broken middle link is daemon→shim env mutation. Today the `writeEnvForServer` recovery primitive at `src/heartbeat/checks/mcp-reconnect.ts:193-202` is a **logged-warn stub**:
+
+```typescript
+writeEnvForServer: async (serverName, env) => {
+  // Heartbeat-edge stub — the SessionManager mutator for live MCP
+  // server env doesn't exist yet (Plan 94-08 / config-mutator land).
+  log.warn(..., "writeEnvForServer: live env mutation not yet wired — restart agent to apply");
+},
+```
+
+Phase 94 Plan 03 Summary (`.planning/phases/94-tool-reliability-self-awareness/94-03-SUMMARY.md:145, 169, 180`) explicitly documents this:
+
+> **killSubprocess + writeEnvForServer + adminAlert as logged-warn stubs.** Plan 94-03 introduces the recovery PRIMITIVE; the SDK kill API doesn't exist yet (waiting for SDK update / Plan 94-08), the live env mutator doesn't exist (config-mutator infra is followup) [...] Logged-warn keeps the recovery ledger captures every event today; the daemon-edge wiring will replace each stub independently. The handler shapes are correct — only the production wiring lifts later.
+
+**Translation:** 999.53 cannot land in usable form until Plan 94-08 (or the equivalent config-mutator) lifts the `writeEnvForServer` stub. The broker side is ready (Phase 999.26 already shipped rebind). The MCP-shim respawn-with-new-env side is the actual missing piece.
+
+### What WOULD ship today if attempted
+
+- Update `tokenHashToRawToken` map on hot-reload (so when the shim eventually does reconnect with the new hash, the broker has the rawToken to spawn the new pool).
+- Flip the daemon.ts:7741 error to info on the new code path.
+
+That's it. The shim never reconnects on its own without `writeEnvForServer` actually mutating env, so the operator-visible behavior doesn't change. Defer this scaffolding until Plan 94-08 lifts the stub.
+
+### New dependency
+
+- **Plan 94-08 (future / SDK update + config-mutator infra)** — must land FIRST. When it does, 999.53 collapses to a single ConfigWatcher hook that invokes the now-real `writeEnvForServer` for each affected agent's 1password MCP server with the resolved new env. Estimated effort post-94-08: 2-3 hr.
+
+### Status
+
+**Deferred** pending Plan 94-08. Architectural understanding captured here so the next attempt doesn't re-discover the blocker.
