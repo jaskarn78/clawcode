@@ -450,6 +450,16 @@ export const IPC_METHODS = [
   // Subagents (-sub-) and ephemeral threads (-thread-) are filtered out
   // server-side — they're not tile-rendered on the main dashboard.
   "fleet-activity-summary",
+  // Phase 124 Plan 01 — operator-triggered session compaction (`clawcode session compact <agent>`
+  // CLI + /clawcode-session-compact Discord admin command). Handler at
+  // src/manager/daemon-compact-session-ipc.ts → handleCompactSession; dispatched
+  // from daemon.ts case "compact-session". Hybrid flow: compactForAgent() extracts
+  // facts into memory.db + forkSession() writes new JSONL artifact. Live hot-swap
+  // deferred (closure-captured sessionId). Missing this allowlist entry caused
+  // post-deploy "Invalid Request" — exact silent-path-bifurcation manifestation
+  // of the Phase 106 / Phase 999.15 / Phase 115-08 class. Lesson reinforced:
+  // every new IPC verb requires both daemon dispatch case AND protocol allowlist.
+  "compact-session",
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];

@@ -236,6 +236,8 @@ describe("IPC_METHODS", () => {
       // Per-agent turn counts (24h + 7d) + last-turn timestamp so the
       // AgentTileGrid renders most-used agents first.
       "fleet-activity-summary",
+      // Phase 124 Plan 01 — operator-triggered session compaction
+      "compact-session",
     ]);
   });
 });
