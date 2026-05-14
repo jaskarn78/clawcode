@@ -7238,7 +7238,38 @@ export async function startDaemon(
         manualIdentities: manualWebhookIdentities,
         log,
       });
-      webhookManager = new WebhookManager({ identities: allWebhookIdentities, log });
+      // Phase 119 A2A-02 — reprovisioner closure for the 401/404 recovery
+      // path in WebhookManager.sendAsAgent. Bounded to the resolved-agent
+      // snapshot at boot — runtime config reloads do NOT update this closure
+      // (a daemon restart already covers the YAML-change path). Returns
+      // undefined when the agent has no channel binding or provisioning
+      // throws — caller surfaces the original 401/404.
+      const bridgeForReprovision = discordBridge;
+      const reprovisionWebhook = async (agentName: string) => {
+        const agentCfg = resolvedAgents.find((a) => a.name === agentName);
+        if (!agentCfg?.webhook?.displayName) return undefined;
+        const channelId = agentCfg.channels[0];
+        if (!channelId) return undefined;
+        const status = await verifyAgentWebhookIdentity({
+          client: bridgeForReprovision.discordClient,
+          agentName,
+          channelId,
+          displayName: agentCfg.webhook.displayName,
+          avatarUrl: agentCfg.webhook.avatarUrl,
+          log,
+        });
+        if (status.status === "missing") return undefined;
+        return {
+          displayName: status.displayName,
+          avatarUrl: agentCfg.webhook.avatarUrl,
+          webhookUrl: status.webhookUrl,
+        };
+      };
+      webhookManager = new WebhookManager({
+        identities: allWebhookIdentities,
+        log,
+        reprovisionWebhook,
+      });
       discordBridge.setWebhookManager(webhookManager);
       log.info(
         { total: allWebhookIdentities.size, manual: manualWebhookIdentities.size, autoProvisioned: allWebhookIdentities.size - manualWebhookIdentities.size },
@@ -8122,6 +8153,82 @@ export async function startDaemon(
     } catch (err) {
       log.error({ error: (err as Error).message }, "failed to auto-start agents");
     }
+    // Phase 119 A2A-01 sentinel — D-02. Synthetic self-probe via the post-
+    // to-agent handler proves the new bot-direct fallback wiring is reachable
+    // on the production path (feedback_silent_path_bifurcation prevention).
+    // Skip under vitest so the unit suite never fires a synthetic IPC.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") return;
+    try {
+      const running = manager.getRunningAgents();
+      const probeAgent = sortedAutoStartAgents.find((a) =>
+        running.includes(a.name),
+      )?.name;
+      if (!probeAgent) {
+        log.warn(
+          { sentinel: "A2A-01" },
+          "[A2A-01-sentinel] FAIL — no running agent available to probe",
+        );
+        return;
+      }
+      const { handlePostToAgentIpc } = await import(
+        "./daemon-post-to-agent-ipc.js"
+      );
+      const sentinelResult = await handlePostToAgentIpc(
+        { from: probeAgent, to: probeAgent, message: "__A2A-01-sentinel__" },
+        {
+          runningAgents: manager.getRunningAgents(),
+          configs: resolvedAgents,
+          agentChannels: routingTableRef.current.agentToChannels,
+          webhookManager,
+          writeInbox: async (p) => {
+            const targetConfig = resolvedAgents.find((c) => c.name === p.to);
+            if (!targetConfig) {
+              throw new ManagerError(`Target agent '${p.to}' not found`);
+            }
+            const inboxDir = join(targetConfig.memoryPath, "inbox");
+            const inboxMsg = createMessage(p.from, p.to, p.content, "normal");
+            await writeMessage(inboxDir, inboxMsg);
+            return { messageId: inboxMsg.id };
+          },
+          log: {
+            info: (...args: unknown[]) => log.info(...(args as [object, string])),
+            warn: (...args: unknown[]) => log.warn(...(args as [object, string])),
+            error: (...args: unknown[]) => log.error(...(args as [object, string])),
+          },
+          botDirectSender: {
+            sendText: async (channelId: string, text: string) => {
+              const sender = botDirectSenderRef.current;
+              if (!sender) return;
+              await sender.sendText(channelId, text);
+            },
+          },
+        },
+      );
+      if (sentinelResult.delivered === true) {
+        log.info(
+          {
+            sentinel: "A2A-01",
+            probeAgent,
+            messageId: sentinelResult.messageId,
+          },
+          "[A2A-01-sentinel] OK",
+        );
+      } else {
+        log.warn(
+          {
+            sentinel: "A2A-01",
+            probeAgent,
+            result: sentinelResult,
+          },
+          "[A2A-01-sentinel] FAIL",
+        );
+      }
+    } catch (err) {
+      log.warn(
+        { sentinel: "A2A-01", error: (err as Error).message },
+        "[A2A-01-sentinel] FAIL",
+      );
+    }
   })();
 
   // TaskManager owns no external resources (inflight timers .unref()'d,
@@ -8515,6 +8622,17 @@ async function routeMethod(
             info: (...args: unknown[]) => console.info(...args),
             warn: (...args: unknown[]) => console.warn(...args),
             error: (...args: unknown[]) => console.error(...args),
+          },
+          // Phase 119 A2A-01 — bot-direct fallback for the no-webhook path.
+          // Late-bound ref read so pre-bridge boot windows silently skip the
+          // bot-direct rung without throwing (mirrors the ask-agent wiring
+          // shape above at this same case-block).
+          botDirectSender: {
+            sendText: async (channelId: string, text: string) => {
+              const sender = botDirectSenderRef.current;
+              if (!sender) return;
+              await sender.sendText(channelId, text);
+            },
           },
         },
       );
