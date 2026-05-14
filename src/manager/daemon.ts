@@ -3429,6 +3429,64 @@ export async function startDaemon(
       );
     }
   });
+  // Phase 125 Plan 01 — wire the active-state builder/writer into the
+  // heartbeat tick. Closure pulls last-N operator messages + assistant
+  // turns from the per-agent ConversationStore, builds the block via the
+  // pure builder, persists YAML to ~/.clawcode/agents/<agent>/state/, and
+  // returns the rendered header for the runner's lastProbeText cache.
+  // Sentinel `[125-01-active-state]` is logged once per agent per process
+  // so journalctl -g '\[125-01-active-state\]' proves the wiring runs.
+  const activeStateSentinelFired = new Set<string>();
+  const activeStateBaseDir = join(homedir(), ".clawcode", "agents");
+  heartbeatRunner.setActiveStateProvider(async (agent: string) => {
+    try {
+      const { buildActiveStateBlock } = await import(
+        "./active-state/builder.js"
+      );
+      const {
+        writeActiveStateYaml,
+        renderActiveStateForPrompt,
+      } = await import("./active-state/yaml-writer.js");
+      const fsPromises = await import("node:fs/promises");
+      const sid = manager.getActiveConversationSessionId(agent);
+      const store = manager.getConversationStore(agent);
+      const turns =
+        sid && store
+          ? store
+              .getTurnsForSession(sid)
+              .filter((t) => t.role !== "system")
+          : [];
+      const operatorMsgs = turns
+        .filter((t) => t.role === "user")
+        .slice(-5)
+        .map((t) => t.content);
+      const block = buildActiveStateBlock({
+        recentOperatorMessages: operatorMsgs,
+        recentAgentTurns: turns,
+        agentName: agent,
+        clock: () => new Date(),
+      });
+      await writeActiveStateYaml(agent, block, {
+        baseDir: activeStateBaseDir,
+        fs: fsPromises,
+        clock: () => new Date(),
+      });
+      if (!activeStateSentinelFired.has(agent)) {
+        activeStateSentinelFired.add(agent);
+        log.info(
+          { agent },
+          "[125-01-active-state] active-state header dispatched for first tick",
+        );
+      }
+      return renderActiveStateForPrompt(block);
+    } catch (err) {
+      log.warn(
+        { agent, error: (err as Error).message },
+        "[125-01-active-state] builder/writer failed",
+      );
+      return null;
+    }
+  });
   heartbeatRunner.start();
   log.info({ checks: "discovered", interval: heartbeatConfig.intervalSeconds }, "heartbeat started");
 

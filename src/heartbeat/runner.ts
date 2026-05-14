@@ -93,6 +93,18 @@ export class HeartbeatRunner {
   // `heartbeat-status` IPC surfaces, so manual + auto paths share one
   // cooldown view.
   private getLastCompactionAt: ((agent: string) => string | null) | undefined;
+  // Phase 125 Plan 01 — active-state header provider. The daemon wires a
+  // closure that builds the per-agent ActiveStateBlock, persists it to
+  // ~/.clawcode/agents/<agent>/state/active-state.yaml, and returns the
+  // rendered text. Runner calls this once per tick per agent BEFORE
+  // executing checks; the rendered string is stashed in `lastProbeText`
+  // so future probe-text dispatch (deferred to a later phase) can prepend
+  // it. Errors are swallowed at the call site (warn-logged) so a builder
+  // failure never blocks the tick.
+  private activeStateProvider:
+    | ((agent: string) => Promise<string | null>)
+    | undefined;
+  private readonly lastProbeText: Map<string, string> = new Map();
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -190,6 +202,26 @@ export class HeartbeatRunner {
   }
 
   /**
+   * Phase 125 Plan 01 — wire the active-state builder/writer closure.
+   * Mirrors setCompactSessionTrigger pattern. No-op (back-compat) when
+   * unset, so legacy boot paths and tests keep working.
+   */
+  setActiveStateProvider(
+    fn: (agent: string) => Promise<string | null>,
+  ): void {
+    this.activeStateProvider = fn;
+  }
+
+  /**
+   * Phase 125 Plan 01 — accessor for tests + future probe-text dispatch
+   * (deferred to a later phase). Returns the latest rendered active-state
+   * header for `agent`, or undefined if no provider has run for them yet.
+   */
+  getLastProbeText(agentName: string): string | undefined {
+    return this.lastProbeText.get(agentName);
+  }
+
+  /**
    * Start the heartbeat interval timer.
    */
   start(): void {
@@ -238,6 +270,24 @@ export class HeartbeatRunner {
       const agentConfig = this.agentConfigs.get(agentName);
       if (agentConfig && agentConfig.heartbeat.enabled === false) {
         continue;
+      }
+
+      // Phase 125 Plan 01 — build + persist the active-state header
+      // BEFORE the check loop. Errors are warn-logged but never thrown:
+      // the heartbeat tick must not block on active-state builder failure.
+      if (this.activeStateProvider) {
+        try {
+          const rendered = await this.activeStateProvider(agentName);
+          if (typeof rendered === "string" && rendered.length > 0) {
+            const wrapped = `--- ACTIVE STATE ---\n${rendered}\n--- end ---`;
+            this.lastProbeText.set(agentName, wrapped);
+          }
+        } catch (err) {
+          this.log.warn(
+            { agent: agentName, error: (err as Error).message },
+            "active-state provider failed",
+          );
+        }
       }
 
       if (!this.latestResults.has(agentName)) {
