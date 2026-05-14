@@ -23,6 +23,9 @@ import { registerSendCommand } from "./commands/send.js";
 import { registerThreadsCommand } from "./commands/threads.js";
 import { registerWebhooksCommand } from "./commands/webhooks.js";
 import { registerForkCommand } from "./commands/fork.js";
+// Phase 124 Plan 01 T-04 — `clawcode session compact <agent>` hybrid
+// compaction primitive (memory-extract + SDK forkSession on disk).
+import { registerSessionCompactCommand } from "./commands/session-compact.js";
 import { registerMcpCommand, registerMcpProbeCommand } from "./commands/mcp.js";
 import { registerBrowserMcpCommand } from "./commands/browser-mcp.js";
 import { registerSearchMcpCommand } from "./commands/search-mcp.js";
@@ -183,6 +186,7 @@ registerSendCommand(program);
 registerThreadsCommand(program);
 registerWebhooksCommand(program);
 registerForkCommand(program);
+registerSessionCompactCommand(program);
 registerMcpCommand(program);
 registerBrowserMcpCommand(program);
 registerSearchMcpCommand(program);
