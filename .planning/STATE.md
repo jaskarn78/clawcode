@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing mil
 
 ## Current Position
 
-Phase: 119 (A2A Delivery Reliability) — Not started
+Phase: 119 (A2A Delivery Reliability) — Context gathered
 Plan: —
-Status: Defining phase
-Last activity: 2026-05-13 — Roadmap expanded from 5 to 7 phases. Added Phase 124 (Operator-Triggered Session Compaction, ex-999.51) and Phase 125 (Intelligent Auto-Compaction Strategy, ex-999.52) per operator request. Roadmap heading restructure also closed the analyzer-blind-spot (`gsd-tools roadmap analyze` now sees 119-125). Next: `/gsd-plan-phase 119`.
+Status: Context captured, ready for planning
+Last activity: 2026-05-14 — Phase 119 CONTEXT.md written (auto-discuss mode, 10 decisions D-01..D-10 covering bot-direct fallback port from 999.12 IPC-02, WebhookManager 401/404 invalidation, queue-state icon mutex state machine, `no_webhook_fallbacks_total` counter via Phase 116/109 surface, agent-side HEARTBEAT_OK suppression). Next: `/gsd-plan-phase 119 --auto` (auto-chains to execute).
 
 **v2.9 phase map (build order — Waves 1/3/4/5/6/7):**
 - Phase 119: A2A Delivery Reliability (A2A-01..04) — Wave 1
