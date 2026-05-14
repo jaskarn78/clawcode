@@ -82,6 +82,12 @@ export type PostToAgentAgentConfigLike = Readonly<{
     avatarUrl?: string;
     webhookUrl?: string;
   }>;
+  /**
+   * Phase 119 A2A-01 — bound channel IDs. Mirrors daemon-ask-agent-ipc.ts:53.
+   * Used as the bot-direct fallback channel resolver when the routing-table
+   * snapshot has no binding.
+   */
+  channels?: readonly string[];
 }>;
 
 /** Minimal pino-like logger surface. */
@@ -116,6 +122,15 @@ export type PostToAgentDeps = Readonly<{
   webhookManager: PostToAgentWebhookManagerLike;
   writeInbox: PostToAgentInboxWriter;
   log: PostToAgentLogger;
+  /**
+   * Phase 119 A2A-01 — optional bot-direct sender. Mirrors the
+   * daemon-ask-agent-ipc.ts:104 shape verbatim per D-01. When set AND the
+   * target has no webhook AND a channel is bound, the handler dispatches
+   * the message via the bot client instead of falling straight through to
+   * the inbox-heartbeat path. Unwired in pre-bridge boot windows — when
+   * undefined the no-webhook path retains its prior inbox-only behavior.
+   */
+  botDirectSender?: { sendText(channelId: string, text: string): Promise<void> };
 }>;
 
 export type PostToAgentRequest = Readonly<{
@@ -191,6 +206,36 @@ export async function handlePostToAgentIpc(
   }
 
   if (!deps.webhookManager.hasWebhook(to)) {
+    // Phase 119 A2A-01 — bot-direct fallback rung (mirror of
+    // daemon-ask-agent-ipc.ts:262-299 per D-01). Attempts plain-text
+    // delivery via the bot client BEFORE falling through to the inbox-
+    // heartbeat path. On success returns delivered=true; on send failure
+    // or no resolved channel, falls through to inboxOnlyResponse.
+    if (deps.botDirectSender) {
+      const channelId =
+        deps.agentChannels.get(to)?.[0] ??
+        deps.configs.find((c) => c.name === to)?.channels?.[0];
+      if (channelId) {
+        try {
+          await deps.botDirectSender.sendText(channelId, message);
+          deps.log.info(
+            {
+              agent: to,
+              channel: channelId,
+              reason: "bot-direct-fallback",
+            },
+            "[A2A-01] bot-direct dispatch",
+          );
+          return { ok: true, delivered: true, messageId };
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          deps.log.warn(
+            { from, to, channelId, error: errMsg },
+            "[A2A-01] bot-direct dispatch failed (falling through to inbox)",
+          );
+        }
+      }
+    }
     deps.log.info(
       { from, to, messageId, reason: "no-webhook" satisfies PostToAgentSkipReason },
       "post-to-agent skipped",

@@ -274,6 +274,103 @@ describe("handlePostToAgentIpc — target-not-running secondary log", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 119 A2A-01 — bot-direct fallback rung (mirrors daemon-ask-agent-ipc.ts
+// IPC-02 pattern). Inserts between the no-webhook skip and the inbox-only
+// return: when there is no webhook AND a channel is bound for the target AND
+// botDirectSender is wired, dispatch via the bot client and return delivered.
+// ---------------------------------------------------------------------------
+
+describe("handlePostToAgentIpc — bot-direct fallback (A2A-01)", () => {
+  it("delivers via botDirectSender when no webhook + bound channel + sender wired", async () => {
+    const sendText = vi.fn().mockResolvedValue(undefined);
+    const { deps, calls, sendAsAgent } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+      botDirectSender: { sendText },
+    });
+    const result = await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "hello" },
+      deps,
+    );
+    expect(result).toEqual({
+      ok: true,
+      delivered: true,
+      messageId: "inbox-msg-1",
+    });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith("chan-1", "hello");
+    expect(sendAsAgent).not.toHaveBeenCalled();
+    const hit = calls.find(
+      (c) =>
+        c.msg === "[A2A-01] bot-direct dispatch" &&
+        c.obj["agent"] === "projects" &&
+        c.obj["channel"] === "chan-1" &&
+        c.obj["reason"] === "bot-direct-fallback",
+    );
+    expect(hit).toBeDefined();
+  });
+
+  it("falls through to inbox when botDirectSender throws", async () => {
+    const sendText = vi.fn().mockRejectedValue(new Error("Discord 500"));
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+      botDirectSender: { sendText },
+    });
+    const result = await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    expect(result.delivered).toBe(false);
+    expect(result.reason).toBe("no-webhook");
+    expect(sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT call botDirectSender when no bound channel — falls through to inbox", async () => {
+    const sendText = vi.fn();
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+      botDirectSender: { sendText },
+      agentChannels: new Map([["projects", []]]),
+    });
+    const result = await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    expect(result.delivered).toBe(false);
+    expect(result.reason).toBe("no-target-channels");
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call botDirectSender when webhook IS present (webhook path wins)", async () => {
+    const sendText = vi.fn();
+    const sendAsAgent = vi.fn().mockResolvedValue("ok");
+    const { deps } = makeDeps({
+      webhookManager: { hasWebhook: () => true, sendAsAgent },
+      botDirectSender: { sendText },
+    });
+    const result = await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    expect(result.delivered).toBe(true);
+    expect(sendAsAgent).toHaveBeenCalledTimes(1);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("does NOT attempt bot-direct when botDirectSender is unwired (undefined)", async () => {
+    const { deps, sendAsAgent } = makeDeps({
+      webhookManager: { hasWebhook: () => false, sendAsAgent: vi.fn() },
+    });
+    const result = await handlePostToAgentIpc(
+      { from: "admin-clawdy", to: "projects", message: "x" },
+      deps,
+    );
+    expect(result.delivered).toBe(false);
+    expect(result.reason).toBe("no-webhook");
+    expect(sendAsAgent).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Sentinel A — static grep that pins the production caller chain.
 //
 // Asserts:
