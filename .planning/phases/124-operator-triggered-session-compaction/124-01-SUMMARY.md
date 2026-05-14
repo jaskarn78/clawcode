@@ -75,6 +75,15 @@ analysis surfaced during pre-write advisor consult:
 that owns the `stopAgent + restartAgent(resume: forkSessionId)` surgery
 + the chokepoint-prepend at `persistent-session-handle.ts:~1005`.
 
+**UPDATE 2026-05-14 — closed by Plan 124-05.** The follow-up shipped as
+Plan 124-05 (wave 1.5). Implementation took Option A (closure-rebinding
+inside `buildEpoch` + atomic swap through the existing `SerialTurnQueue`),
+NOT the originally-imagined `stopAgent + restartAgent` surgery — that
+would have required closing the SDK Query iterator AND respawning the
+entire handle, destroying every post-construction DI mirror in the
+process. The chosen path preserves handle identity AND every mirror.
+See `124-05-SUMMARY.md`. SC-1 is now fully closed.
+
 ### `AGENT_NOT_INITIALIZED` error code (Rule 3)
 
 Plan named `AGENT_NOT_RUNNING`, `ERR_TURN_TOO_LONG`, `DAEMON_NOT_READY`.
