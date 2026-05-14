@@ -12,10 +12,10 @@
 
 ### A2A · Agent-to-Agent + Subagent-Relay Delivery Reliability
 
-- [ ] **A2A-01** — System delivers `post_to_agent` messages live via Discord webhook; the inbox-heartbeat fallback path is used only when both webhook AND bot-direct delivery have failed, and any fallback emits a structured log line with `{agent, channel, reason}`. *(merges 999.44)*
-- [ ] **A2A-02** — `WebhookManager` invalidates a cached webhook entry on HTTP 401/404 from Discord and re-provisions the webhook via bot before declaring delivery failed. *(merges 999.44 cached-singleton root cause)*
-- [x] **A2A-03** — Discord queue-state icon transitions atomically through `⏳` (queued) → `👍` (SDK call started) → `✅`/`❌` (terminal); states are mutually exclusive and debounced. *(merges 999.45)* — **Code closed Phase 119 Plan 03 (commits `670931e`, `afcab56`); per-channel mutex + 200ms debounce + sticky terminal states. SC-3 operator-visual screenshot remains deploy-gated.**
-- [ ] **A2A-04** — The `projects` agent's cron-poll emits no output to user-facing channels when nothing requires operator attention; the `HEARTBEAT_OK` no-op is suppressed at the agent's skill layer. *(merges 999.48 — agent-side fix, not daemon)*
+- [x] **A2A-01** — System delivers `post_to_agent` messages live via Discord webhook; the inbox-heartbeat fallback path is used only when both webhook AND bot-direct delivery have failed, and any fallback emits a structured log line with `{agent, channel, reason}`. *(merges 999.44)* — **Code closed Phase 119 Plan 01 (commits `0aa0e5e`, `f910de5`, `ae4c8b1`, `cfbf7bc`); deployed to clawdy 2026-05-14 18:04 UTC; SC-1 verified live — `[A2A-01-sentinel] OK` log line fires on every daemon boot (multiple instances logged).**
+- [x] **A2A-02** — `WebhookManager` invalidates a cached webhook entry on HTTP 401/404 from Discord and re-provisions the webhook via bot before declaring delivery failed. *(merges 999.44 cached-singleton root cause)* — **Code closed Phase 119 Plan 01 (commit `f910de5`); deployed 2026-05-14 18:04 UTC; SC-2 covered by vitest mock-401→200 unit test pinning the invalidate-then-reprovision behavior. Live re-verification gated on a real Discord 401/404 event in production (not synthetic-triggerable).**
+- [x] **A2A-03** — Discord queue-state icon transitions atomically through `⏳` (queued) → `👍` (SDK call started) → `✅`/`❌` (terminal); states are mutually exclusive and debounced. *(merges 999.45)* — **Code closed Phase 119 Plan 03 (commits `670931e`, `afcab56`, hotfixes `ecd1231`, `f378ab7`); deployed 2026-05-14 18:04 UTC; per-channel mutex + 200ms debounce + sticky terminal states. SC-3 operator-visual screenshot remains deploy-gated.**
+- [x] **A2A-04** — The `projects` agent's cron-poll emits no output to user-facing channels when nothing requires operator attention; the `HEARTBEAT_OK` no-op is suppressed at the agent's skill layer. *(merges 999.48 — agent-side fix, not daemon)* — **Code closed Phase 119 Plan 04 (agent-workspace commit `e634b7b` in `~/.clawcode/agents/projects/`; daemon-repo docs `ba1bcdc`, `8872ec2`); 4 prompt-corpus sites patched (3 in `AGENTS.md`, 1 in `HEARTBEAT.md`) + new `skills/cron-poll/SKILL.md`. SC-4 24h soak gated on (a) sync agent-workspace to clawdy, (b) recreate existing TMUX_POLL crons with the new silence-contract template, (c) wait 24h, (d) `grep -c "HEARTBEAT_OK.*projects"` returns 0.**
 
 ### DASH · Dashboard Backend Observability Cleanup (post-Phase-116)
 
@@ -73,10 +73,10 @@ Deferred to v3.0 per operator scope confirmation (2026-05-13). v2.9 keeps focus 
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| A2A-01 | Phase 119 | Active |
-| A2A-02 | Phase 119 | Active |
-| A2A-03 | Phase 119 | Code-complete (Plan 03; deploy-gated SC-3 screenshot pending) |
-| A2A-04 | Phase 119 | Active |
+| A2A-01 | Phase 119 | Code-complete + deployed; SC-1 verified live in production |
+| A2A-02 | Phase 119 | Code-complete + deployed; SC-2 unit-tested (live re-verification on real Discord 401/404) |
+| A2A-03 | Phase 119 | Code-complete + deployed (Plan 03 + hotfixes); deploy-gated SC-3 operator-visual screenshot |
+| A2A-04 | Phase 119 | Code-complete (agent workspace); deploy-gated SC-4 24h soak |
 | DASH-01 | Phase 120 | Active |
 | DASH-02 | Phase 120 | Active |
 | DASH-03 | Phase 120 | Active |
