@@ -404,7 +404,7 @@ export class SubagentThreadSpawner {
       // overflow logic (this file, lines 633-670).
       const finalWrapped = wrapMarkdownTablesInCodeFence(response ?? "");
       if (finalWrapped.length > 2000) {
-        let cursor = 2000;
+        let cursor = EDITOR_TRUNCATE_INDEX;
         let chunksSent = 0;
         let lastError: string | null = null;
         while (cursor < finalWrapped.length) {
@@ -429,22 +429,19 @@ export class SubagentThreadSpawner {
           }
           cursor += 2000;
         }
-        // Phase 999.36 sub-bug B diag (D-08) — chunk-boundary state for the
-        // pipeline-side truncation hypothesis (D-06). Plan 03 will use these
-        // fields to confirm the off-by-3 seam between editor's 1997-char
-        // truncate (line ~346: slice(0, 1997) + "...") and overflow loop's
-        // cursor=2000 starting point (line ~388). The same diag scheme is
-        // applied to the postInitialMessage overflow loop below for
-        // cross-validation across both relay + initial-post paths.
+        // Phase 121-02 sub-bug B (D-07) — chunk-boundary diag, post-fix.
+        // editorCutoffIndex == overflowStartCursor == EDITOR_TRUNCATE_INDEX
+        // means the editor's '...' marker and the overflow loop's first
+        // chunk are aligned on the same byte; seamGapBytes is 0.
         this.log.info(
           {
             threadId,
             parentAgent: binding.agentName,
-            relayLen: trimmed.length, // operator's prompt size into parent
+            relayLen: trimmed.length,
             totalLength: finalWrapped.length,
-            editorCutoffIndex: 1997, // editor's slice(0, 1997) + "..."
-            overflowStartCursor: 2000, // overflow loop's cursor = 2000
-            seamGapBytes: 2000 - 1997, // bytes 1997-1999 silently dropped
+            editorCutoffIndex: EDITOR_TRUNCATE_INDEX,
+            overflowStartCursor: EDITOR_TRUNCATE_INDEX,
+            seamGapBytes: 0,
             chunksSent,
             lastError,
             fullySent: cursor >= finalWrapped.length,
