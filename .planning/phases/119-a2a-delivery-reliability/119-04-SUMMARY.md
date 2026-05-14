@@ -4,7 +4,9 @@
 **Requirement closed:** A2A-04 / SC-4 (code-complete; deploy-gated on 24h soak)
 **Date:** 2026-05-14
 
-> ⚠ **Partial commit in agent workspace** — only `HEARTBEAT.md` + `skills/cron-poll/SKILL.md` are in commit `d87767e`. `AGENTS.md` lines 55 + 68 were edited locally but commit was deferred due to pre-existing unrelated WIP. See VERIFICATION.md for working-tree state and rollout implications.
+> ✅ **Agent-workspace commit is self-contained.** `e634b7b` patches all four prompt-corpus sites (3 in `AGENTS.md`, 1 in `HEARTBEAT.md`) plus new `skills/cron-poll/SKILL.md`.
+>
+> 📦 Pre-existing condensation WIP on `AGENTS.md`/`IDENTITY.md`/`MEMORY.md`/`TOOLS.md`/`USER.md`/`memory/2026-02-23.md` from a separate session is stashed under `stash@{0}` for operator review (restore with `git -C ~/.clawcode/agents/projects stash pop`; conflicts expected at the A2A-04 lines).
 
 ## Task 1 — Skill location + dispatch shape
 
@@ -14,17 +16,15 @@ Actual leak source: the literal "reply `HEARTBEAT_OK`" instruction was embedded 
 
 ## Task 2 — Guard insertion site + commit SHA
 
-**Agent-workspace commit:** `d87767e` in `~/.clawcode/agents/projects/` (git-tracked).
+**Agent-workspace commit:** `e634b7b` in `~/.clawcode/agents/projects/` (git-tracked).
 Subject: `feat(cron-poll): suppress HEARTBEAT_OK no-op to user channel (A2A-04 / 119-04)`.
 
-Files in the commit:
-- `HEARTBEAT.md` — replaced "Reply: HEARTBEAT_OK" (line 33) with truly-silent-no-post contract + optional `state/heartbeat.log` write for internal acknowledgment.
-- `skills/cron-poll/SKILL.md` (new) — captures the silence contract for self-scheduled tmux/process monitors, plus a prompt template for re-registering existing TMUX_POLL crons whose prompts still embed the legacy "reply HEARTBEAT_OK" instruction inline.
+Files in the commit (all 4 prompt-corpus sites patched):
+- `AGENTS.md` — 3 sites: line 77 group-chat "Stay silent (HEARTBEAT_OK)" → "Stay silent" + sentinel-prohibition note; lines 116-125 Heartbeats section rewritten with silence contract + updated embedded default-heartbeat-prompt example; line 167 "When to stay quiet (HEARTBEAT_OK)" → "When to stay quiet (produce no Discord output — NOT emit HEARTBEAT_OK)".
+- `HEARTBEAT.md` — line 33 "Reply: HEARTBEAT_OK" → silence contract + optional `state/heartbeat.log` write + cross-reference to cron-poll SKILL.md.
+- `skills/cron-poll/SKILL.md` (new) — silence contract for self-scheduled tmux/process monitors + prompt template for re-registering existing TMUX_POLL crons whose prompts still embed the legacy instruction inline.
 
-Working-tree (not in commit `d87767e`, deferred to operator):
-- `AGENTS.md` lines 55 + 68 — same silence contract, edited locally. Commit deferred because the file has unrelated pre-existing WIP.
-
-Narrowness: prose-level changes, no broad regex; actionable paths (Yellow/Orange/Red context warnings, menu-prompt alerts, session-dead notifications) explicitly preserved per the unchanged `HEARTBEAT.md` "User-Facing Messages" section.
+Narrowness: prose-level changes only, no broad regex; actionable paths (Yellow/Orange/Red context warnings, menu-prompt alerts, session-dead notifications, real user messages) explicitly preserved. All remaining `HEARTBEAT_OK` mentions in the agent workspace are now NEGATIVE references explaining what NOT to emit.
 
 ## Task 3 — 24h soak (DEFERRED)
 
@@ -55,4 +55,4 @@ Expected: `0`. Append the soak result to `119-04-VERIFICATION.md` per the plan's
 - `.planning/phases/119-a2a-delivery-reliability/119-04-PLAN.md`
 - `.planning/phases/119-a2a-delivery-reliability/119-04-VERIFICATION.md`
 - `.planning/phases/999.48-heartbeat-reply-leaks-to-user-channel/BACKLOG.md`
-- Agent-workspace commit: `~/.clawcode/agents/projects/` @ `d87767e`
+- Agent-workspace commit: `~/.clawcode/agents/projects/` @ `e634b7b`

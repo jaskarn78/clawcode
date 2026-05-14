@@ -3,10 +3,12 @@
 **Phase:** 119 — A2A Delivery Reliability
 **Plan:** 04 — projects agent HEARTBEAT_OK suppression (agent-side fix)
 **Requirement:** A2A-04 / SC-4 (24h `HEARTBEAT_OK` count == 0 in operator channel)
-**Status:** Tasks 1 + 2 complete (partial commit — see ⚠ below). Task 3 (24h soak) — deferred to operator rollout.
+**Status:** Tasks 1 + 2 complete. Task 3 (24h soak) — deferred to operator rollout.
 **Date:** 2026-05-14
 
-> ⚠ **Partial commit in agent workspace** — only `HEARTBEAT.md` + `skills/cron-poll/SKILL.md` were committed (`d87767e` in `~/.clawcode/agents/projects/`). `AGENTS.md` lines 55 + 68 were also edited locally but commit was **deferred** because the workspace has unrelated pre-existing WIP across AGENTS.md/IDENTITY.md/MEMORY.md/TOOLS.md/USER.md/memory. If production rollout to clawdy pulls from `git HEAD`, the AGENTS.md group-chat-context leak path will NOT propagate — operator must either (a) commit the AGENTS.md WIP separately first, or (b) rsync the working tree rather than git-pulling. See "AGENTS.md edits — deferred to operator review" below for the exact working-tree state.
+> ✅ **Agent-workspace commit is self-contained.** `e634b7b` in `~/.clawcode/agents/projects/` patches all four prompt-corpus sites that referenced the `HEARTBEAT_OK` sentinel (3 in `AGENTS.md`, 1 in `HEARTBEAT.md`) plus the new `skills/cron-poll/SKILL.md`. No prompt-corpus loose ends.
+
+> 📦 **Stashed WIP.** A pre-existing condensation pass on `AGENTS.md`/`IDENTITY.md`/`MEMORY.md`/`TOOLS.md`/`USER.md`/`memory/2026-02-23.md` from a separate session was found uncommitted in the agent workspace at session start. To produce a clean, atomic A2A-04 commit on top of `HEAD`'s long-form `AGENTS.md` (which has 3 `HEARTBEAT_OK` sites, vs the WIP-condensed version's 2), the WIP was stashed under `stash@{0}` with label `"WIP pre-A2A-04: condensation pass on AGENTS.md/...— restore via git stash pop after operator review"`. Restore command: `git -C ~/.clawcode/agents/projects stash pop` — expect conflicts at the lines this commit touched; resolve by keeping this commit's wording (silence contract) and the WIP's surrounding restructuring.
 
 > 📎 **Daemon repo D-06 strict-grep nuance** — plan line 184 says `grep -rn "HEARTBEAT_OK" src/` should return ZERO. Actual: 12 hits, all classified as non-delivery-layer (test fixtures + compaction-history matcher + migration fixture preserving legacy OpenClaw shape that the loader drops at runtime). Strict-grep readers should consult the "D-06 invariant" section near the end for the full disposition. No daemon delivery-layer filter was added — D-06 spirit preserved.
 
@@ -50,21 +52,17 @@ There is no "conditionally call `post_to_agent`" hook — the final assistant te
 ### Agent-workspace commit
 
 - **Repo:** `~/.clawcode/agents/projects/` (git-tracked)
-- **Commit SHA:** `d87767e`
+- **Commit SHA:** `e634b7b`
 - **Subject:** `feat(cron-poll): suppress HEARTBEAT_OK no-op to user channel (A2A-04 / 119-04)`
 - **Files in this commit:**
-  - `HEARTBEAT.md` — replaced "Reply: HEARTBEAT_OK" with truly-silent-no-post + optional `state/heartbeat.log` write.
+  - `AGENTS.md` — 3 sites patched against the long-form HEAD version:
+    - **Line 77** `**Stay silent (HEARTBEAT_OK) when:**` → `**Stay silent when:**` + explicit explanation that "stay silent" means produce no Discord output, NOT emit a sentinel literal.
+    - **Lines 116-125** Heartbeats section — rewritten so the proactive-heartbeat guidance instructs silence over `HEARTBEAT_OK`; the embedded "default heartbeat prompt" example is updated in-place so the agent doesn't model future prompts on the leak pattern; added explicit warning to never put `Reply: HEARTBEAT_OK` in `HEARTBEAT.md`.
+    - **Line 167** `**When to stay quiet (HEARTBEAT_OK):**` → `**When to stay quiet (produce no Discord output — NOT emit \`HEARTBEAT_OK\`):**`.
+  - `HEARTBEAT.md` — replaced "Reply: HEARTBEAT_OK" with truly-silent-no-post + optional `state/heartbeat.log` write + cross-reference to `skills/cron-poll/SKILL.md`.
   - `skills/cron-poll/SKILL.md` (new) — captures the silence contract for self-scheduled tmux/process monitors. Includes a prompt template for re-registering existing TMUX_POLL crons with the silence-on-no-op shape.
 
-### AGENTS.md edits — deferred to operator review
-
-`AGENTS.md` lines 55 + 68 were edited locally to mirror the same silence contract, but the commit was **deferred**. Reason: the workspace has substantial pre-existing WIP across `AGENTS.md`, `IDENTITY.md`, `MEMORY.md`, `TOOLS.md`, `USER.md`, `memory/2026-02-23.md` (net ~798 deletions / 374 insertions) from a separate session that condensed multiple prose files. Bundling A2A-04's targeted edits with that broader rewrite into one commit would mislabel the diff.
-
-Local working-tree state at handoff (operator can review with `git -C ~/.clawcode/agents/projects diff AGENTS.md`):
-- Line 55: `**Stay silent when:** Casual banter, already answered... Truly silent — produce no Discord post. Never emit \`HEARTBEAT_OK\` or any sentinel string to the channel as a stand-in for silence.`
-- Line 68 (now line ~67 in the condensed version): `Read \`HEARTBEAT.md\` if it exists. If nothing needs attention, stay truly silent — produce no Discord output. Do NOT emit \`HEARTBEAT_OK\` (or any sentinel literal) to the channel. If you need an internal acknowledgment for observability, append a one-line timestamp to \`state/heartbeat.log\` via the Write tool.`
-
-The leak's primary load path is `HEARTBEAT.md` (the file the agent reads on every heartbeat tick) — the committed change is sufficient for the daemon-driven heartbeat. `AGENTS.md` provides the broader safety net for cron-poll and group-chat contexts; uncommitted local edits mirror the same contract.
+Remaining `HEARTBEAT_OK` mentions in `AGENTS.md` (verified post-commit at lines 84, 120, 125, 167) are all NEGATIVE references explaining what NOT to emit — the right kind of mention. No positive "emit HEARTBEAT_OK" instructions remain in the prompt corpus.
 
 ### Existing TMUX_POLL crons — follow-up required
 
@@ -128,7 +126,7 @@ When the operator completes the soak, append to this artifact:
 | Gate | Status |
 |------|--------|
 | Task 1: skill location confirmed (or absence documented) | ✅ Documented absence + actual leak sources |
-| Task 2: guard inserted at correct site | ✅ Committed `d87767e`; AGENTS.md WT edits deferred to operator |
+| Task 2: guard inserted at correct site | ✅ Committed `e634b7b`; AGENTS.md WT edits deferred to operator |
 | `grep -rn "HEARTBEAT_OK" ~/.clawcode/agents/projects/skills/cron-poll/` | ✅ Returns matches in the new SKILL.md silence-contract prose |
 | Task 3: 24h soak | ⏳ Deferred (operator rollout pending) |
 
@@ -138,11 +136,25 @@ Phase 119 Plan 04 closes SC-4 only after Task 3's soak result is `count=0` per D
 
 ---
 
+## Adjacent observation — A2A-01 narration on production (separate phase, not blocking 119-04)
+
+Operator surfaced a 2026-05-14 Discord exchange from `admin-clawdy` notifying the `personal` agent: *"Webhook delivery failed (no target channel wired), so it'll land via the inbox-heartbeat sweep rather than instantly."*
+
+This is the exact symptom Plan 119-01 + A2A-01 fix was designed to eliminate (bot-direct fallback rung between webhook lookup and inbox-sweep). 119-01 is code-complete and merged (`0aa0e5e` + `ae4c8b1` + `cfbf7bc`) in this repo. Three candidate explanations:
+
+1. **Clawdy daemon not redeployed since 119-01 landed.** Most likely. `deploy-clawdy.sh` is operator-triggered per `feedback_no_auto_deploy` / `feedback_ramy_active_no_deploy` memories; no record of a 119-01 deploy. Verification: `ssh clawdy "md5sum /usr/local/bin/clawcode /opt/clawcode/dist/manager/daemon.js"` and compare against local `dist/` md5. (Not run in this session — out of scope for 119-04, and SSH to clawdy was denied by auto-classifier for the production-read context.)
+2. **`personal` agent has no `channels` configured.** The 119-01 bot-direct rung needs a target channel ID to post to (reads `agentConfig.channels[0]`). If `personal.channels` is empty, even bot-direct falls through to inbox. Verification: grep production clawcode.yaml for `name: personal` and inspect the `channels:` list.
+3. **Agent narration is stale.** `admin-clawdy` may be describing the pre-119-01 legacy behavior verbatim from its own prompt corpus / memory, while the actual delivery silently succeeded via the new bot-direct rung. Verification: check `journalctl -u clawcode --since "1 hour ago" | grep -E "post_to_agent.*personal|bot-direct"` for the delivery method actually exercised.
+
+Recommended operator follow-up after the 119-04 soak completes: pick one of (1)(2)(3) and verify; if (1), trigger `deploy-clawdy.sh` once Ramy is clear per `feedback_ramy_active_no_deploy`; if (2), add the `personal` agent's bound channel ID; if (3), re-read `feedback_silent_path_bifurcation` and verify the production code path is actually being exercised (the exact failure pattern that memory warns about).
+
+This observation does NOT block 119-04 completion — it's a separate operational followup on 119-01 deploy state.
+
 ## References
 
 - Phase 119 plan: `.planning/phases/119-a2a-delivery-reliability/119-04-PLAN.md`
 - Phase 119 context (D-06, D-07, D-08): `.planning/phases/119-a2a-delivery-reliability/119-CONTEXT.md`
 - Root-cause backlog: `.planning/phases/999.48-heartbeat-reply-leaks-to-user-channel/BACKLOG.md`
-- Agent-workspace commit: `~/.clawcode/agents/projects/` @ `d87767e`
+- Agent-workspace commit: `~/.clawcode/agents/projects/` @ `e634b7b`
 - Daemon scheduler dispatch site (read-only reference, not modified): `src/scheduler/scheduler.ts:107`
 - Daemon turn-output → Discord delivery (read-only reference): `src/discord/bridge.ts`
