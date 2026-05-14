@@ -938,3 +938,52 @@ describe("Phase 100 — settingSources + gsd.projectDir agent-restart classifica
     expect(RELOADABLE_FIELDS.has("defaults.gsd.projectDir")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.54 D-04 — mcpServers.alwaysLoad NON-reloadable classification.
+//
+// Architectural rationale: Claude Agent SDK reads `alwaysLoad` ONCE during
+// session creation (sdk.d.ts:1067-1076). Toggling it at runtime cannot
+// retroactively load or unload tools into an existing agent session — the
+// change takes effect ONLY on agent restart.
+//
+// Plan 03 added two doc-of-intent entries to NON_RELOADABLE_FIELDS:
+//   - "defaults.mcpServers.*.alwaysLoad"
+//   - "agents.*.mcpServers.*.alwaysLoad"
+//
+// Empirical note (worked out during executor orientation, recorded in
+// SUMMARY deviations): the differ's `diffConfigs` does NOT examine the
+// top-level shared `mcpServers` Record (it only walks `defaults` and
+// `agents` — see src/config/differ.ts:23-30). It also does NOT recurse
+// into arrays (isPlainObject excludes them at diffObject), so an array
+// element-level leaf path like `agents.<name>.mcpServers.0.alwaysLoad`
+// is unreachable too. Both of Plan 03's NON_RELOADABLE_FIELDS entries
+// are therefore PURE doc-of-intent — same status as the v2.5 SHARED-01
+// memoryPath entries and the DI8 settingSources/gsd entries above.
+//
+// Following the precedent of the DI8 test immediately above (lines
+// 929-939), we pin both paths via NON_RELOADABLE_FIELDS.has(...) set
+// membership. Two it() cases — one per yaml path shape — mirror the
+// CONTEXT.md D-04 split.
+// ---------------------------------------------------------------------------
+describe("diffConfigs - Phase 999.54 D-04 mcpServers.alwaysLoad NON-reloadable", () => {
+  it("classifies defaults.mcpServers.<name>.alwaysLoad as non-reloadable (NON_RELOADABLE_FIELDS doc-of-intent pin)", () => {
+    expect(
+      NON_RELOADABLE_FIELDS.has("defaults.mcpServers.*.alwaysLoad"),
+    ).toBe(true);
+    // Regression pin: must NOT have been accidentally promoted to RELOADABLE.
+    expect(
+      RELOADABLE_FIELDS.has("defaults.mcpServers.*.alwaysLoad"),
+    ).toBe(false);
+  });
+
+  it("classifies agents.<name>.mcpServers.<idx>.alwaysLoad as non-reloadable (NON_RELOADABLE_FIELDS doc-of-intent pin)", () => {
+    expect(
+      NON_RELOADABLE_FIELDS.has("agents.*.mcpServers.*.alwaysLoad"),
+    ).toBe(true);
+    // Regression pin: must NOT have been accidentally promoted to RELOADABLE.
+    expect(
+      RELOADABLE_FIELDS.has("agents.*.mcpServers.*.alwaysLoad"),
+    ).toBe(false);
+  });
+});
