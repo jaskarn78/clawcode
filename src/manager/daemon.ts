@@ -10310,6 +10310,76 @@ async function routeMethod(
       );
     }
 
+    // Phase 124 Plan 01 T-03 — hybrid compaction primitive. Wires the
+    // pure-DI handler at daemon-compact-session-ipc.ts. Operator-callable
+    // via `clawcode session compact <agent>`. Per Path B (advisor-consulted
+    // before write), live-handle hot-swap is deferred — the fork JSONL is
+    // produced on disk + memory.db grows + `forked_to` is surfaced; the
+    // live worker continues writing to the original session. Tracked as a
+    // follow-up in 124-01-SUMMARY.md.
+    case "compact-session": {
+      const agentName = validateStringParam(params, "agent");
+      const { handleCompactSession } = await import(
+        "./daemon-compact-session-ipc.js"
+      );
+      const sdk = await import("@anthropic-ai/claude-agent-sdk");
+      // Trivial MVP extractor — Phase 125 replaces with tiered retention
+      // + Haiku-driven structured extraction. For now: split on newlines,
+      // filter to non-empty lines longer than 20 chars. Avoids a network
+      // call and keeps the primitive testable end-to-end.
+      const extractMemories = async (
+        text: string,
+      ): Promise<readonly string[]> => {
+        return Object.freeze(
+          text
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 20)
+            .slice(0, 20),
+        );
+      };
+      return await handleCompactSession(
+        { agent: agentName },
+        {
+          manager: {
+            getSessionHandle: (n) => manager.getSessionHandle(n),
+            getConversationTurns: (n) => {
+              const sid = manager.getActiveConversationSessionId(n);
+              const store = manager.getConversationStore(n);
+              if (!sid || !store) return [];
+              // Map ConversationStore.ConversationTurn → compaction.ConversationTurn.
+              // The compaction primitive only reads {timestamp, role, content}.
+              // System turns are dropped (compaction shape is user|assistant only).
+              return store.getTurnsForSession(sid)
+                .filter((t) => t.role !== "system")
+                .map((t) => ({
+                  timestamp: t.createdAt,
+                  role: t.role as "user" | "assistant",
+                  content: t.content,
+                }));
+            },
+            getContextFillProvider: (n) => manager.getContextFillProvider(n),
+            compactForAgent: (n, conv, ex) =>
+              manager.compactForAgent(n, conv, ex),
+            hasCompactionManager: (n) => {
+              // No public accessor — mirror the throw guard at
+              // session-manager.ts:2208 by checking through a known surface.
+              // SessionLogger is created in the same memory-init step, so
+              // its presence is a proxy for compactionManager presence.
+              return manager.getSessionLogger(n) !== undefined;
+            },
+          },
+          sdkForkSession: async (id, opts) => {
+            const result = await sdk.forkSession(id, opts);
+            return { sessionId: result.sessionId };
+          },
+          extractMemories,
+          log: logger,
+          daemonReady: true,
+        },
+      );
+    }
+
     case "set-model": {
       // Phase 86 Plan 02 MODEL-04 — delegate to the pure testable handler.
       // Live SDK swap fires FIRST (Plan 01 SessionHandle.setModel); atomic
