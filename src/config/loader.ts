@@ -489,12 +489,37 @@ export function resolveAgentConfig(
         // Both fields optional; undefined when YAML omitted them.
         ...(s.description ? { description: s.description } : {}),
         ...(s.accessPattern ? { accessPattern: s.accessPattern } : {}),
+        // Phase 999.54 (D-01a) — propagate yaml-declared alwaysLoad from
+        // mcpServerSchema (Plan 01) into ResolvedAgentConfig.mcpServers[].
+        // Spread-conditional preserves byte-stable deep-equality for the
+        // existing fleet (RESEARCH.md Pitfall 3). `=== true` matches the
+        // `s.optional === true` strict-boolean idiom one line above (line
+        // 486) — avoids accidental coercion of stringly-typed values.
+        ...(s.alwaysLoad === true ? { alwaysLoad: true as const } : {}),
       });
     } catch (err) {
       if (!onMcpResolutionError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       onMcpResolutionError({ agent: agent.name, server: s.name, message });
     }
+  }
+
+  // Phase 999.54 (D-05a) — emit one structured log per agent listing
+  // servers marked alwaysLoad: true. Operator grep target on clawdy
+  // systemd journal: `journalctl -u clawcode | grep phase999.54-resolver`.
+  // Single line per agent at resolution time; quiet when no servers
+  // are marked (empty list → no log line, keeps fleet logs clean).
+  const alwaysLoadServers = mcpServers
+    .filter((s) => s.alwaysLoad === true)
+    .map((s) => s.name);
+  if (alwaysLoadServers.length > 0) {
+    console.info(
+      "phase999.54-resolver",
+      JSON.stringify({
+        agent: agent.name,
+        alwaysLoadServers,
+      }),
+    );
   }
 
   const resolvedWorkspace =
