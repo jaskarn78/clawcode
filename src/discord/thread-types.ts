@@ -23,6 +23,28 @@ export type ThreadBinding = {
    * `thread-bindings.json` so the dedupe survives daemon restart.
    */
   readonly completedAt?: number | null;
+  /**
+   * Phase 999.36 sub-bug D (D-13, D-14) — set when the Discord post
+   * pipeline has confirmed delivery of the LAST chunk for this binding.
+   *
+   * Used as the AND-clause partner to `streamFullyDrained` (implicit:
+   * `lastDeliveryAt !== null` ⇒ stream drained AND delivered) — gates
+   * the `subagent_complete` event firing in `markRelayCompleted`.
+   *
+   * Set by:
+   *   - postInitialMessage finally block (after editor.flush + overflow loop)
+   *   - relayCompletionToParent finally block (after parent main-channel post drains)
+   *   - session-end callback (treats session-end as delivery-equivalent terminal state)
+   *
+   * NOT set by quiescence-sweep — quiescence emits `subagent_idle_warning`
+   * instead and leaves `lastDeliveryAt` null.
+   *
+   * Optional + nullable for back-compat: pre-Phase-999.36 entries parse
+   * unchanged. Persisted to thread-bindings.json (JSON registry, NOT SQL —
+   * D-16 forbids SQL column changes; JSON registry shape is allowed,
+   * matching the `completedAt` precedent from Phase 999.25).
+   */
+  readonly lastDeliveryAt?: number | null;
 };
 
 /**
