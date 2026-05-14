@@ -17,12 +17,14 @@
  *      — D-04 revised, growth by design), call SDK `forkSession` to produce
  *      a fork JSONL on disk, return the new fork id plus tokens proxy.
  *
- * Path B deferral (per advisor consult before T-02): live-handle hot-swap
- * (closing the current SessionHandle and reconstructing one that resumes
- * from the fork session id) is NOT included in this primitive. The fork
- * artifact is produced on disk and surfaced as `forked_to`; live worker
- * continues writing to the original session. Documented in 124-01-SUMMARY
- * + tracked as a follow-up. Ramy-active deploy hold drives this choice.
+ * Phase 124 Plan 05 — live hot-swap now ships. After `sdkForkSession`
+ * returns, the handler invokes `handle.swap(forkSessionId)` so the live
+ * SessionHandle rebinds to the fork session id IN-PROCESS — operator no
+ * longer needs to `clawcode restart <agent>` to pick up the compaction.
+ * Backward compat: handles without `swap` (legacy wrapSdkQuery test
+ * fixtures) and swap rejections both fall through with `swapped_live:false`
+ * so the primitive is still useful for the memory.db + fork artifact half
+ * of the pain; operator-manual restart remains the documented fallback.
  *
  * Wire result shape (success path):
  *   {
@@ -32,6 +34,8 @@
  *     summary_written: boolean,
  *     forked_to: string,              // SDK fork session uuid
  *     memories_created: number,
+ *     swapped_live: boolean,          // true => live worker rebound in-process
+ *     swap_reason?: string,           // present when swapped_live:false
  *   }
  */
 import type {
@@ -47,10 +51,23 @@ export type CompactLogger = Readonly<{
   error: (...args: unknown[]) => void;
 }>;
 
-/** Minimal session-handle surface read by the handler. */
+/**
+ * Minimal session-handle surface read by the handler.
+ *
+ * Phase 124 Plan 05 — `swap` is additive-optional. When the live handle
+ * exposes it (production createPersistentSessionHandle path), the handler
+ * invokes it after `sdkForkSession` returns and surfaces `swapped_live:true`
+ * on success. When the handle does NOT expose it (legacy wrapSdkQuery test
+ * fixtures), the handler falls back to today's behavior — fork artifact +
+ * memory.db growth on disk, no live worker rebinding — and surfaces
+ * `swapped_live:false`. The compaction flow as a whole NEVER fails because
+ * of a swap rejection — the operator-manual `clawcode restart` path stays
+ * available as the documented fallback.
+ */
 export type CompactSessionHandleLike = Readonly<{
   readonly sessionId: string;
   hasActiveTurn: () => boolean;
+  swap?: (newSessionId: string) => Promise<void>;
 }>;
 
 /**
@@ -141,6 +158,27 @@ export type CompactSessionSuccess = Readonly<{
   summary_written: boolean;
   forked_to: string;
   memories_created: number;
+  /**
+   * Phase 124 Plan 05 — true when the live SessionHandle was rebound to
+   * the fork session id IN-PROCESS (no operator `clawcode restart` needed).
+   * False when:
+   *   - The handle does not expose `swap` (legacy wrapSdkQuery / test
+   *     fixture); the fork artifact is on disk but the live worker still
+   *     writes to the original JSONL.
+   *   - `swap` threw on the rebuild path; the old epoch survived intact
+   *     and the operator can re-run with `clawcode restart` to swap
+   *     manually.
+   * Backward-compat: callers parsing the old payload shape get `undefined`
+   * via JSON-decode and treat that as "no swap" — same as `false`.
+   */
+  swapped_live: boolean;
+  /**
+   * Phase 124 Plan 05 — reason swap was skipped or failed. `undefined`
+   * when swapped_live is true. Otherwise carries one of:
+   *   - "handle_lacks_swap"  — additive-optional method missing.
+   *   - "swap_threw:<msg>"   — SDK rebuild rejected.
+   */
+  swap_reason?: string;
 }>;
 
 export type CompactSessionResult = CompactSessionSuccess | CompactSessionError;
@@ -249,9 +287,46 @@ export async function handleCompactSession(
     return { ok: false, error: "UNKNOWN", message: msg };
   }
 
+  // Phase 124 Plan 05 — live hot-swap. Rebind the live SessionHandle to the
+  // fork session id so the next dispatch writes to the fork JSONL on disk
+  // (no operator `clawcode restart` needed). Backward compat: when the
+  // handle lacks `swap` or when swap rejects, fall through with
+  // swapped_live:false; the fork artifact + memory.db growth are already
+  // durable, and the operator-manual restart path remains as documented.
+  let swapped_live = false;
+  let swap_reason: string | undefined;
+  const oldSessionId = handle.sessionId;
+  if (typeof handle.swap === "function") {
+    try {
+      await handle.swap(forkResult.sessionId);
+      swapped_live = true;
+      deps.log.info(
+        {
+          agent,
+          oldSessionId,
+          newSessionId: forkResult.sessionId,
+        },
+        "[compact-session] live hot-swap committed",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      swap_reason = `swap_threw:${msg}`;
+      deps.log.warn(
+        { agent, err: msg, oldSessionId, newSessionId: forkResult.sessionId },
+        "[compact-session] live hot-swap rejected; old epoch intact",
+      );
+    }
+  } else {
+    swap_reason = "handle_lacks_swap";
+    deps.log.info(
+      { agent },
+      "[compact-session] handle does not expose swap; skipping live rebind",
+    );
+  }
+
   if (deps.archiveSession) {
     try {
-      deps.archiveSession(agent, handle.sessionId, forkResult.sessionId);
+      deps.archiveSession(agent, oldSessionId, forkResult.sessionId);
     } catch (err) {
       // Best-effort archive — never aborts the compaction.
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -271,6 +346,7 @@ export async function handleCompactSession(
       tokens_after,
       memoriesCreated: compactionResult.memoriesCreated,
       forkedTo: forkResult.sessionId,
+      swapped_live,
     },
     "[compact-session] complete",
   );
@@ -282,5 +358,7 @@ export async function handleCompactSession(
     summary_written: compactionResult.summary.length > 0,
     forked_to: forkResult.sessionId,
     memories_created: compactionResult.memoriesCreated,
+    swapped_live,
+    ...(swap_reason !== undefined ? { swap_reason } : {}),
   };
 }
