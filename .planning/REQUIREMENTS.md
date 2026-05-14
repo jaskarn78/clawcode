@@ -14,7 +14,7 @@
 
 - [ ] **A2A-01** — System delivers `post_to_agent` messages live via Discord webhook; the inbox-heartbeat fallback path is used only when both webhook AND bot-direct delivery have failed, and any fallback emits a structured log line with `{agent, channel, reason}`. *(merges 999.44)*
 - [ ] **A2A-02** — `WebhookManager` invalidates a cached webhook entry on HTTP 401/404 from Discord and re-provisions the webhook via bot before declaring delivery failed. *(merges 999.44 cached-singleton root cause)*
-- [ ] **A2A-03** — Discord queue-state icon transitions atomically through `⏳` (queued) → `👍` (SDK call started) → `✅`/`❌` (terminal); states are mutually exclusive and debounced. *(merges 999.45)*
+- [x] **A2A-03** — Discord queue-state icon transitions atomically through `⏳` (queued) → `👍` (SDK call started) → `✅`/`❌` (terminal); states are mutually exclusive and debounced. *(merges 999.45)* — **Code closed Phase 119 Plan 03 (commits `670931e`, `afcab56`); per-channel mutex + 200ms debounce + sticky terminal states. SC-3 operator-visual screenshot remains deploy-gated.**
 - [ ] **A2A-04** — The `projects` agent's cron-poll emits no output to user-facing channels when nothing requires operator attention; the `HEARTBEAT_OK` no-op is suppressed at the agent's skill layer. *(merges 999.48 — agent-side fix, not daemon)*
 
 ### DASH · Dashboard Backend Observability Cleanup (post-Phase-116)
@@ -75,7 +75,7 @@ Deferred to v3.0 per operator scope confirmation (2026-05-13). v2.9 keeps focus 
 |--------|-------|--------|
 | A2A-01 | Phase 119 | Active |
 | A2A-02 | Phase 119 | Active |
-| A2A-03 | Phase 119 | Active |
+| A2A-03 | Phase 119 | Code-complete (Plan 03; deploy-gated SC-3 screenshot pending) |
 | A2A-04 | Phase 119 | Active |
 | DASH-01 | Phase 120 | Active |
 | DASH-02 | Phase 120 | Active |

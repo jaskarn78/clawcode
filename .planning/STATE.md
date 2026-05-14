@@ -30,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing mil
 
 ## Current Position
 
-Phase: 119 (A2A Delivery Reliability) — Context gathered
-Plan: —
-Status: Context captured, ready for planning
-Last activity: 2026-05-14 — Phase 119 CONTEXT.md written (auto-discuss mode, 10 decisions D-01..D-10 covering bot-direct fallback port from 999.12 IPC-02, WebhookManager 401/404 invalidation, queue-state icon mutex state machine, `no_webhook_fallbacks_total` counter via Phase 116/109 surface, agent-side HEARTBEAT_OK suppression). Next: `/gsd-plan-phase 119 --auto` (auto-chains to execute).
+Phase: 119 (A2A Delivery Reliability) — Wave 2 code-complete (Plans 02 + 03)
+Plan: 119-03 (last shipped Wave 2 plan)
+Status: Code committed, deploy-gated on operator confirmation. Plan 04 (A2A-04, agent-side `HEARTBEAT_OK` suppression) remains.
+Last activity: 2026-05-14 — Phase 119 Wave 2 executed. Plan 119-02 (D-05 no_webhook_fallbacks_total counter + BenchmarksView SLO-styled tile) and Plan 119-03 (A2A-03 queue-state icon mutex state machine, ⏳→👍→✅/❌ with per-channel mutex + 200ms debounce + ≤3-attempt 429 retry + sticky terminal states) landed. Five atomic commits: `e147b92`, `954e3a6`, `42af77b`, `670931e`, `afcab56`. 83/83 tests pass across the four touched test files (fleet-stats, post-to-agent-ipc, queue-state-icon, bridge). 20 pre-existing slash-commands test failures confirmed via baseline `git stash`, logged in `.planning/phases/119-a2a-delivery-reliability/deferred-items.md` — `compact-session` ipcMethod regression dates to a prior phase. Two deviations documented: (Rule 3) BenchmarksView path was `src/dashboard/client/src/components/` not `src/ui/dashboard/`; (Rule 2) bridge.ts pre-119 had no IN_FLIGHT/DELIVERED transition sites — added at start of `streamAndPostResponse` (👍 fires when SDK call begins) and after successful response render (✅ terminal). Open items: (a) SC-5 dashboard screenshot at T+15min post-deploy (counter === 0 verification); (b) SC-3 operator screenshot of ⏳→👍→✅ on a real A2A turn from 2+ channels. Both gated on explicit operator "deploy" / "ship it" per `feedback_no_auto_deploy` and `feedback_ramy_active_no_deploy`. Plan 119-04 (A2A-04, agent-side HEARTBEAT_OK filter in `~/.clawcode/agents/projects/skills/cron-poll/`) is fully parallel (separate workspace repo) and not in this code repo.
 
 **v2.9 phase map (build order — Waves 1/3/4/5/6/7):**
 - Phase 119: A2A Delivery Reliability (A2A-01..04) — Wave 1
