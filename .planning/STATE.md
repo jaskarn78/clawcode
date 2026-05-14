@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Reliability & Routing
-status: defining-phase
-stopped_at: "Roadmap expanded 2026-05-13 — v2.9 scoped to 7 phases (119-125): 119-123 cover original 15 reqs across A2A/DASH/SUB/DISC/MCP; 124-125 fold in operator-requested compaction work (999.51 → 124, 999.52 → 125). Build order: 119 → 120 (parallel) → 121 → 122 → 124 → 125 → 123 (MCP soak — soak window largely satisfied as of 2026-05-13, deferral no longer required). Phase 119 (A2A Delivery Reliability) is next; run /gsd-plan-phase 119. Roadmap heading restructure also fixed analyzer-blind-spot (v2.9 Phase Details → Phase Details — v2.9). Ramy-active deploy hold continues."
-last_updated: "2026-05-13T23:55:00.000Z"
-last_activity: 2026-05-13
+status: phase-119-ready
+stopped_at: "Autonomous delegation attempt 2026-05-14 — the background general-purpose subagent did NOT have Task() access (it can't dispatch named gsd-* subagents like gsd-planner / gsd-executor), so it could not run the GSD workflow chain inside its own context. That constraint applies only to delegated subagents, NOT to the main Claude Code session, which DOES have Agent/Task access to gsd-planner, gsd-executor, gsd-code-reviewer, etc. Path forward: drive autonomous from main context (heavier inline burden) OR phase-by-phase via /gsd-plan-phase 119 (lighter, with operator checkpoints between phases). Phase 119 CONTEXT.md (commit a4a71c6) is ready for plan-phase. Pre-existing plans for 121 (999.36-02/03) and 123 (999.6-02, 999.14-02, 999.15-04) remain in original phase dirs awaiting promotion. Full diagnosis + per-phase status + unblock paths in .planning/v2.9-AUTONOMOUS-RUN.md. Ramy-active deploy hold continues."
+last_updated: "2026-05-14T00:00:00.000Z"
+last_activity: 2026-05-14
 progress:
   total_phases: 7
   completed_phases: 0
