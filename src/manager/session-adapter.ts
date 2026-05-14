@@ -534,6 +534,19 @@ export type SessionHandle = {
    * boundaries by tracking this value across calls.
    */
   getEpoch?: () => number;
+  /**
+   * FIND-123-A.next T-02 — live claude subprocess PID captured by the
+   * structural spawn wrapper at the most recent (re-)spawn.
+   *
+   * Additive-optional: the legacy wrapSdkQuery handle (test-only) does
+   * NOT implement this. Daemon shutdown reads via optional-chaining
+   * (`handle.getClaudePid?.() ?? null`) so test fixtures without the
+   * wrapper still close cleanly via the existing backstop reaper.
+   *
+   * Returns null when the sink has not yet been populated, when the
+   * handle is closed, or when the SDK respawn produced no PID.
+   */
+  getClaudePid?: () => number | null;
 };
 
 /**

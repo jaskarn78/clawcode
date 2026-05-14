@@ -152,6 +152,12 @@ export interface FsCapabilitySnapshot {
 import { AsyncPushQueue, SerialTurnQueue } from "./persistent-session-queue.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 import { mapEffortToTokens } from "./effort-mapping.js";
+// FIND-123-A.next T-02 — structural spawn wrapper for the SDK's
+// `spawnClaudeCodeProcess` hook. Single import point — the closure +
+// per-handle pidSink live for the handle's lifetime so every (re-)spawn
+// inside `buildEpoch` writes the latest pid into the same sink the
+// daemon reads at shutdown via `handle.getClaudePid()`.
+import { makeDetachedSpawn, type ClaudePidSink } from "./detached-spawn.js";
 
 /** Deadline (ms) the abort path waits after calling q.interrupt() before
  *  throwing AbortError. Pitfall 3 guard — SDK may not emit `result` on abort. */
@@ -190,12 +196,28 @@ export function createPersistentSessionHandle(
   // prompt + includePartialMessages for token-level streaming.
   const { mutableSuffix, ...sdkOptions } = baseOptions;
 
+  // FIND-123-A.next T-02 — per-handle mutable PID sink. Populated by
+  // `makeDetachedSpawn` on every (re-)spawn the SDK performs for this
+  // handle; read by the daemon's shutdown path via `getClaudePid()` to
+  // group-kill the claude process tree BEFORE `manager.stopAll()` so MCP
+  // grandchildren can't reparent to PID 1 while the SDK's normal close
+  // runs. Cleared in `close()` so a terminal shutdown never group-kills
+  // a recycled PID. Sink mutates on every spawn (locked sink semantics);
+  // the swap path's `buildEpoch` call rolls the value forward.
+  const pidSink: ClaudePidSink = { pid: null };
+  const detachedSpawn = makeDetachedSpawn(pidSink);
+
   /**
    * Phase 124 Plan 05 — epoch builder. Each call constructs a fresh SDK query
    * + matching AsyncPushQueue + driverIter for the supplied session id. The
    * stripped `sdkOptions` are reused so the swap path inherits the agent's
    * boot-time wiring (model, cwd, systemPrompt, MCP servers, etc.) and only
    * the resume target rolls forward.
+   *
+   * FIND-123-A.next T-02 — `spawnClaudeCodeProcess` flows through every
+   * epoch (initial + every swap). The same `detachedSpawn` closure +
+   * `pidSink` are reused so a swap on claude crash + daemon respawn
+   * updates the sink to the new PID atomically.
    */
   function buildEpoch(resumeSessionId: string): {
     readonly q: SdkQuery;
@@ -217,6 +239,9 @@ export function createPersistentSessionHandle(
         // Cast: local SdkQueryOptions is narrower than the real SDK Options
         // (missing includePartialMessages); see sdk-types.ts deferred-items.
         includePartialMessages: true,
+        // FIND-123-A.next T-02 — structural spawn override; see import
+        // banner above for the lifecycle invariants.
+        spawnClaudeCodeProcess: detachedSpawn,
       } as SdkQueryOptions,
     });
     const iter = (nextQ as unknown as AsyncIterable<SdkStreamMessage>)[Symbol.asyncIterator]();
@@ -1062,6 +1087,10 @@ export function createPersistentSessionHandle(
       // Quick task 260419-nic — clear handle-level interrupt slot so any
       // post-close handle.interrupt() call is a hard no-op.
       currentInterruptFn = null;
+      // FIND-123-A.next T-02 — clear the pid sink at terminal close so a
+      // subsequent daemon shutdown sweep does not group-kill a PID that
+      // has already been recycled by the kernel. Locked sink semantics.
+      pidSink.pid = null;
       inputQueue.end();
       try {
         q.close();
@@ -1288,6 +1317,25 @@ export function createPersistentSessionHandle(
      */
     getEpoch(): number {
       return epoch;
+    },
+
+    /**
+     * FIND-123-A.next T-02 — read the live claude subprocess PID captured
+     * by the structural spawn wrapper at the most recent (re-)spawn.
+     *
+     * Returns null when:
+     *   - the SDK has not yet spawned (race window between handle
+     *     construction and the first `query()`-driven spawn)
+     *   - the handle has been closed (terminal-shutdown sink-clear)
+     *   - the SDK respawn path failed before producing a child PID
+     *
+     * Read by the daemon's shutdown sequence to `process.kill(-pid,
+     * SIGTERM)` the claude process group BEFORE `manager.stopAll()`,
+     * which closes the SDK normally and otherwise lets MCP grandchildren
+     * reparent to PID 1.
+     */
+    getClaudePid(): number | null {
+      return pidSink.pid;
     },
 
     /**
