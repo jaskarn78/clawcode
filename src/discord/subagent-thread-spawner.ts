@@ -891,6 +891,33 @@ export class SubagentThreadSpawner {
       }
     }
     if (autoArchive) {
+      // Phase 999.36 sub-bug D (D-14) — verify delivery was confirmed
+      // before archiving. If lastDeliveryAt is missing (stamp failed
+      // earlier or the spawn never reached the delivery site), do NOT
+      // archive — leave the thread open so the operator can investigate.
+      // The relay above already gated on lastDeliveryAt; this is
+      // defense-in-depth. On read failure, prefer leaving the thread open
+      // (operator can manually archive).
+      let deliveryConfirmed = false;
+      try {
+        const registry = await readThreadRegistry(this.registryPath);
+        const binding = getBindingForThread(registry, thread.id);
+        deliveryConfirmed = Boolean(binding?.lastDeliveryAt);
+        if (!deliveryConfirmed) {
+          this.log.warn(
+            { threadId: thread.id, sessionName, hasBinding: Boolean(binding) },
+            "auto-archive skipped — lastDeliveryAt not confirmed; thread stays open",
+          );
+        }
+      } catch (err) {
+        this.log.warn(
+          { threadId: thread.id, sessionName, error: (err as Error).message },
+          "auto-archive guard read failed (non-fatal); skipping archive",
+        );
+      }
+      if (!deliveryConfirmed) {
+        return;
+      }
       try {
         await this.archiveThread(thread.id);
       } catch (err) {
