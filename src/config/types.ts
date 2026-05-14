@@ -241,4 +241,21 @@ export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // change must run: `clawcode restart <agent>`.
   "agents.*.cacheBreakpointPlacement",
   "defaults.cacheBreakpointPlacement",
+  // Phase 999.54 (D-04) — mcpServers[].alwaysLoad is captured into the SDK's
+  // baseOptions inside session-adapter.ts createSession / resumeSession via
+  // transformMcpServersForSdk (Plan 01) when the session is built; it is NOT
+  // re-read per turn. Same architectural pattern as Phase 100 GSD-07's
+  // settingSources / gsd and Phase 115 sub-scope 2/5's excludeDynamicSections /
+  // cacheBreakpointPlacement above. A clawcode.yaml edit takes effect ONLY on
+  // the NEXT agent restart. Operators wanting an immediate change must run:
+  // `clawcode restart <agent>`. The classifier in differ.ts:144-149 falls
+  // through to `reloadable: false` for unclassified paths; the explicit
+  // entries below match the documentation-of-intent precedent (grep target
+  // for future maintainers + Plan 04 regression-test source-of-truth).
+  // Phase 999.54 Plan 02 also bakes `alwaysLoad: true` into the auto-injected
+  // `clawcode` server at loader.ts:295-304 — fleet-wide preload default;
+  // per-agent overrides (inline-object form) win via the existing
+  // resolvedMcpMap.has("clawcode") gate.
+  "defaults.mcpServers.*.alwaysLoad",
+  "agents.*.mcpServers.*.alwaysLoad",
 ]);
