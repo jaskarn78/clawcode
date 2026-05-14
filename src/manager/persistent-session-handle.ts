@@ -192,6 +192,20 @@ export function createPersistentSessionHandle(
 ): SessionHandle {
   const turnQueue = new SerialTurnQueue();
 
+  // Phase 124 follow-up — turn-start timestamp slot.
+  //
+  // Set at the TOP of the inner callback passed to `turnQueue.run` inside
+  // `send` / `sendAndCollect` / `sendAndStream` (after the queue actually
+  // dispatches the turn — not before, which would count queue-wait time).
+  // Cleared in `finally` so a turn that rejects (AbortError, generator-dead,
+  // etc.) still releases the slot. Read by `compact-session` IPC to enforce
+  // the ERR_TURN_TOO_LONG safety budget (CONTEXT D-03 step 2).
+  //
+  // Deliberately NOT instrumented inside `swap()` — swap also routes through
+  // turnQueue.run but it is not a user turn; instrumenting it would skew the
+  // budget and cause a no-op compaction swap to register as an active turn.
+  let turnStartedAt: number | null = null;
+
   // Strip adapter-only fields; enable streaming input mode via AsyncIterable
   // prompt + includePartialMessages for token-level streaming.
   const { mutableSuffix, ...sdkOptions } = baseOptions;
@@ -1049,8 +1063,13 @@ export function createPersistentSessionHandle(
         throw generatorError ?? new Error(`Session ${sessionId} closed: generator-dead`);
       }
       await turnQueue.run(async () => {
-        inputQueue.push(buildUserMessage(promptWithMutable(message)));
-        await iterateUntilResult(null, turn, options?.signal);
+        turnStartedAt = Date.now();
+        try {
+          inputQueue.push(buildUserMessage(promptWithMutable(message)));
+          await iterateUntilResult(null, turn, options?.signal);
+        } finally {
+          turnStartedAt = null;
+        }
       });
     },
 
@@ -1060,8 +1079,13 @@ export function createPersistentSessionHandle(
         throw generatorError ?? new Error(`Session ${sessionId} closed: generator-dead`);
       }
       return turnQueue.run(async () => {
-        inputQueue.push(buildUserMessage(promptWithMutable(message)));
-        return iterateUntilResult(null, turn, options?.signal);
+        turnStartedAt = Date.now();
+        try {
+          inputQueue.push(buildUserMessage(promptWithMutable(message)));
+          return await iterateUntilResult(null, turn, options?.signal);
+        } finally {
+          turnStartedAt = null;
+        }
       });
     },
 
@@ -1076,8 +1100,13 @@ export function createPersistentSessionHandle(
         throw generatorError ?? new Error(`Session ${sessionId} closed: generator-dead`);
       }
       return turnQueue.run(async () => {
-        inputQueue.push(buildUserMessage(promptWithMutable(message)));
-        return iterateUntilResult(onChunk, turn, options?.signal);
+        turnStartedAt = Date.now();
+        try {
+          inputQueue.push(buildUserMessage(promptWithMutable(message)));
+          return await iterateUntilResult(onChunk, turn, options?.signal);
+        } finally {
+          turnStartedAt = null;
+        }
       });
     },
 
@@ -1202,6 +1231,24 @@ export function createPersistentSessionHandle(
      */
     hasActiveTurn(): boolean {
       return !closed && turnQueue.hasInFlight();
+    },
+
+    /**
+     * Phase 124 follow-up — turn-start timestamp accessor.
+     *
+     * Returns the ms-epoch time the in-flight turn began (set at the top of
+     * the inner turnQueue.run callback inside send / sendAndCollect /
+     * sendAndStream). Null when no turn is in-flight, between turns, after
+     * a resolved or rejected turn, and after close(). Read by the
+     * `compact-session` IPC handler to enforce the ERR_TURN_TOO_LONG safety
+     * budget (CONTEXT D-03 step 2).
+     *
+     * Single source of truth — the daemon mirrors this via SessionManager's
+     * `getTurnStartedAt(name)` rather than maintaining a parallel map.
+     */
+    getTurnStartedAt(): number | null {
+      if (closed) return null;
+      return turnStartedAt;
     },
 
     /**

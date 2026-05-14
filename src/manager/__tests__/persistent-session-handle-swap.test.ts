@@ -281,6 +281,25 @@ describe("createPersistentSessionHandle — swap() epoch boundary", () => {
     await handle.close();
   });
 
+  // Phase 124 follow-up — swap() routes through turnQueue.run but it is NOT
+  // a user turn, so getTurnStartedAt() must remain null. Instrumenting swap
+  // would skew the ERR_TURN_TOO_LONG safety budget and cause a no-op
+  // compaction swap to register as an active turn.
+  it("swap does NOT set turnStartedAt (it is not a user turn)", async () => {
+    const { sdkMock } = buildHarness();
+    const handle = createPersistentSessionHandle(
+      sdkMock as unknown as SdkModule,
+      {},
+      "no-ts-on-swap",
+    );
+
+    expect(handle.getTurnStartedAt?.()).toBeNull();
+    await handle.swap?.("no-ts-on-swap-fork");
+    expect(handle.getTurnStartedAt?.()).toBeNull();
+
+    await handle.close();
+  });
+
   it("swap to same sessionId is a no-op", async () => {
     const { sdkMock } = buildHarness();
     const handle = createPersistentSessionHandle(

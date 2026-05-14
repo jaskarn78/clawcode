@@ -537,4 +537,82 @@ describe("createPersistentSessionHandle", () => {
       expect(getController().interrupt.mock.calls.length).toBe(countBefore);
     });
   });
+
+  // Phase 124 follow-up — getTurnStartedAt() primitive for the
+  // ERR_TURN_TOO_LONG safety budget in handleCompactSession.
+  describe("getTurnStartedAt() primitive", () => {
+    it("returns null on a fresh handle (no send yet)", () => {
+      const { sdkMock } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-ts-fresh",
+      );
+      expect(handle.getTurnStartedAt).toBeDefined();
+      expect(handle.getTurnStartedAt!()).toBeNull();
+    });
+
+    it("returns a ms-epoch number mid-turn, then null after the turn resolves", async () => {
+      const { sdkMock, getController } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-ts-resolve",
+      );
+
+      const t0 = Date.now();
+      const p = handle.sendAndStream("hello", () => undefined);
+      // Two microticks: (1) turnQueue.run slot install, (2) inner callback
+      // runs and sets turnStartedAt before awaiting iterateUntilResult.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const mid = handle.getTurnStartedAt!();
+      expect(mid).not.toBeNull();
+      expect(typeof mid).toBe("number");
+      // Sanity: within a 5s window of the start (CI clock skew tolerance).
+      expect(mid!).toBeGreaterThanOrEqual(t0);
+      expect(mid! - t0).toBeLessThan(5000);
+
+      emitStockTurn(getController(), {
+        text: "r-ts",
+        sessionId: "sess-ts-resolve",
+      });
+      await p;
+
+      expect(handle.getTurnStartedAt!()).toBeNull();
+      await handle.close();
+    });
+
+    it("clears to null after a turn rejects (AbortError path)", async () => {
+      const { sdkMock } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-ts-reject",
+      );
+
+      const p = handle.sendAndStream("slow", () => undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(handle.getTurnStartedAt!()).not.toBeNull();
+
+      handle.interrupt();
+      await expect(p).rejects.toMatchObject({ name: "AbortError" });
+
+      expect(handle.getTurnStartedAt!()).toBeNull();
+      await handle.close();
+    });
+
+    it("returns null after close()", async () => {
+      const { sdkMock } = buildHarness();
+      const handle = createPersistentSessionHandle(
+        sdkMock as unknown as SdkModule,
+        {},
+        "sess-ts-closed",
+      );
+      await handle.close();
+      expect(handle.getTurnStartedAt!()).toBeNull();
+    });
+  });
 });

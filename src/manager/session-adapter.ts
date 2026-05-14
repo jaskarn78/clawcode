@@ -440,6 +440,20 @@ export type SessionHandle = {
    */
   hasActiveTurn: () => boolean;
   /**
+   * Phase 124 follow-up — ms-epoch timestamp the in-flight turn began.
+   *
+   * Returns null on a fresh handle, between turns, and after close(). Set at
+   * the TOP of the inner turnQueue.run callback inside send / sendAndCollect
+   * / sendAndStream (after the queue picks the turn up — not before, which
+   * would count queue-wait time). Cleared in `finally` so a rejected turn
+   * (AbortError, generator-dead) still releases the slot.
+   *
+   * Optional on the type so legacy mock handles and the v2.0 contract stay
+   * compatible — consumers must null-check (`handle.getTurnStartedAt?.()`).
+   * Read by the `compact-session` IPC handler to enforce ERR_TURN_TOO_LONG.
+   */
+  getTurnStartedAt?: () => number | null;
+  /**
    * Phase 85 Plan 01 TOOL-01 — per-handle MCP server state accessor.
    *
    * Mirrors `SessionManager.getMcpStateForAgent(name)` so TurnDispatcher-
