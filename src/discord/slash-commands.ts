@@ -2245,18 +2245,21 @@ export class SlashCommandHandler {
       return;
     }
 
-    // T-02 placeholder — T-03 swaps for the IPC call + success embed; T-04
-    // wraps in try/catch for error-code propagation. Touching this method
-    // until then is a no-op interactively (admin gate is the only behavior
-    // the test asserts at this commit).
+    // T-03 — dispatch the daemon `compact-session` IPC, render the success
+    // embed (T-04 adds try/catch for error-code + thrown-IPC paths).
+    const response = (await sendIpcRequest(
+      SOCKET_PATH,
+      "compact-session",
+      { agent },
+    )) as CompactSessionIpcResponse;
     try {
       await interaction.editReply({
-        content: `(placeholder) /clawcode-session-compact ${agent} — IPC dispatch lands in T-03.`,
+        embeds: [renderCompactEmbed(agent, response)],
       });
     } catch (error) {
       this.log.error(
         { command: "clawcode-session-compact", error: (error as Error).message },
-        "failed to send compact placeholder",
+        "failed to send compact embed",
       );
     }
   }

@@ -224,7 +224,7 @@ describe("Phase 124 Plan 03 — /clawcode-session-compact slash command", () => 
     });
   });
 
-  describe.skip("T-03 — happy path + success embed (lands in T-03 commit)", () => {
+  describe("T-03 — happy path + success embed", () => {
     it("T03-H1: admin happy-path → IPC call compact-session dispatched; editReply with embed", async () => {
       mockedSendIpcRequest.mockResolvedValue(successPayload);
       const routingTable: RoutingTable = {
