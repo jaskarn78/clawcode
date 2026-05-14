@@ -83,6 +83,27 @@ Code lands locally + tests run. Verification on clawdy (SC-2 admin Discord round
 
 ### D-11 — SDK control-call validation FIRST
 Before writing the IPC handler, dispatch a quick local probe: `grep -n "compact\|forkSession\|session-control" node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` to confirm the SDK exposes a `/compact`-equivalent primitive. If yes, plan as-is. If no, file a `BLOCKED-sdk-feature` annotation in `124-01-PLAN.md` and use `forkSession` (mentioned in stack docs) as fallback.
+
+### D-12 — Resolution of D-11 (2026-05-14, operator-chosen): forkSession + summary-prepend
+**Probe outcome (committed at `e3a46ed`):** `@anthropic-ai/claude-agent-sdk@0.2.140` exposes NO callable `/compact` verb. Auto-compaction is option-driven (`autoCompactEnabled`, `autoCompactThreshold`) and result-readable (`PostCompactHookInput.compact_summary`, `SDKCompactBoundaryMessage`) — the SDK reserves the trigger.
+
+**Operator decision (2026-05-14 session):** Path (a) — **forkSession + summary-prepend.** Compaction works as:
+
+1. Daemon receives `clawcode session compact <agent>` IPC call.
+2. Daemon reads the current session JSONL for that agent. Identifies the cut point N (e.g., the last K turns to preserve verbatim; everything before N is "to compact").
+3. Daemon spawns a Haiku worker against the messages before N, generating a structured summary turn.
+4. Daemon calls `forkSession(currentSessionId, { upToMessageId: N })` → gets a new session ID branched at message N.
+5. Daemon prepends the summary as a synthetic first turn in the new fork.
+6. Daemon swaps the live worker to the new session ID. Old session ID is archived (kept on disk for operator audit; not deleted).
+7. `memory.db` untouched throughout — D-04 invariance holds.
+
+**Semantics differ from `/compact`:** the operator gets a NEW session ID, not a compacted same-session. The session JSONL on disk shrinks (new fork starts smaller); the old fork is preserved for audit.
+
+**Stdout payload (SC-1):** `tokens_before` (full session), `tokens_after` (new fork including summary turn), `summary_written: true`, plus new field `forked_to: <new_session_id>` (transparent about the fork mechanism — operators see what changed).
+
+**Wave structure unchanged** (124-00 → 124-01 → 124-02 parallel → 124-03 + 124-04 in Wave 2), but Plan 01 task T-03 specifically targets the forkSession+summary-prepend flow per this decision.
+
+**Phase 125 unblocked.** The tiered retention algorithm builds on this primitive: Tier 2 structured extraction produces the summary content; Tier 1 verbatim preservation maps to the "last K turns" the fork preserves; Tier 4 drop rules are applied inside the Haiku summarizer's input filtering.
 </decisions>
 
 <code_context>
