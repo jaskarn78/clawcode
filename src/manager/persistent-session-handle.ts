@@ -1,25 +1,34 @@
 /**
  * Phase 73 Plan 01 — Persistent per-agent SDK session handle.
  *
- * ONE sdk.query({ prompt: asyncIterable, options: {...} }) per agent lifetime.
- * Turns are fed via an AsyncPushQueue<SDKUserMessage>; outputs stream out of
- * the single generator. The SerialTurnQueue guarantees depth-1 semantics.
+ * ONE sdk.query({ prompt: asyncIterable, options: {...} }) per agent lifetime
+ * PER EPOCH. `handle.swap(newSessionId)` opens a new epoch by closing the
+ * current SDK query and constructing a fresh one resumed against the new
+ * session id (Phase 124 Plan 05 — live hot-swap for operator-triggered
+ * compaction). Within a single epoch the original invariants hold; the swap
+ * is gated through the SerialTurnQueue so it cannot interleave with an
+ * in-flight turn.
  *
  * Replaces wrapSdkQuery's per-turn sdk.query() pattern from session-adapter.ts.
  * See 73-RESEARCH.md Pattern 1 for the SDK contract + Pitfalls 1/2/3.
  *
- * Invariants (enforced by tests in __tests__/persistent-session-handle.test.ts):
- *   - Exactly ONE sdk.query() call per handle, regardless of turn count.
- *   - The driverIter (Query[Symbol.asyncIterator]) is captured ONCE and consumed
- *     across all turns; each per-turn `iterateUntilResult` breaks out when its
- *     `result` message arrives, leaving the next turn's messages for the next
- *     invocation.
+ * Invariants (enforced by tests in __tests__/persistent-session-handle.test.ts
+ * + __tests__/persistent-session-handle-swap.test.ts):
+ *   - Exactly ONE sdk.query() call per handle PER EPOCH, regardless of turn
+ *     count within that epoch. Swap opens a new epoch.
+ *   - The driverIter (Query[Symbol.asyncIterator]) is captured ONCE per epoch
+ *     and consumed across all turns in that epoch; each per-turn
+ *     `iterateUntilResult` breaks out when its `result` message arrives,
+ *     leaving the next turn's messages for the next invocation.
  *   - Abort mid-turn races `q.interrupt()` with a 2s deadline. First to fire
  *     ends the turn handler with an AbortError and releases the queue slot.
  *   - onError fires when the generator throws; any in-flight turn rejects with
  *     the same error; `generatorDead` flag prevents further sends.
  *   - SessionHandle public surface is byte-identical to session-adapter's
- *     SessionHandle type.
+ *     SessionHandle type (swap is an additive-optional extension).
+ *   - swap() builds the new SDK query BEFORE closing the old one. If the SDK
+ *     rejects the rebuild, the old epoch remains intact and the caller sees
+ *     swap rejection; never leaves the handle in a half-built state.
  */
 
 import type { SdkModule, SdkQuery, SdkQueryOptions, SdkStreamMessage, SdkUserMessage, SlashCommand, PermissionMode } from "./sdk-types.js";
@@ -175,33 +184,57 @@ export function createPersistentSessionHandle(
   // observer is a no-op. RESEARCH §13.10 (production wiring).
   advisorObserver?: AdvisorObserverConfig,
 ): SessionHandle {
-  const inputQueue = new AsyncPushQueue<SdkUserMessage>();
   const turnQueue = new SerialTurnQueue();
 
   // Strip adapter-only fields; enable streaming input mode via AsyncIterable
   // prompt + includePartialMessages for token-level streaming.
   const { mutableSuffix, ...sdkOptions } = baseOptions;
-  const q: SdkQuery = sdk.query({
-    // AsyncPushQueue<SdkUserMessage> is an AsyncIterable<SdkUserMessage>.
-    // The real SDK type is AsyncIterable<SDKUserMessage> with a richer shape;
-    // SdkUserMessage is our narrower local projection — the SDK accepts any
-    // iterable of user messages, and the extra fields we push (message,
-    // parent_tool_use_id) are ignored by the SdkUserMessage cast.
-    prompt: inputQueue as unknown as AsyncIterable<SdkUserMessage>,
-    options: {
-      ...sdkOptions,
-      resume: initialSessionId,
-      // Token-level streaming — adapter's stream_event branch consumes these.
-      // Cast: local SdkQueryOptions is narrower than the real SDK Options
-      // (missing includePartialMessages); see sdk-types.ts deferred-items.
-      includePartialMessages: true,
-    } as SdkQueryOptions,
-  });
 
-  // Capture ONE iterator for the whole handle lifetime (Pattern 1 invariant).
-  const driverIter = (q as unknown as AsyncIterable<SdkStreamMessage>)[Symbol.asyncIterator]();
+  /**
+   * Phase 124 Plan 05 — epoch builder. Each call constructs a fresh SDK query
+   * + matching AsyncPushQueue + driverIter for the supplied session id. The
+   * stripped `sdkOptions` are reused so the swap path inherits the agent's
+   * boot-time wiring (model, cwd, systemPrompt, MCP servers, etc.) and only
+   * the resume target rolls forward.
+   */
+  function buildEpoch(resumeSessionId: string): {
+    readonly q: SdkQuery;
+    readonly inputQueue: AsyncPushQueue<SdkUserMessage>;
+    readonly driverIter: AsyncIterator<SdkStreamMessage>;
+  } {
+    const ipq = new AsyncPushQueue<SdkUserMessage>();
+    const nextQ: SdkQuery = sdk.query({
+      // AsyncPushQueue<SdkUserMessage> is an AsyncIterable<SdkUserMessage>.
+      // The real SDK type is AsyncIterable<SDKUserMessage> with a richer shape;
+      // SdkUserMessage is our narrower local projection — the SDK accepts any
+      // iterable of user messages, and the extra fields we push (message,
+      // parent_tool_use_id) are ignored by the SdkUserMessage cast.
+      prompt: ipq as unknown as AsyncIterable<SdkUserMessage>,
+      options: {
+        ...sdkOptions,
+        resume: resumeSessionId,
+        // Token-level streaming — adapter's stream_event branch consumes these.
+        // Cast: local SdkQueryOptions is narrower than the real SDK Options
+        // (missing includePartialMessages); see sdk-types.ts deferred-items.
+        includePartialMessages: true,
+      } as SdkQueryOptions,
+    });
+    const iter = (nextQ as unknown as AsyncIterable<SdkStreamMessage>)[Symbol.asyncIterator]();
+    return { q: nextQ, inputQueue: ipq, driverIter: iter };
+  }
+
+  // Epoch-0 binding. Mutated by handle.swap (Phase 124 Plan 05) — every
+  // closure that reads q / inputQueue / driverIter must do so via these
+  // bindings, NEVER via a captured local copy, so the swap takes effect on
+  // the very next dispatch.
+  let { q, inputQueue, driverIter } = buildEpoch(initialSessionId);
 
   let sessionId = initialSessionId;
+  // Phase 124 Plan 05 — monotonic epoch counter. Incremented on every
+  // successful swap; exposed via handle.getEpoch() for test assertions and
+  // for downstream consumers that need to observe an epoch boundary (e.g.
+  // skill caches or prefix-hash provider invalidation).
+  let epoch = 0;
   // Phase 83 EFFORT-04 — widened from v2.1 set ("low"|"medium"|"high"|"max")
   // to the full v2.2 EffortLevel union (adds "xhigh", "auto", "off").
   let currentEffort: EffortLevel =
@@ -1140,6 +1173,121 @@ export function createPersistentSessionHandle(
      */
     hasActiveTurn(): boolean {
       return !closed && turnQueue.hasInFlight();
+    },
+
+    /**
+     * Phase 124 Plan 05 — live hot-swap to a forked SDK session.
+     *
+     * Closes the current SDK Query and constructs a fresh one resumed
+     * against `newSessionId`. The handle identity is preserved; downstream
+     * consumers (daemon `sessions` Map, Discord bridge, etc.) keep their
+     * existing reference. The swap is serialized through the SerialTurnQueue
+     * so it cannot interleave with an in-flight `send` — when a turn is
+     * mid-flight, the swap enqueues and runs after the turn resolves.
+     *
+     * Fallback safety: the new SDK query is constructed BEFORE the old one
+     * is closed. If `sdk.query` throws on the rebuild path, the old epoch
+     * remains intact and the rejection propagates to the caller — the
+     * compaction handler then surfaces `swapped_live: false` and the
+     * operator-manual `clawcode restart` path stays available.
+     *
+     * No-op when the handle is closed or when `newSessionId` equals the
+     * current sessionId (re-swap to the same id is wasted work).
+     *
+     * Resets `supportedCommandsCache` so the next caller re-pulls
+     * `q.initializationResult()` from the new SDK query. Re-applies
+     * `currentModel` / `currentEffort` / `currentPermissionMode` on the
+     * new q so the operator-visible state survives the epoch boundary.
+     */
+    async swap(newSessionId: string): Promise<void> {
+      if (closed) {
+        throw new Error(`Session ${sessionId} is closed; cannot swap`);
+      }
+      if (newSessionId === sessionId) {
+        // Idempotent no-op — same epoch.
+        return;
+      }
+      // Serialize behind any in-flight turn. SerialTurnQueue is depth-1, so
+      // a 2nd concurrent swap rejects with QUEUE_FULL — same shape as the
+      // 3rd-concurrent-send case. Caller (daemon-compact-session-ipc) catches
+      // and reports swapped_live:false on rejection.
+      await turnQueue.run(async () => {
+        // Build the new epoch FIRST (commit-point safety). If sdk.query
+        // throws, the old q/inputQueue/driverIter are untouched and the
+        // caller sees the rejection; no half-built state.
+        const next = buildEpoch(newSessionId);
+
+        // Past the commit point — tear down the old epoch.
+        try {
+          inputQueue.end();
+        } catch {
+          // Best-effort — old queue may already be ended.
+        }
+        try {
+          q.close();
+        } catch {
+          // Best-effort — old SDK query may already be closing.
+        }
+
+        // Swap closure bindings — every closure that reads via `q`,
+        // `driverIter`, `inputQueue` resolves the binding at call time, so
+        // the next `send` dispatches into the new SDK query.
+        q = next.q;
+        inputQueue = next.inputQueue;
+        driverIter = next.driverIter;
+        sessionId = newSessionId;
+        epoch += 1;
+
+        // New SDK query — clear generator-dead flag (it tracks the OLD
+        // generator's lifecycle, and the swap discarded that generator
+        // intentionally) and invalidate the cached supported-commands.
+        generatorDead = false;
+        generatorError = null;
+        supportedCommandsCache = null;
+
+        // Re-apply per-handle runtime mutations on the new q so the
+        // operator-visible state survives the epoch boundary. Each setter
+        // is fire-and-forget on the SDK side (sdk.d.ts:1704/1711/1728 are
+        // async but the handle's existing setters never await); we mirror
+        // that contract here so swap stays fast.
+        try {
+          const budget = mapEffortToTokens(currentEffort);
+          void q.setMaxThinkingTokens(budget).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[swap] setMaxThinkingTokens(${String(budget)}) failed: ${msg}`);
+          });
+        } catch {
+          // Never let reapply failure poison the swap.
+        }
+        if (currentModel !== undefined) {
+          try {
+            void q.setModel(currentModel).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.warn(`[swap] setModel(${currentModel}) failed: ${msg}`);
+            });
+          } catch {
+            // Never let reapply failure poison the swap.
+          }
+        }
+        try {
+          void q.setPermissionMode(currentPermissionMode).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[swap] setPermissionMode(${currentPermissionMode}) failed: ${msg}`);
+          });
+        } catch {
+          // Never let reapply failure poison the swap.
+        }
+      });
+    },
+
+    /**
+     * Phase 124 Plan 05 — observable epoch counter. Starts at 0; incremented
+     * once per successful `swap`. Tests assert the boundary; downstream
+     * consumers (prefix-hash provider, etc.) can detect a fresh SDK query
+     * by tracking this value across calls.
+     */
+    getEpoch(): number {
+      return epoch;
     },
 
     /**

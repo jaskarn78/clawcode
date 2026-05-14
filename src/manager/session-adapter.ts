@@ -506,6 +506,34 @@ export type SessionHandle = {
    * when the SDK init handshake races the first caller.
    */
   getSupportedCommands: () => Promise<readonly SlashCommand[]>;
+  /**
+   * Phase 124 Plan 05 — live hot-swap to a forked SDK session.
+   *
+   * Closes the current SDK Query and reopens one resumed against
+   * `newSessionId`, preserving handle identity. The daemon's
+   * `sessions` Map and Discord bridge keep their existing reference;
+   * the next `send` dispatches into the new SDK query, writing to
+   * the fork JSONL on disk instead of the original.
+   *
+   * Serialized through the SerialTurnQueue so it cannot interleave
+   * with an in-flight turn. Returns a Promise that resolves AFTER
+   * the underlying SDK rebuild succeeds; rejects (without disturbing
+   * the old epoch) when sdk.query throws on the rebuild path.
+   *
+   * Additive-optional: the legacy wrapSdkQuery handle does NOT
+   * implement this (test-only path; no production caller). The
+   * Phase 124 Plan 01 `daemon-compact-session-ipc.ts` handler treats
+   * a missing `swap` as `swapped_live: false` so backward compat is
+   * preserved end-to-end.
+   */
+  swap?: (newSessionId: string) => Promise<void>;
+  /**
+   * Phase 124 Plan 05 — monotonic epoch counter. Starts at 0;
+   * incremented once per successful swap. Tests + observability
+   * consumers (prefix-hash provider, skill caches) can detect epoch
+   * boundaries by tracking this value across calls.
+   */
+  getEpoch?: () => number;
 };
 
 /**
