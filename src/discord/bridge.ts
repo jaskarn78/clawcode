@@ -1263,11 +1263,17 @@ export class DiscordBridge {
     response: string,
     resolvedAgent?: string,
   ): Promise<void> {
-    // Try webhook delivery if agent has a webhook configured
+    // Try webhook delivery if agent has a webhook configured. WebhookManager.send
+    // wraps internally — caller does not pre-wrap. Pass raw response through.
     if (resolvedAgent && this.webhookManager?.hasWebhook(resolvedAgent)) {
       await this.webhookManager.send(resolvedAgent, response);
       return;
     }
+
+    // Phase 122 — channel.send fallback (no webhook). Wrap once at the
+    // chokepoint so both the single-message and chunked branches inherit
+    // the wrap. Idempotent under repeat application.
+    const wrapped = wrapMarkdownTablesInCodeFence(response);
 
     const MAX_LENGTH = 2000;
     const channel = originalMessage.channel;
@@ -1276,13 +1282,12 @@ export class DiscordBridge {
       return;
     }
 
-    if (response.length <= MAX_LENGTH) {
-      await channel.send(response);
+    if (wrapped.length <= MAX_LENGTH) {
+      await channel.send(wrapped);
       return;
     }
 
-    // Split long responses
-    const chunks = splitMessage(response, MAX_LENGTH);
+    const chunks = splitMessage(wrapped, MAX_LENGTH);
     for (const chunk of chunks) {
       await channel.send(chunk);
     }
