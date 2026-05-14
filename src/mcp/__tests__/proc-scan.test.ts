@@ -51,7 +51,6 @@ import {
   readProcInfo,
   procAgeSeconds,
   listAllPids,
-  discoverClaudeSubprocessPid,
 } from "../proc-scan.js";
 
 const isLinux = process.platform === "linux";
@@ -260,17 +259,14 @@ describe("procAgeSeconds", () => {
 });
 
 /* =========================================================================
- *  Phase 999.15 extensions — RED tests for TRACK-01 substrate (isPidAlive +
- *  discoverClaudeSubprocessPid minAge opts).
+ *  Phase 999.15 extensions — isPidAlive coverage (TRACK-01 substrate).
  *
- *  All cases below FAIL at Wave 0 because:
- *    - PS-1..PS-5: src/mcp/proc-scan.ts does not export isPidAlive yet
- *      (Plan 01 adds it).
- *    - PS-6..PS-7: discoverClaudeSubprocessPid signature is currently
- *      (daemonPid) → Promise<number | null>; Plan 01 adds the optional
- *      { minAge?, bootTimeUnix?, clockTicksPerSec? } opts argument.
- *
- *  No 999.14 cases above are modified — strict append.
+ *  PS-6 and PS-7 originally pinned `discoverClaudeSubprocessPid` minAge opts
+ *  behavior; both were retired in FIND-123-A.next T-09 when the function
+ *  itself was removed (sink-based PID lookup replaces the /proc walk).
+ *  The static-grep sentinel at
+ *  `src/mcp/__tests__/static-grep-discoverClaudeSubprocessPid.test.ts`
+ *  pins the deletion.
  * =======================================================================*/
 
 describe("Phase 999.15 extensions", () => {
@@ -359,13 +355,12 @@ describe("Phase 999.15 extensions", () => {
       return Promise.reject(err);
     });
 
-    const result = await discoverClaudeSubprocessPid(daemonPid, {
-      minAge: 10,
-      bootTimeUnix,
-      clockTicksPerSec,
-    });
-
-    expect(result).toBe(4002);
+    // FIND-123-A.next T-09 — discoverClaudeSubprocessPid deleted. This test
+    // body is preserved for archaeology but the import path is gone; we
+    // assert the symbol is unavailable instead of exercising the old logic.
+    const mod = await import("../proc-scan.js");
+    expect((mod as Record<string, unknown>).discoverClaudeSubprocessPid).toBeUndefined();
+    void daemonPid; void bootTimeUnix; void clockTicksPerSec; void startTimeFor;
   });
 
   it("PS-7: discoverClaudeSubprocessPid with no opts → existing behavior unchanged (regression pin)", async () => {
@@ -390,7 +385,9 @@ describe("Phase 999.15 extensions", () => {
       return Promise.reject(err);
     });
 
-    const result = await discoverClaudeSubprocessPid(daemonPid);
-    expect(result).toBe(4001);
+    // FIND-123-A.next T-09 — see PS-6 retirement note.
+    const mod = await import("../proc-scan.js");
+    expect((mod as Record<string, unknown>).discoverClaudeSubprocessPid).toBeUndefined();
+    void daemonPid;
   });
 });

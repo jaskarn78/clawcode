@@ -244,88 +244,10 @@ export function readClockTicksPerSec(): number {
   return 100;
 }
 
-/**
- * Phase 999.15 — optional filter knobs for discoverClaudeSubprocessPid.
- *
- * When `minAge` is set, candidates younger than that many seconds are filtered
- * out (defense against the SDK respawn race observed in the 999.14 deploy:
- * the dying first-PID was registered before the surviving second-PID settled).
- * Caller must supply `bootTimeUnix` + `clockTicksPerSec` so the function does
- * NOT re-read /proc/stat on every call (those values are cached at daemon
- * boot via readBootTimeUnix() + readClockTicksPerSec()).
- */
-export interface DiscoverClaudeOpts {
-  readonly minAge?: number; // seconds
-  readonly bootTimeUnix?: number;
-  readonly clockTicksPerSec?: number;
-}
-
-/**
- * Phase 999.14 MCP-01 — discover the agent's `claude` CLI subprocess PID.
- *
- * The Claude Agent SDK does not expose the spawned subprocess PID via its
- * public API (verified against sdk.d.ts), so we walk /proc and find the
- * most-recently-started process whose ppid === daemonPid AND whose
- * cmdline[0] ends with /claude OR is exactly "claude".
- *
- * Returns the PID with the highest startTimeJiffies (most recent) or null
- * if no match. Linux-only: returns null on non-Linux (where /proc reads
- * throw, the catch-and-return-null path is taken).
- *
- * Implementation note: scans the full /proc list once. For a daemon
- * managing 14+ agents, that's a single ~50ms call per startAgent — cheap.
- * Non-Linux returns null (test-friendly).
- *
- * Phase 999.15 — accepts optional opts. `opts.minAge` requires
- * `opts.bootTimeUnix` + `opts.clockTicksPerSec` to be supplied (caller-bug
- * surface — throws on missing). Default behavior with no opts is byte-
- * identical to 999.14 (regression-pinned by PS-7).
- */
-export async function discoverClaudeSubprocessPid(
-  daemonPid: number,
-  opts?: DiscoverClaudeOpts,
-): Promise<number | null> {
-  let pids: readonly number[];
-  try {
-    pids = await listAllPids();
-  } catch {
-    return null; // /proc unavailable (non-Linux)
-  }
-  let best: { pid: number; startTimeJiffies: number } | null = null;
-  for (const pid of pids) {
-    let info: ProcInfo | null;
-    try {
-      info = await readProcInfo(pid);
-    } catch {
-      continue;
-    }
-    if (!info) continue;
-    if (info.ppid !== daemonPid) continue;
-    const argv0 = info.cmdline[0] ?? "";
-    // Match "/path/to/claude" OR exact "claude" (npm-bin shim).
-    if (!/(?:^|\/)claude$/.test(argv0)) continue;
-    if (opts?.minAge !== undefined) {
-      if (
-        opts.bootTimeUnix === undefined ||
-        opts.clockTicksPerSec === undefined
-      ) {
-        throw new Error(
-          "discoverClaudeSubprocessPid: opts.minAge requires opts.bootTimeUnix + opts.clockTicksPerSec",
-        );
-      }
-      const age = procAgeSeconds({
-        startTimeJiffies: info.startTimeJiffies,
-        bootTimeUnix: opts.bootTimeUnix,
-        clockTicksPerSec: opts.clockTicksPerSec,
-      });
-      if (age < opts.minAge) continue;
-    }
-    if (!best || info.startTimeJiffies > best.startTimeJiffies) {
-      best = { pid: info.pid, startTimeJiffies: info.startTimeJiffies };
-    }
-  }
-  return best?.pid ?? null;
-}
+// FIND-123-A.next T-09 — `discoverClaudeSubprocessPid` + `DiscoverClaudeOpts`
+// removed. Claude PIDs now come from the per-handle `ClaudePidSink` populated
+// by the structural spawn wrapper (`src/manager/detached-spawn.ts`); reintro
+// is pinned by the static-grep test under `src/mcp/__tests__/`.
 
 /**
  * Phase 999.14 MCP-01 — enumerate MCP child PIDs spawned by the given
