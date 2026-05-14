@@ -104,6 +104,40 @@ describe("mcpServerSchema", () => {
   });
 });
 
+describe("mcpServerSchema alwaysLoad (Phase 999.54 D-01, D-02)", () => {
+  it("omits alwaysLoad from parsed output when not declared (byte-stable)", () => {
+    const parsed = mcpServerSchema.parse({
+      name: "clawcode",
+      command: "clawcode",
+      args: ["mcp"],
+    });
+    // RESEARCH.md Pitfall 3 — must NOT be `alwaysLoad: undefined` (would break
+    // byte-stable deep-equality). The key MUST be absent from the parsed object.
+    expect(Object.prototype.hasOwnProperty.call(parsed, "alwaysLoad")).toBe(false);
+  });
+
+  it("accepts alwaysLoad: true and round-trips it (D-01)", () => {
+    const parsed = mcpServerSchema.parse({
+      name: "clawcode",
+      command: "clawcode",
+      args: ["mcp"],
+      alwaysLoad: true,
+    });
+    expect(parsed.alwaysLoad).toBe(true);
+  });
+
+  it("rejects stringly-typed alwaysLoad with a zod error (strict boolean, D-02)", () => {
+    expect(() =>
+      mcpServerSchema.parse({
+        name: "clawcode",
+        command: "clawcode",
+        args: ["mcp"],
+        alwaysLoad: "true",
+      }),
+    ).toThrow();
+  });
+});
+
 describe("configSchema - mcpServers", () => {
   it("accepts top-level shared mcpServers definitions", () => {
     const result = configSchema.safeParse({

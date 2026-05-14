@@ -38,7 +38,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
  * clean RED.
  */
 
-import { createTracedSessionHandle } from "../session-adapter.js";
+import { createTracedSessionHandle, transformMcpServersForSdk } from "../session-adapter.js";
 
 type MockTurn = {
   startSpan: ReturnType<typeof vi.fn>;
@@ -1398,5 +1398,59 @@ describe("Phase 100 — settingSources + gsd.projectDir flow into baseOptions", 
       "/home/clawcode/.clawcode/agents/fin-acquisition",
     );
     expect(resumeOptions.settingSources).toEqual(["project"]);
+  });
+});
+
+// Phase 999.54 D-01a — first direct test coverage for transformMcpServersForSdk.
+// Pre-Phase-999.54 the function had ZERO tests (RESEARCH.md Pitfall 2 — the
+// silent strip of `alwaysLoad` would have been caught by a single such test).
+// These cases pin both the set-path and the omission-byte-stable-path so a
+// future maintainer who flips Plan 01's spread-conditional to a
+// `field: cond ? val : undefined` form is caught immediately.
+describe("transformMcpServersForSdk (Phase 999.54 D-01a)", () => {
+  it("passes alwaysLoad: true through to the SDK Record output", () => {
+    const result = transformMcpServersForSdk([
+      {
+        name: "clawcode",
+        command: "clawcode",
+        args: ["mcp"],
+        env: {},
+        alwaysLoad: true,
+      },
+    ]);
+    expect(result).toBeDefined();
+    expect(result!.clawcode!.alwaysLoad).toBe(true);
+    // Sanity — other fields still present
+    expect(result!.clawcode!.command).toBe("clawcode");
+    expect(result!.clawcode!.args).toEqual(["mcp"]);
+  });
+
+  it("OMITS alwaysLoad from the SDK output when input entry does not set it (byte-stable, RESEARCH.md Pitfall 3)", () => {
+    const result = transformMcpServersForSdk([
+      {
+        name: "1password",
+        command: "clawcode",
+        args: ["mcp-broker-shim", "--pool", "1password"],
+        env: {},
+        // no alwaysLoad — must NOT appear in output
+      },
+    ]);
+    expect(result).toBeDefined();
+    // Critical: `alwaysLoad: undefined` is NOT acceptable. The key must be absent.
+    expect(
+      Object.prototype.hasOwnProperty.call(result!["1password"]!, "alwaysLoad"),
+    ).toBe(false);
+  });
+
+  it("preserves byte-stable shape for a mixed input (some entries with alwaysLoad, some without)", () => {
+    const result = transformMcpServersForSdk([
+      { name: "clawcode", command: "clawcode", args: ["mcp"], env: {}, alwaysLoad: true },
+      { name: "1password", command: "clawcode", args: ["mcp-broker-shim"], env: {} },
+    ]);
+    expect(result).toBeDefined();
+    expect(result!.clawcode!.alwaysLoad).toBe(true);
+    expect(
+      Object.prototype.hasOwnProperty.call(result!["1password"]!, "alwaysLoad"),
+    ).toBe(false);
   });
 });
