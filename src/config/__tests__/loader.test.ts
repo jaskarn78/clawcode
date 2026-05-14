@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -393,6 +393,135 @@ describe("resolveAgentConfig", () => {
     expect(res.memoryPath).toBe(
       join(homedir(), "shared/finmentum/fin-research"),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 999.54 — mcpServers alwaysLoad cascade (D-03a, D-03/OQ-3, D-05a)
+  //
+  // Three pins (one it() each):
+  //   1. auto-inject brings alwaysLoad: true on clawcode when agent yaml
+  //      does NOT declare a clawcode entry (D-03a).
+  //   2. per-agent inline-object override wins over auto-inject — yaml
+  //      `alwaysLoad: false` produces field-absent in resolved (Plan 02
+  //      spread-conditional at loader.ts:498) which still signals "auto-
+  //      inject bypassed". Forbidden outcome: alwaysLoad: true (D-03/OQ-3).
+  //   3. console.info("phase999.54-resolver", ...) log line emitted with
+  //      payload listing alwaysLoadServers: ["clawcode"] (D-05a — closest
+  //      automated proxy for the live-clawdy journalctl verification
+  //      gated to Plan 05).
+  // -------------------------------------------------------------------------
+  it("Phase 999.54 D-03a — auto-inject bakes alwaysLoad: true into the clawcode server when agent does not declare it", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "phase99954-default-agent",
+          workspace: "~/test-ws",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          // No clawcode entry — auto-inject path.
+          mcpServers: [],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const resolved = resolveAllAgents(config);
+    const agent = resolved.find((a) => a.name === "phase99954-default-agent");
+    expect(agent).toBeDefined();
+    const clawcodeServer = agent!.mcpServers.find((s) => s.name === "clawcode");
+    expect(clawcodeServer).toBeDefined();
+    expect(clawcodeServer!.alwaysLoad).toBe(true);
+  });
+
+  it("Phase 999.54 D-03/OQ-3 — per-agent inline-object clawcode override wins over auto-inject", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "phase99954-override-agent",
+          workspace: "~/test-ws",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [
+            // Inline-object form (not string-ref) — required to set alwaysLoad
+            // per RESEARCH.md Pitfall 6. Operator opts OUT of preload.
+            {
+              name: "clawcode",
+              command: "clawcode",
+              args: ["mcp"],
+              env: {},
+              alwaysLoad: false,
+            },
+          ],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const resolved = resolveAllAgents(config);
+    const agent = resolved.find((a) => a.name === "phase99954-override-agent");
+    expect(agent).toBeDefined();
+    const clawcodeServer = agent!.mcpServers.find((s) => s.name === "clawcode");
+    expect(clawcodeServer).toBeDefined();
+    // Plan 02 Task 2's spread-conditional at loader.ts:498 emits the field ONLY
+    // when `=== true`. Per-agent `alwaysLoad: false` in yaml → field absent in
+    // resolved entry. Either explicit `false` or absent both satisfy
+    // "auto-inject bypassed"; FORBIDDEN outcome is `alwaysLoad: true`.
+    expect(clawcodeServer!.alwaysLoad).not.toBe(true);
+  });
+
+  it("Phase 999.54 D-05a — emits phase999.54-resolver console.info line listing alwaysLoad servers", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "phase99954-log-agent",
+          workspace: "~/test-ws",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      resolveAllAgents(config);
+      // Find the log call whose first arg is the D-05a key. Other log lines
+      // from the loader are ignored.
+      const call = infoSpy.mock.calls.find(
+        (args) => args[0] === "phase999.54-resolver",
+      );
+      expect(call).toBeDefined();
+      const payload = JSON.parse(call![1] as string);
+      expect(payload.agent).toBe("phase99954-log-agent");
+      expect(payload.alwaysLoadServers).toContain("clawcode");
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
   // -------------------------------------------------------------------------
