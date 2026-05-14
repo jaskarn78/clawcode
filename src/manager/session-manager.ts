@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
 import { logger } from "../shared/logger.js";
 import { SessionError } from "../shared/errors.js";
-// Phase 999.14 MCP-01 — /proc-walk PID discovery for the daemon-wide tracker.
-import {
-  discoverClaudeSubprocessPid,
-  discoverAgentMcpPids,
-} from "../mcp/proc-scan.js";
+// FIND-123-A.next T-04 — /proc-walk PID discovery removed in favor of
+// handle.getClaudePid() (sink populated by makeDetachedSpawn). Only the
+// MCP-children walk remains; discoverClaudeSubprocessPid stays exported
+// from proc-scan.ts because the periodic reconciler (recovery path) at
+// src/mcp/reconciler.ts still needs it for stale-claude rediscovery.
+import { discoverAgentMcpPids } from "../mcp/proc-scan.js";
 
 /**
  * Phase 999.15 TRACK-02 — polled discovery budget for the agent.start MCP
@@ -967,61 +968,43 @@ export class SessionManager {
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
 
-    // Phase 999.15 TRACK-02 — POLLED discovery (replaces the prior 1s
-    // fire-and-forget settle). The 2026-04-30 deploy on clawdy revealed the
-    // SDK respawns claude during warmup; the dying-first-PID was registered
-    // before the surviving second-PID settled. We now poll up to 6×5s with
-    // minAge=5s — the dying-first-PID dies in 2-3s, so the age filter
-    // excludes it and we only register stable claudes.
+    // FIND-123-A.next T-04 — sink-based claudePid acquisition (replaces the
+    // Phase 999.15 TRACK-02 polled /proc-walk discovery via
+    // discoverClaudeSubprocessPid).
     //
-    // Wrapped in best-effort try/catch so /proc-walk failures NEVER block
-    // agent startup. If the 30s budget elapses with no match, we log warn
-    // and exit — the 60s reaper tick (TRACK-01 reconciler) catches up.
+    // The structural spawn wrapper (T-02) writes the live claude subprocess
+    // PID into the handle's pidSink synchronously inside the SDK's
+    // `spawnLocalProcess` callback, so by the time the first `query()` has
+    // emitted any data the sink is populated. The race window between
+    // handle construction and SDK spawn is small but non-zero — we poll
+    // the sink with the same 30s budget (6×5s) so a slow SDK init does
+    // not skip registration. Polling stays fire-and-forget so warmup
+    // never blocks on it.
     //
-    // The polled loop ALSO checks this.sessions.has(name) before each
-    // attempt so disposal during the wait aborts cleanly (no zombie
-    // registration for an already-stopped agent).
+    // sessions.has(name) check at every iteration short-circuits if the
+    // operator stops the agent during the wait (Pitfall 6 — abort on
+    // dispose). Reaper reconciliation (`mcp/reconciler.ts:reconcileAgent`,
+    // recovery path) still uses /proc discovery to rediscover after an
+    // SDK respawn — that path is intentionally out of scope here.
     if (this.mcpTracker) {
       lastStep = "mcp-discovery";
-      const bootTimeUnix = this.mcpBootTimeUnix;
-      const clockTicksPerSec = this.mcpClockTicksPerSec;
       void (async () => {
         try {
-          // Polled discovery: complete the FULL 6-attempt budget so we
-          // capture the SURVIVING claudePid across the 30s window — not
-          // just the first stable hit (which the 2026-04-30 deploy reveal
-          // showed could still be a soon-to-die respawn casualty). The
-          // minAge=5s filter on each attempt rejects freshly-spawned
-          // claudes; the last non-null result across all 6 attempts is
-          // the most-stable PID we can register.
-          //
-          // Disposal during the wait short-circuits via the
-          // sessions.has(name) check at the TOP of each iteration —
-          // operator-initiated stop aborts before the next discover call
-          // (Pitfall 6 — abort on dispose).
           let claudePid: number | null = null;
           for (let attempt = 0; attempt < MCP_POLL_MAX_ATTEMPTS; attempt++) {
             await sleep(MCP_POLL_INTERVAL_MS);
             if (!this.sessions.has(name)) return;
-            try {
-              const found = await discoverClaudeSubprocessPid(process.pid, {
-                minAge: MCP_POLL_MIN_AGE_SEC,
-                bootTimeUnix,
-                clockTicksPerSec,
-              });
-              if (found !== null) claudePid = found;
-            } catch (err) {
-              this.log.warn(
-                { agent: name, attempt, err: String(err) },
-                "polled discovery attempt failed — retrying",
-              );
-              continue;
+            const liveHandle = this.sessions.get(name);
+            const found = liveHandle?.getClaudePid?.() ?? null;
+            if (found !== null && found > 1) {
+              claudePid = found;
+              break;
             }
           }
           if (claudePid === null) {
             this.log.warn(
               { agent: name },
-              "no claude proc settled within 30s — relying on reaper reconciliation",
+              "no claude pid in sink within 30s — relying on reaper reconciliation",
             );
             return;
           }
@@ -1044,13 +1027,14 @@ export class SessionManager {
               agent: name,
               claudePid,
               mcpPidCount: mcpPids.length,
+              source: "123-A-next-sink",
             },
-            "registered agent MCP PIDs with tracker (Phase 999.15 TRACK-02)",
+            "registered agent MCP PIDs with tracker (FIND-123-A.next T-04 sink)",
           );
         } catch (err) {
           this.log.warn(
             { agent: name, err: String(err) },
-            "MCP PID discovery failed (non-fatal — reaper will catch leaks)",
+            "MCP PID sink registration failed (non-fatal — reaper will catch leaks)",
           );
         }
       })();

@@ -816,6 +816,26 @@ export class MockSessionHandle implements SessionHandle {
   }
 
   /**
+   * FIND-123-A.next T-04 — claude subprocess PID returned by the sink in
+   * production. The mock keeps a settable value so SM tests can simulate
+   * the sink's "populated after spawn" semantics with deterministic
+   * timing (no real /proc walk).
+   *
+   * Defaults to null (sink not yet populated). `__testSetClaudePid(n)`
+   * flips it to a positive integer mid-test to mirror the SDK callback
+   * writing into pidSink on spawn.
+   */
+  private claudePidValue: number | null = null;
+
+  getClaudePid(): number | null {
+    return this.claudePidValue;
+  }
+
+  __testSetClaudePid(pid: number | null): void {
+    this.claudePidValue = pid;
+  }
+
+  /**
    * Simulate a session crash. Triggers the onError callback.
    */
   simulateCrash(error?: Error): void {

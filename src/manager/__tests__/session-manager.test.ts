@@ -2225,35 +2225,32 @@ describe("Phase 999.15 polled discovery (TRACK-02)", () => {
     vi.restoreAllMocks();
   });
 
-  it("SM-1: polled discovery succeeds across SDK respawn (3 attempts; final hit at attempt 3)", async () => {
-    // Mock proc-scan helpers via dynamic mock injection. We avoid vi.mock at
-    // describe-scope to not interfere with above 999.14 tests.
+  it("SM-1 (T-04): sink-based discovery registers tracker once sink populates", async () => {
+    // FIND-123-A.next T-04 — the /proc-walk has been replaced by reading
+    // handle.getClaudePid() from the per-agent sink populated by
+    // makeDetachedSpawn. The mock simulates the SDK callback by flipping
+    // claudePidValue mid-poll via __testSetClaudePid.
     const procScan = await import("../../mcp/proc-scan.js");
-    let calls = 0;
-    const discoverSpy = vi
-      .spyOn(procScan, "discoverClaudeSubprocessPid")
-      .mockImplementation(async () => {
-        calls += 1;
-        // Attempts 1+2 return null (claude dying / not yet stable); attempt 3
-        // returns a stable PID.
-        if (calls < 3) return null;
-        return 200;
-      });
     vi.spyOn(procScan, "discoverAgentMcpPids").mockResolvedValue([201, 202]);
 
     const config = { ...makeConfig("agent-poll"), workspace: tmpDir2, memoryPath: tmpDir2 };
     await mgr.startAgent("agent-poll", config);
 
-    // Advance 6 × 5s to allow up to 6 polling attempts.
-    for (let i = 0; i < 6; i++) {
+    // Sink stays null for the first 2 polling slices (SDK hasn't emitted
+    // a spawn callback yet); flip on the 3rd slice to a stable PID.
+    const handle = mgr.getSessionHandle("agent-poll") as unknown as {
+      __testSetClaudePid: (pid: number | null) => void;
+    };
+    await vi.advanceTimersByTimeAsync(5_000); // attempt 1 — null
+    await vi.advanceTimersByTimeAsync(5_000); // attempt 2 — null
+    handle.__testSetClaudePid(200);
+    for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(5_000);
     }
-    // Drain microtasks the polled loop schedules.
     await vi.runOnlyPendingTimersAsync();
 
-    expect(discoverSpy).toHaveBeenCalled();
-    // tracker.register MUST be called once with the new 3-arg signature
-    // (name, claudePid, mcpPids).
+    // tracker.register MUST be called once with the 3-arg signature
+    // (name, claudePid, mcpPids); claudePid sourced from the sink.
     expect(trackerRegisterSpy).toHaveBeenCalledTimes(1);
     const args = trackerRegisterSpy.mock.calls[0]!;
     expect(args[0]).toBe("agent-poll");
@@ -2261,19 +2258,24 @@ describe("Phase 999.15 polled discovery (TRACK-02)", () => {
     expect([...(args[2] as number[])].sort()).toEqual([201, 202]);
   });
 
-  it("SM-2: polled discovery aborts when agent handle is disposed mid-wait", async () => {
+  it("SM-2 (T-04): sink-based discovery aborts when agent is disposed mid-wait", async () => {
     const procScan = await import("../../mcp/proc-scan.js");
-    vi.spyOn(procScan, "discoverClaudeSubprocessPid").mockResolvedValue(200);
     vi.spyOn(procScan, "discoverAgentMcpPids").mockResolvedValue([201]);
 
     const config = { ...makeConfig("agent-dispose"), workspace: tmpDir2, memoryPath: tmpDir2 };
     await mgr.startAgent("agent-dispose", config);
+    // Sink intentionally stays null — simulates an SDK spawn that is
+    // slower than the operator stop. The polled loop iterates with no PID
+    // until sessions.has(name) flips false on stopAgent, then exits.
 
-    // Wait one polling slice, then dispose the agent.
+    // First polling slice elapses with null sink (no register yet).
     await vi.advanceTimersByTimeAsync(5_000);
-    await mgr.stopAgent("agent-dispose");
+    expect(trackerRegisterSpy).not.toHaveBeenCalled();
 
-    // Drain remaining timers — register MUST NOT be called.
+    // Operator stop during the wait. AFTER stop, simulate the SDK finally
+    // spawning — the loop's sessions.has check must short-circuit so the
+    // PID never lands in the tracker for an already-stopped agent.
+    await mgr.stopAgent("agent-dispose");
     for (let i = 0; i < 6; i++) {
       await vi.advanceTimersByTimeAsync(5_000);
     }
@@ -2282,47 +2284,20 @@ describe("Phase 999.15 polled discovery (TRACK-02)", () => {
     expect(trackerRegisterSpy).not.toHaveBeenCalled();
   });
 
-  it("SM-3: after 30s (6 attempts) with no match, logs warn and exits gracefully (no register)", async () => {
-    const procScan = await import("../../mcp/proc-scan.js");
-    const discoverSpy = vi
-      .spyOn(procScan, "discoverClaudeSubprocessPid")
-      .mockResolvedValue(null);
-
+  it("SM-3 (T-04): after 30s (6 attempts) with sink still null, exits without register", async () => {
+    // FIND-123-A.next T-04 — sink never populated (SDK spawn failed or
+    // delayed past the 30s budget) means the polled loop exits gracefully
+    // and the periodic reaper takes over.
     const config = { ...makeConfig("agent-budget"), workspace: tmpDir2, memoryPath: tmpDir2 };
     await mgr.startAgent("agent-budget", config);
+    // Do NOT call __testSetClaudePid — sink stays null for the full budget.
 
-    // Advance the full 30s budget (6 × 5s).
     for (let i = 0; i < 6; i++) {
       await vi.advanceTimersByTimeAsync(5_000);
     }
     await vi.runOnlyPendingTimersAsync();
 
-    // 6 attempts made (per locked TRACK-02 budget).
-    expect(discoverSpy.mock.calls.length).toBe(6);
-    // No register because no PID ever settled.
+    // No register because no PID ever appeared in the sink.
     expect(trackerRegisterSpy).not.toHaveBeenCalled();
-  });
-
-  it("SM-4: polled discovery passes opts.minAge=5 to discoverClaudeSubprocessPid", async () => {
-    const procScan = await import("../../mcp/proc-scan.js");
-    const discoverSpy = vi
-      .spyOn(procScan, "discoverClaudeSubprocessPid")
-      .mockResolvedValue(200);
-    vi.spyOn(procScan, "discoverAgentMcpPids").mockResolvedValue([201]);
-
-    const config = { ...makeConfig("agent-minage"), workspace: tmpDir2, memoryPath: tmpDir2 };
-    await mgr.startAgent("agent-minage", config);
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.runOnlyPendingTimersAsync();
-
-    expect(discoverSpy).toHaveBeenCalled();
-    // Every call must include opts.minAge === 5. Plan 01 widens the
-    // signature to include the opts argument; current 999.14 signature is
-    // single-arg, so the cast below is the RED-state probe.
-    for (const call of discoverSpy.mock.calls) {
-      const opts = (call as unknown as readonly unknown[])[1];
-      expect(opts).toMatchObject({ minAge: 5 });
-    }
   });
 });
