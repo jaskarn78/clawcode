@@ -83,6 +83,16 @@ export class HeartbeatRunner {
   // construction, mirroring setSecretsResolver / setThreadManager /
   // setTaskStore.
   private brokerStatusProvider: BrokerStatusProvider | undefined;
+  // Phase 124 Plan 04 T-02 — auto-trigger closure threaded into the
+  // context-fill check via CheckContext. Daemon wires this to a
+  // handleCompactSession-bound closure; fire-and-forget on the check
+  // side so the heartbeat tick never blocks on compaction.
+  private compactSessionTrigger: ((agent: string) => Promise<void>) | undefined;
+  // Phase 124 Plan 04 T-02 — last-compaction lookup for the auto-trigger
+  // cooldown gate. Reads from the same `CompactionEventLog` the
+  // `heartbeat-status` IPC surfaces, so manual + auto paths share one
+  // cooldown view.
+  private getLastCompactionAt: ((agent: string) => string | null) | undefined;
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -158,6 +168,25 @@ export class HeartbeatRunner {
    */
   setBrokerStatusProvider(provider: BrokerStatusProvider): void {
     this.brokerStatusProvider = provider;
+  }
+
+  /**
+   * Phase 124 Plan 04 T-02 — wire the auto-trigger closure. The context-
+   * fill check fires this (fire-and-forget) when an agent's resolved
+   * `autoCompactAt` ratio is crossed and the 5-min cooldown has elapsed.
+   * Mirrors the setSecretsResolver / setBrokerStatusProvider pattern.
+   */
+  setCompactSessionTrigger(fn: (agent: string) => Promise<void>): void {
+    this.compactSessionTrigger = fn;
+  }
+
+  /**
+   * Phase 124 Plan 04 T-02 — wire the last-compaction lookup so the
+   * context-fill check can enforce the cooldown gate without holding a
+   * direct reference to the CompactionEventLog module.
+   */
+  setGetLastCompactionAt(fn: (agent: string) => string | null): void {
+    this.getLastCompactionAt = fn;
   }
 
   /**
@@ -238,6 +267,16 @@ export class HeartbeatRunner {
           ...(this.secretsResolver ? { secretsResolver: this.secretsResolver } : {}),
           ...(this.brokerStatusProvider
             ? { brokerStatusProvider: this.brokerStatusProvider }
+            : {}),
+          // Phase 124 Plan 04 T-02 — auto-trigger wiring threaded
+          // conditionally so legacy boot paths (and tests) that do not
+          // call the new setters keep a CheckContext that exactly
+          // matches the pre-Plan-04 shape.
+          ...(this.compactSessionTrigger
+            ? { compactSessionTrigger: this.compactSessionTrigger }
+            : {}),
+          ...(this.getLastCompactionAt
+            ? { getLastCompactionAt: this.getLastCompactionAt }
             : {}),
         };
 

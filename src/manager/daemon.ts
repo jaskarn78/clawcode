@@ -3307,6 +3307,91 @@ export async function startDaemon(
   });
   await heartbeatRunner.initialize();
   heartbeatRunner.setAgentConfigs(resolvedAgents);
+  // Phase 124 Plan 04 T-02 — wire the auto-trigger closure + cooldown
+  // lookup BEFORE the first tick so threshold-cross fires immediately on
+  // the first heartbeat cycle that observes it. The closure shares the
+  // same handler the manual IPC path uses (handleCompactSession), so
+  // both paths converge on identical compaction semantics. Errors are
+  // logged but never propagated — the heartbeat tick must not block on
+  // compaction.
+  heartbeatRunner.setGetLastCompactionAt((a) =>
+    compactionEventLog.getLastCompactionAt(a),
+  );
+  heartbeatRunner.setCompactSessionTrigger(async (agent: string) => {
+    try {
+      const { handleCompactSession } = await import(
+        "./daemon-compact-session-ipc.js"
+      );
+      const sdk = await import("@anthropic-ai/claude-agent-sdk");
+      const extractMemories = async (
+        text: string,
+      ): Promise<readonly string[]> => {
+        return Object.freeze(
+          text
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 20)
+            .slice(0, 20),
+        );
+      };
+      const autoResult = await handleCompactSession(
+        { agent },
+        {
+          manager: {
+            getSessionHandle: (n) => manager.getSessionHandle(n),
+            getConversationTurns: (n) => {
+              const sid = manager.getActiveConversationSessionId(n);
+              const store = manager.getConversationStore(n);
+              if (!sid || !store) return [];
+              return store
+                .getTurnsForSession(sid)
+                .filter((t) => t.role !== "system")
+                .map((t) => ({
+                  timestamp: t.createdAt,
+                  role: t.role as "user" | "assistant",
+                  content: t.content,
+                }));
+            },
+            getContextFillProvider: (n) => manager.getContextFillProvider(n),
+            compactForAgent: (n, conv, ex) =>
+              manager.compactForAgent(n, conv, ex),
+            hasCompactionManager: (n) =>
+              manager.getSessionLogger(n) !== undefined,
+          },
+          sdkForkSession: async (id, opts) => {
+            const result = await sdk.forkSession(id, opts);
+            return { sessionId: result.sessionId };
+          },
+          extractMemories,
+          log,
+          daemonReady: true,
+        },
+      );
+      if (autoResult.ok === true) {
+        compactionEventLog.record(agent);
+        log.info(
+          {
+            agent,
+            tokens_before: autoResult.tokens_before,
+            tokens_after: autoResult.tokens_after,
+            forked_to: autoResult.forked_to,
+          },
+          "[124-04-auto-trigger] compaction complete",
+        );
+      } else {
+        log.warn(
+          { agent, error: autoResult.error },
+          "[124-04-auto-trigger] compaction failed",
+        );
+      }
+    } catch (err) {
+      // Never let an auto-trigger failure propagate to the heartbeat tick.
+      log.warn(
+        { agent, error: (err as Error).message },
+        "[124-04-auto-trigger] dispatch threw",
+      );
+    }
+  });
   heartbeatRunner.start();
   log.info({ checks: "discovered", interval: heartbeatConfig.intervalSeconds }, "heartbeat started");
 

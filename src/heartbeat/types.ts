@@ -48,6 +48,33 @@ export type CheckContext = {
    * checks/mcp-broker.ts header (rate-limit-budget invariant).**
    */
   readonly brokerStatusProvider?: BrokerStatusProvider;
+  /**
+   * Phase 124 Plan 04 T-02 — auto-trigger wiring. When present, the
+   * `context-fill` check fires this closure (fire-and-forget) whenever
+   * the per-agent `autoCompactAt` threshold is crossed AND the cooldown
+   * window has elapsed. Daemon constructs the closure as a thin wrapper
+   * around `handleCompactSession` with the same deps the IPC path uses,
+   * so both manual and auto paths flow through identical compaction
+   * semantics. UNDEFINED when the runner has not been wired (legacy /
+   * test path); the check then skips auto-trigger silently.
+   */
+  readonly compactSessionTrigger?: (agent: string) => Promise<void>;
+  /**
+   * Phase 124 Plan 04 T-02 — last-compaction ISO timestamp lookup. Used
+   * by the context-fill check to enforce the 5-min cooldown gate. Reads
+   * from the same `CompactionEventLog` the `heartbeat-status` IPC payload
+   * surfaces, so manual + auto compactions share one cooldown view.
+   */
+  readonly getLastCompactionAt?: (agent: string) => string | null;
+  /** Injectable clock — production uses Date.now (testability hook). */
+  readonly now?: () => number;
+  /**
+   * Phase 124 Plan 04 T-02 — auto-trigger cooldown window in
+   * milliseconds. Default 5 min (5*60*1000). Operator can tune via
+   * config in a future phase; today it's hard-coded at the daemon-side
+   * runner wiring.
+   */
+  readonly cooldownMs?: number;
 };
 
 /**
