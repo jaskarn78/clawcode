@@ -45,7 +45,7 @@
  * go through send-message. Numbers are NOT directly comparable. The UI
  * surfaces this explicitly so operators don't false-compare.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart,
   Bar,
@@ -59,6 +59,7 @@ import {
   useAgents,
   useAgentTools,
   useFleetActivitySummary,
+  useFleetStats,
   runBenchmark,
   useBenchmarkCompare,
   type BenchmarkScenario,
@@ -68,6 +69,7 @@ import {
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { percentileCell } from '@/components/percentileCell'
 
 // ---------------------------------------------------------------------------
 // Scenario fixture metadata — kept in sync with backend BENCH_PROMPTS in
@@ -241,11 +243,14 @@ function ToolRollupTable(props: {
   }
 
   if (filtered.length === 0) {
+    // Phase 120 Plan 02 T-03 (DASH-03) — literal string per CONTEXT D-06.
+    // memoryOnly variant gets its own literal so both states are operator-
+    // attributable. text-fg-3 neutral per D-05 (not a breach).
     return (
-      <p className="text-fg-2 font-sans text-sm">
+      <p className="text-fg-3 font-sans text-sm">
         {props.memoryOnly
-          ? 'No memory-tool calls in the selected window.'
-          : 'No tool calls in the selected window for this agent.'}
+          ? 'No memory-tool spans recorded in window'
+          : 'No tool spans recorded in window'}
       </p>
     )
   }
@@ -293,29 +298,45 @@ function ToolRollupTable(props: {
         <tbody>
           {sorted.map((r) => {
             const isBreach = r.slo_status === 'breach'
-            const isWarn = r.slo_status === 'warn'
-            const colorClass = isBreach
-              ? 'text-danger'
-              : isWarn
-                ? 'text-warn'
-                : 'text-fg-1'
+            // Phase 120 Plan 02 T-01 (DASH-01) — defensive (unnamed) fallback.
+            // Production diagnostic shows tool names well-formed in trace_spans
+            // and SUBSTR strips the prefix correctly (see 120-DIAGNOSTIC.md), so
+            // a blank cell would indicate a future regression — render an
+            // attributable label instead of silent blank.
+            const toolLabel =
+              typeof r.tool === 'string' && r.tool.length > 0
+                ? r.tool
+                : '(unnamed)'
+            // p99 stays neutral text-fg-2 per pre-Phase-120 convention — only
+            // p50/p95 carry the SLO-breach indicator. Phase 120 routes those
+            // through percentileCell so null wins over isBreach (DASH-02).
+            const dataClass = 'px-2 py-1 text-right data'
             return (
               <tr key={r.tool} className="border-b border-bg-s3/40">
                 <td className="px-2 py-1 font-mono text-xs text-fg-1">
-                  {r.tool}
+                  {toolLabel}
                 </td>
                 <td className="px-2 py-1 text-right data text-fg-2">
                   {r.count}
                 </td>
-                <td className={`px-2 py-1 text-right data ${colorClass}`}>
-                  {formatMs(r.p50_ms)}
-                </td>
-                <td className={`px-2 py-1 text-right data ${colorClass}`}>
-                  {formatMs(r.p95_ms)}
-                </td>
-                <td className="px-2 py-1 text-right data text-fg-2">
-                  {formatMs(r.p99_ms)}
-                </td>
+                {percentileCell({
+                  value: r.p50_ms ?? null,
+                  isBreach,
+                  format: formatMs,
+                  className: dataClass,
+                })}
+                {percentileCell({
+                  value: r.p95_ms ?? null,
+                  isBreach,
+                  format: formatMs,
+                  className: dataClass,
+                })}
+                {percentileCell({
+                  value: r.p99_ms ?? null,
+                  isBreach: false,
+                  format: formatMs,
+                  className: `${dataClass} text-fg-2`,
+                })}
               </tr>
             )
           })}
