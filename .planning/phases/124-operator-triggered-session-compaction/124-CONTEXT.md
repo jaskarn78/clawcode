@@ -49,8 +49,19 @@ Register `handleCompactSession` in the daemon IPC dispatcher. The CLI / Discord 
 ### D-03 — Mid-turn queue per Phase 105 dispatch hot path
 Compaction request received while agent is mid-tool-chain → enqueue behind the current turn (same way Phase 105's trigger-policy queues messages). When the turn completes, the daemon flushes the queue and runs compaction. Safety budget: if a single turn exceeds N minutes (configurable, default 10), the compaction call exits non-zero with `ERR_TURN_TOO_LONG` and the operator sees a recognizable error code.
 
-### D-04 — `memory.db` is OFF LIMITS
-Compaction is conversation-window-only. Acceptance test: capture `stat -c '%s' agent-memory.db` before compaction, run compaction, assert byte count is unchanged. Probe turn after compaction recalls a memory chunk created before compaction (SC-3).
+### D-04 — `memory.db` GROWS BY DESIGN (revised 2026-05-14 per Path C re-exploration)
+
+**Original wording (now obsolete):** "Compaction is conversation-window-only; assert byte count is unchanged."
+
+**Revised wording:** Compaction is hybrid: it both extracts facts into `memory.db` (causing it to grow) AND shrinks the active session JSONL (via `forkSession` + summary-prepend). This matches the actual semantics of the existing `SessionManager.compactForAgent()` primitive (`src/manager/session-manager.ts:2203` — discovered during 2026-05-14 re-exploration; not used in production yet, just dead-code waiting to be wired).
+
+**Revised acceptance test (SC-3):**
+- All original `memories` chunk IDs preserved post-compaction (no destructive deletion).
+- New `memories` rows added by the extractor (count > 0 in `CompactionResult.memoriesCreated`).
+- `memory.db` byte count is LARGER post-compaction.
+- Probe-turn lookup: agent recalls a topic from a pre-compaction conversation turn via RRF retrieval against the new chunks.
+
+**Why this is intentional:** the operator's BACKLOG-SOURCE goal is "preserve load-bearing context while collapsing noise." Extracting facts as embeddings into `memory.db` IS the preservation mechanism — they survive the session-window swap and are recallable indefinitely. The "memory.db invariance" wording in the previous CONTEXT was based on an assumption the prior session didn't verify against the actual primitive.
 
 ### D-05 — Heartbeat prompt decoupling — static-grep regression test
 Today the Finmentum heartbeat block conflates auto-reset + auto-compaction under a single `## ⚠️ AUTO-RESET: DISABLED` directive. Phase 124 splits this into:
@@ -72,11 +83,12 @@ Add `session_tokens` (current token count) and `last_compaction_at` (timestamp o
 ### D-08 — Discord `/compact` is ADMIN-ONLY with ephemeral response
 Refusal embed (ephemeral) for non-admin posters. Admin-allowed posters get a tokens_before/tokens_after/summary_written ephemeral embed. Pattern matches existing `/clawcode-verbose` admin-only command in Phase 117.
 
-### D-09 — Plan structure: 4 plans across 3 waves
-- **Wave 1:** `124-01-PLAN.md` — CLI subcommand + IPC handler + SDK control-call (T-01..T-03). Foundation. SC-1, SC-4 closed.
-- **Wave 1 parallel:** `124-02-PLAN.md` — Heartbeat prompt template decoupling + static-grep regression + new YAML schema (`auto-compact-at`). SC-5 closed.
-- **Wave 2 after 01:** `124-03-PLAN.md` — Discord `/compact` admin command (depends on the IPC handler from 01). SC-2 closed.
-- **Wave 2 after 01:** `124-04-PLAN.md` — Telemetry surface (`session_tokens` + `last_compaction_at`) + dashboard sparkline tile (depends on 01 emitting the compaction event). SC-6 closed. SC-3 (memory preservation) verified via integration test in 01.
+### D-09 — Plan structure (revised 2026-05-14 per Path C)
+- **Wave 0 (shipped):** `124-00-PLAN.md` — SDK probe. Confirmed no callable `/compact` verb. Documented in `124-00-SUMMARY.md`.
+- **Wave 1 (shipped):** `124-02-PLAN.md` — Heartbeat decoupling + `auto-compact-at` schema. Committed at `8979645`.
+- **Wave 1 (now executing):** `124-01-PLAN.md` — Hybrid compaction (compactForAgent fact extraction + forkSession + summary-prepend) + CLI subcommand + IPC handler. Foundation. SC-1, SC-3 (revised), SC-4 closed.
+- **Wave 2 after 01:** `124-03-PLAN.md` — Discord `/compact` admin command. SC-2 closed.
+- **Wave 2 after 01:** `124-04-PLAN.md` — Telemetry surface + `autoCompactAt` auto-trigger wiring (heartbeat context-fill check fires `handleCompactSession` at the per-agent threshold). SC-6 closed.
 
 ### D-10 — Deploy hold continues
 Code lands locally + tests run. Verification on clawdy (SC-2 admin Discord round-trip, SC-3 memory probe, SC-4 mid-turn integration) waits for operator deploy clearance.
