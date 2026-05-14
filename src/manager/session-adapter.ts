@@ -1314,14 +1314,32 @@ function stripHandleOnlyFields(
  * expected Record format (keyed by server name).
  * Returns undefined if no servers are configured.
  */
-function transformMcpServersForSdk(
-  mcpServers?: readonly { readonly name: string; readonly command: string; readonly args: readonly string[]; readonly env: Readonly<Record<string, string>> }[],
-): Record<string, { command: string; args: string[]; env: Record<string, string> }> | undefined {
+export function transformMcpServersForSdk(
+  mcpServers?: readonly {
+    readonly name: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly env: Readonly<Record<string, string>>;
+    readonly alwaysLoad?: boolean;
+  }[],
+): Record<string, { command: string; args: string[]; env: Record<string, string>; alwaysLoad?: boolean }> | undefined {
   if (!mcpServers || mcpServers.length === 0) {
     return undefined;
   }
   return Object.fromEntries(
-    mcpServers.map((s) => [s.name, { command: s.command, args: [...s.args], env: { ...s.env } }]),
+    mcpServers.map((s) => [
+      s.name,
+      {
+        command: s.command,
+        args: [...s.args],
+        env: { ...s.env },
+        // Phase 999.54 (D-01a) — spread-conditional preserves byte-stable
+        // deep-equality for fleet entries that don't opt in. `=== true` not
+        // truthy-check, matching the `s.optional === true` idiom upstream
+        // at loader.ts. Plan 04 pins both branches (set + omitted).
+        ...(s.alwaysLoad === true ? { alwaysLoad: true as const } : {}),
+      },
+    ]),
   );
 }
 
