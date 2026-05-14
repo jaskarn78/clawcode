@@ -150,6 +150,18 @@ Recommended operator follow-up after the 119-04 soak completes: pick one of (1)(
 
 This observation does NOT block 119-04 completion — it's a separate operational followup on 119-01 deploy state.
 
+### Resolution — 2026-05-14, investigated post-handoff
+
+Disambiguated via journalctl + yaml inspection on clawdy:
+
+- **(1) ruled out** — daemon was deployed 2026-05-14 18:04 UTC (`ActiveEnterTimestamp=Thu 2026-05-14 11:04:20 PDT`), 3 seconds after the latest 119-03 hotfix `f378ab7`. 119-01 + 119-02 + 119-03 (with hotfixes) all live in the running daemon.
+- **(2) confirmed** — production yaml has `personal: channels: []`. Empty channel list → no webhook lookup possible → no bot-direct fallback possible (bot-direct needs a channel ID per `daemon-post-to-agent-ipc.ts:201-209`).
+- **(3) ruled out** — admin-clawdy's narration was accurate. The "post-to-agent skipped" log line at 11:15:22 PDT logs that LIVE delivery (webhook + bot-direct) was skipped. The inbox write at `daemon-post-to-agent-ipc.ts:175-196` happens BEFORE the channel check and succeeded silently — personal's inbox received the message. The heartbeat reconciler at `src/heartbeat/checks/inbox.ts` will drain it on personal's next heartbeat tick. Working as designed.
+
+**Net:** not a bug, not a deploy gap. A config decision — `personal: channels: []` means "no live delivery; inbox+heartbeat is the delivery path." If the operator wants instant cross-agent posts TO `personal`, add a Discord channel ID to its config. Otherwise, the current behavior is correct.
+
+No action item beyond this resolution note. A2A-01 narration concern closed.
+
 ## References
 
 - Phase 119 plan: `.planning/phases/119-a2a-delivery-reliability/119-04-PLAN.md`
