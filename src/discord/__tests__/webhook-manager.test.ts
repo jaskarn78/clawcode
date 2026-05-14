@@ -30,6 +30,173 @@ function makeManager(): WebhookManager {
   return new WebhookManager({ identities });
 }
 
+describe("WebhookManager.sendAsAgent — 401/404 invalidate + reprovision retry (Phase 119 A2A-02)", () => {
+  beforeEach(() => {
+    sendMock.mockClear();
+    destroyMock.mockClear();
+  });
+
+  function makeEmbed() {
+    return { toJSON: () => ({}) } as unknown as import("discord.js").EmbedBuilder;
+  }
+
+  function makeDiscordError(status: 401 | 404): Error {
+    const err = new Error(`Discord API error ${status}`) as Error & {
+      status: number;
+      code: number;
+    };
+    err.status = status;
+    err.code = status;
+    return err;
+  }
+
+  it("WHM-RECOVER-1: 401-then-200 — invalidates cache, reprovisions, retries once, succeeds", async () => {
+    sendMock.mockReset();
+    sendMock
+      .mockRejectedValueOnce(makeDiscordError(401))
+      .mockResolvedValueOnce({ id: "msg-after-reprovision" });
+
+    const reprovisionWebhook = vi.fn().mockResolvedValue({
+      displayName: "TestBot",
+      avatarUrl: "https://example.com/avatar.png",
+      webhookUrl: "https://discord.com/api/webhooks/0/NEW",
+    });
+
+    const identities = new Map<string, WebhookIdentity>([
+      ["test-agent", TEST_IDENTITY],
+    ]);
+    const manager = new WebhookManager({ identities, reprovisionWebhook });
+
+    const result = await manager.sendAsAgent(
+      "test-agent",
+      "Sender",
+      undefined,
+      makeEmbed(),
+    );
+
+    expect(result).toBe("msg-after-reprovision");
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(reprovisionWebhook).toHaveBeenCalledTimes(1);
+    expect(reprovisionWebhook).toHaveBeenCalledWith("test-agent");
+    // Cache is repopulated with the NEW identity
+    expect(manager.getIdentity("test-agent")?.webhookUrl).toBe(
+      "https://discord.com/api/webhooks/0/NEW",
+    );
+  });
+
+  it("WHM-RECOVER-2: 404-then-200 — same shape as 401 recovery", async () => {
+    sendMock.mockReset();
+    sendMock
+      .mockRejectedValueOnce(makeDiscordError(404))
+      .mockResolvedValueOnce({ id: "msg-after-reprovision" });
+
+    const reprovisionWebhook = vi.fn().mockResolvedValue({
+      displayName: "TestBot",
+      avatarUrl: "https://example.com/avatar.png",
+      webhookUrl: "https://discord.com/api/webhooks/0/NEW404",
+    });
+
+    const identities = new Map<string, WebhookIdentity>([
+      ["test-agent", TEST_IDENTITY],
+    ]);
+    const manager = new WebhookManager({ identities, reprovisionWebhook });
+
+    await manager.sendAsAgent(
+      "test-agent",
+      "Sender",
+      undefined,
+      makeEmbed(),
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(reprovisionWebhook).toHaveBeenCalledTimes(1);
+    expect(manager.getIdentity("test-agent")?.webhookUrl).toBe(
+      "https://discord.com/api/webhooks/0/NEW404",
+    );
+  });
+
+  it("WHM-RECOVER-3: 401-then-401 — exactly two attempts then throws (bounded retry)", async () => {
+    sendMock.mockReset();
+    sendMock
+      .mockRejectedValueOnce(makeDiscordError(401))
+      .mockRejectedValueOnce(makeDiscordError(401));
+
+    const reprovisionWebhook = vi.fn().mockResolvedValue({
+      displayName: "TestBot",
+      avatarUrl: "https://example.com/avatar.png",
+      webhookUrl: "https://discord.com/api/webhooks/0/NEW",
+    });
+
+    const identities = new Map<string, WebhookIdentity>([
+      ["test-agent", TEST_IDENTITY],
+    ]);
+    const manager = new WebhookManager({ identities, reprovisionWebhook });
+
+    await expect(
+      manager.sendAsAgent("test-agent", "Sender", undefined, makeEmbed()),
+    ).rejects.toThrow(/Discord API error 401/);
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(reprovisionWebhook).toHaveBeenCalledTimes(1);
+  });
+
+  it("WHM-RECOVER-4: non-401/404 error — single attempt, no reprovision, error propagates", async () => {
+    sendMock.mockReset();
+    const err = new Error("rate limited") as Error & { status: number };
+    err.status = 429;
+    sendMock.mockRejectedValueOnce(err);
+
+    const reprovisionWebhook = vi.fn();
+
+    const identities = new Map<string, WebhookIdentity>([
+      ["test-agent", TEST_IDENTITY],
+    ]);
+    const manager = new WebhookManager({ identities, reprovisionWebhook });
+
+    await expect(
+      manager.sendAsAgent("test-agent", "Sender", undefined, makeEmbed()),
+    ).rejects.toThrow(/rate limited/);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(reprovisionWebhook).not.toHaveBeenCalled();
+  });
+
+  it("WHM-RECOVER-5: reprovisioner unwired — single attempt, error propagates verbatim", async () => {
+    sendMock.mockReset();
+    sendMock.mockRejectedValueOnce(makeDiscordError(401));
+
+    const identities = new Map<string, WebhookIdentity>([
+      ["test-agent", TEST_IDENTITY],
+    ]);
+    const manager = new WebhookManager({ identities });
+
+    await expect(
+      manager.sendAsAgent("test-agent", "Sender", undefined, makeEmbed()),
+    ).rejects.toThrow(/Discord API error 401/);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("WHM-RECOVER-6: reprovisioner returns undefined — first failure surfaces verbatim, no retry", async () => {
+    sendMock.mockReset();
+    sendMock.mockRejectedValueOnce(makeDiscordError(404));
+
+    const reprovisionWebhook = vi.fn().mockResolvedValue(undefined);
+
+    const identities = new Map<string, WebhookIdentity>([
+      ["test-agent", TEST_IDENTITY],
+    ]);
+    const manager = new WebhookManager({ identities, reprovisionWebhook });
+
+    await expect(
+      manager.sendAsAgent("test-agent", "Sender", undefined, makeEmbed()),
+    ).rejects.toThrow(/Discord API error 404/);
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(reprovisionWebhook).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("WebhookManager.send — markdown table wrapping (regression for 100-fu webhook gap)", () => {
   beforeEach(() => {
     sendMock.mockClear();

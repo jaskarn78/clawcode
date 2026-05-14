@@ -8,11 +8,30 @@ import type { Logger } from "pino";
 const MAX_MESSAGE_LENGTH = 2000;
 
 /**
+ * Reprovisioner closure shape. Called when a webhook send fails with a
+ * Discord 401 (revoked) or 404 (deleted) so the manager can request a fresh
+ * webhook URL for the agent. Returns the new identity or `undefined` if
+ * reprovisioning is not possible (no channel, Discord-side error). Phase 119
+ * A2A-02 — kept as a DI seam so the manager stays decoupled from the Discord
+ * Client and the provisioning helper lives in webhook-provisioner.ts.
+ */
+export type WebhookReprovisioner = (
+  agentName: string,
+) => Promise<WebhookIdentity | undefined>;
+
+/**
  * Configuration for creating a WebhookManager.
  */
 export type WebhookManagerConfig = {
   readonly identities: ReadonlyMap<string, WebhookIdentity>;
   readonly log?: Logger;
+  /**
+   * Phase 119 A2A-02 — optional reprovisioner. When set, sendAsAgent
+   * recovers from Discord 401/404 by calling this to obtain a fresh
+   * webhook URL, then retrying the send ONCE with the new identity.
+   * Bounded retry — second failure surfaces normally.
+   */
+  readonly reprovisionWebhook?: WebhookReprovisioner;
 };
 
 /**
@@ -21,13 +40,15 @@ export type WebhookManagerConfig = {
  * with its own display name and avatar instead of using the bot identity.
  */
 export class WebhookManager {
-  private readonly identities: ReadonlyMap<string, WebhookIdentity>;
+  private readonly identities: Map<string, WebhookIdentity>;
   private readonly clients: Map<string, WebhookClient> = new Map();
   private readonly log: Logger;
+  private readonly reprovisionWebhook?: WebhookReprovisioner;
 
   constructor(config: WebhookManagerConfig) {
-    this.identities = config.identities;
+    this.identities = new Map(config.identities);
     this.log = config.log ?? logger;
+    this.reprovisionWebhook = config.reprovisionWebhook;
   }
 
   /**
@@ -105,7 +126,63 @@ export class WebhookManager {
         `No webhook identity configured for target agent '${targetAgent}'`,
       );
     }
-    const client = this.getOrCreateClient(targetAgent, identity.webhookUrl);
+    try {
+      return await this.attemptSendAsAgent(
+        targetAgent,
+        identity.webhookUrl,
+        senderDisplayName,
+        senderAvatarUrl,
+        embed,
+      );
+    } catch (err) {
+      const code = extractDiscordStatusCode(err);
+      if (
+        (code === 401 || code === 404) &&
+        this.reprovisionWebhook
+      ) {
+        this.log.warn(
+          { channel: targetAgent, code, action: "invalidate-and-reprovision" },
+          "webhook 401/404 — invalidating cache and reprovisioning once",
+        );
+        this.invalidate(targetAgent);
+        const fresh = await this.reprovisionWebhook(targetAgent);
+        if (!fresh) {
+          throw err;
+        }
+        this.identities.set(targetAgent, fresh);
+        return await this.attemptSendAsAgent(
+          targetAgent,
+          fresh.webhookUrl,
+          senderDisplayName,
+          senderAvatarUrl,
+          embed,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Phase 119 A2A-02 — drop the cached identity + WebhookClient for an agent.
+   * Used by the 401/404 reprovision-once retry path. Idempotent.
+   */
+  invalidate(agentName: string): void {
+    this.identities.delete(agentName);
+    const client = this.clients.get(agentName);
+    if (client) {
+      client.destroy();
+      this.clients.delete(agentName);
+    }
+  }
+
+  private async attemptSendAsAgent(
+    targetAgent: string,
+    webhookUrl: string,
+    senderDisplayName: string,
+    senderAvatarUrl: string | undefined,
+    embed: EmbedBuilder,
+  ): Promise<string> {
+    const client = this.getOrCreateClient(targetAgent, webhookUrl);
     const result = await client.send({
       embeds: [embed],
       username: senderDisplayName,
@@ -176,6 +253,20 @@ export function splitMessage(
   }
 
   return chunks;
+}
+
+/**
+ * Phase 119 A2A-02 — pull the HTTP status code off a discord.js
+ * DiscordAPIError. discord.js v14 exposes both `status` (HTTP code) and
+ * `code` (Discord error code). Either may match 401/404 depending on the
+ * error path; we check both and return whichever is the HTTP-status-shape.
+ */
+function extractDiscordStatusCode(err: unknown): number | undefined {
+  if (err === null || typeof err !== "object") return undefined;
+  const candidate = err as { status?: unknown; code?: unknown };
+  if (typeof candidate.status === "number") return candidate.status;
+  if (typeof candidate.code === "number") return candidate.code;
+  return undefined;
 }
 
 /**
