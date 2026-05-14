@@ -3350,17 +3350,45 @@ export async function startDaemon(
         "./daemon-compact-session-ipc.js"
       );
       const sdk = await import("@anthropic-ai/claude-agent-sdk");
-      const extractMemories = async (
-        text: string,
-      ): Promise<readonly string[]> => {
-        return Object.freeze(
-          text
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.length > 20)
-            .slice(0, 20),
-        );
+      // Phase 125 Plan 02 — D-01 single extractor seam. Tier 1 partition
+      // runs here (full ConversationTurn[] visible); preserved turns ride
+      // through the extractor head so they end up in the fork-summary
+      // verbatim. The getConversationTurns lambda below is unchanged —
+      // the daily-log audit trail still receives ALL turns.
+      const { buildTieredExtractor, partitionForVerbatim } = await import(
+        "./compact-extractors/index.js"
+      );
+      const cfgForAgent = resolvedAgents.find((a) => a.name === agent);
+      const preserveLastTurnsAuto = cfgForAgent?.preserveLastTurns ?? 10;
+      const preserveVerbatimAuto = cfgForAgent?.preserveVerbatimPatterns ?? [];
+      const allTurnsAuto = (() => {
+        const sid = manager.getActiveConversationSessionId(agent);
+        const store = manager.getConversationStore(agent);
+        if (!sid || !store) return [];
+        return store
+          .getTurnsForSession(sid)
+          .filter((t) => t.role !== "system")
+          .map((t) => ({
+            timestamp: t.createdAt,
+            role: t.role as "user" | "assistant",
+            content: t.content,
+          }));
+      })();
+      const partitionDepsAuto = {
+        preserveLastTurns: preserveLastTurnsAuto,
+        preserveVerbatimPatterns: preserveVerbatimAuto,
+        clock: () => new Date(),
+        log,
+        agentName: agent,
       };
+      const { preserved: preservedAuto } = partitionForVerbatim(
+        allTurnsAuto,
+        partitionDepsAuto,
+      );
+      const extractMemories = buildTieredExtractor({
+        ...partitionDepsAuto,
+        preservedTurns: preservedAuto,
+      });
       // Phase 124 follow-up — same producer-side wire as the manual IPC
       // path. The auto-trigger fires from the heartbeat cycle and uses the
       // same safety-budget gate so an in-flight long turn does not stall
@@ -10586,21 +10614,49 @@ async function routeMethod(
         "./daemon-compact-session-ipc.js"
       );
       const sdk = await import("@anthropic-ai/claude-agent-sdk");
-      // Trivial MVP extractor — Phase 125 replaces with tiered retention
-      // + Haiku-driven structured extraction. For now: split on newlines,
-      // filter to non-empty lines longer than 20 chars. Avoids a network
-      // call and keeps the primitive testable end-to-end.
-      const extractMemories = async (
-        text: string,
-      ): Promise<readonly string[]> => {
-        return Object.freeze(
-          text
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.length > 20)
-            .slice(0, 20),
-        );
+      // Phase 125 Plan 02 — D-01 single extractor seam. Identical
+      // construction to the auto-trigger callsite above. Tier 1 runs
+      // here so preserved turns ride through `buildTieredExtractor`'s
+      // head; daily-log durability is preserved (getConversationTurns
+      // below still returns ALL turns to compactForAgent's flush step).
+      const {
+        buildTieredExtractor: buildExtIpc,
+        partitionForVerbatim: partitionIpc,
+      } = await import("./compact-extractors/index.js");
+      const cfgForAgentIpc = configs.find(
+        (a: ResolvedAgentConfig) => a.name === agentName,
+      );
+      const preserveLastTurnsIpc = cfgForAgentIpc?.preserveLastTurns ?? 10;
+      const preserveVerbatimIpc =
+        cfgForAgentIpc?.preserveVerbatimPatterns ?? [];
+      const allTurnsIpc = (() => {
+        const sid = manager.getActiveConversationSessionId(agentName);
+        const store = manager.getConversationStore(agentName);
+        if (!sid || !store) return [];
+        return store
+          .getTurnsForSession(sid)
+          .filter((t) => t.role !== "system")
+          .map((t) => ({
+            timestamp: t.createdAt,
+            role: t.role as "user" | "assistant",
+            content: t.content,
+          }));
+      })();
+      const partitionDepsIpc = {
+        preserveLastTurns: preserveLastTurnsIpc,
+        preserveVerbatimPatterns: preserveVerbatimIpc,
+        clock: () => new Date(),
+        log: logger,
+        agentName,
       };
+      const { preserved: preservedIpc } = partitionIpc(
+        allTurnsIpc,
+        partitionDepsIpc,
+      );
+      const extractMemories = buildExtIpc({
+        ...partitionDepsIpc,
+        preservedTurns: preservedIpc,
+      });
       // Phase 124 follow-up — wire the producer-side turnStartedAt slot
       // into the handler's safety-budget gate. Build a 1-entry map at call
       // time from SessionManager.getTurnStartedAt(); when no turn is in
