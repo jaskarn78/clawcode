@@ -2,15 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.9
 milestone_name: Reliability & Routing
-status: phase-119-wave1-shipped-locally
-stopped_at: "Phase 119 Wave 1 (Plan 01) executed inline 2026-05-14 — 4 commits land 119-CONTEXT.md (a4a71c6) → 4 plan files (8cff3d7) → A2A-01 bot-direct port (0aa0e5e) → A2A-02 webhook 401/404 retry (f910de5) → boot sentinel + DI wiring (ae4c8b1) → plan summary (c1fd453). Tests: 26/26 pass, tsc --noEmit clean. 3 documented deviations: reprovisioner-as-injected-closure (matches existing WebhookManager DI shape), sentinel pings first-running agent vs. literal admin (literal admin would fail on every clean boot), VITEST env-var skip-gate vs. plan's claimed line-158 reference (the latter doesn't exist). NOT deployed — Ramy-active hold + boot sentinel needs real Discord bot token for live smoke. Wave 2 (Plans 02 dashboard counter + 03 icon state machine) waits on Plan 01's 24h production soak per CONTEXT D-07. Plan 04 (`projects` agent HEARTBEAT_OK) is agent-workspace work, separate deploy, parallel-OK. Phases 120-125 not started. Next: when operator clears the deploy window (Ramy quiet), deploy commits 0aa0e5e..ae4c8b1 to clawdy, verify `[A2A-01-sentinel] OK` in journalctl, start the 24h soak."
-last_updated: "2026-05-14T00:00:00.000Z"
+status: v2.9-partial-shipped-locally-awaiting-deploy
+stopped_at: "v2.9 autonomous run 2026-05-14 — 4 phases shipped code locally, 1 phase plans-only (diagnostic-gated), 1 phase blocked on SDK design, 1 phase deploy-gated. Phase 119: CONTEXT + 4 plans + Wave 1 Plan 01 shipped (commits a4a71c6→c1fd453, 26/26 tests pass). Phase 120: CONTEXT + 4 plans committed — execute SKIPPED awaiting Plan 01 diagnostic SQL on clawdy (Plans 02/03 branch on diagnostic root cause). Phase 121: CONTEXT + 2 plans promoted from 999.36 + both executed (Plan 01 commits d48afa1→57d17cd 45/45 tests, Plan 02 commits 27c4883→99cc00d 63/63 tests, splitMessage sibling audit confirms no-seam). Phase 122: CONTEXT + 1 plan + executed (8 commits f44f4f6→734cfe5, helper extended for SC-3 nested-fence per D-03 override, 5 chokepoints wrapped including added bridge.sendDirect, 36/36 tests). Phase 124: CONTEXT + 5 plans + Plan 00 SDK probe + Plan 02 heartbeat decoupling shipped (commits 0884060→8979645 + e3a46ed→c818c47, 20/20 new tests). Phase 124 Plans 01/03/04 BLOCKED — SDK 0.2.140 exposes no callable /compact verb (forkSession is the documented fallback but has different semantics; needs operator design decision). Phase 125: BLOCKED-architectural — depends on Phase 124 primitive. Phase 123: 3 plans promoted from 999.6-02 / 999.14-02 / 999.15-04 + CONTEXT.md + pending-evidence checklist (all 5 success criteria BLOCKED-deploy-pending — require clawdy production access). 27 commits land. Ramy-active deploy hold continues — when operator clears the window, deploy Phase 119 commits 0aa0e5e..ae4c8b1, run Phase 120 diagnostic SQL, kick off Phase 123 three-variant MCP soak, and revisit Phase 124 SDK design pivot."
+last_updated: "2026-05-14T03:30:00.000Z"
 last_activity: 2026-05-14
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  partially_complete: 4
+  blocked_architectural: 2
+  blocked_diagnostic: 1
+  total_plans: 19
+  total_plan_commits: 14
+  shipped_locally_commits: 27
   percent: 0
 ---
 
