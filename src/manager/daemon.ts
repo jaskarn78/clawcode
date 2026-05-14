@@ -8284,10 +8284,19 @@ export async function startDaemon(
     } catch (err) {
       log.error({ error: (err as Error).message }, "failed to auto-start agents");
     }
-    // Phase 119 A2A-01 sentinel — D-02. Synthetic self-probe via the post-
-    // to-agent handler proves the new bot-direct fallback wiring is reachable
-    // on the production path (feedback_silent_path_bifurcation prevention).
-    // Skip under vitest so the unit suite never fires a synthetic IPC.
+    // Phase 119 A2A-01 sentinel — D-02 (revised 2026-05-14 post-deploy).
+    // Verifies the bot-direct fallback wiring is reachable on the production
+    // path WITHOUT actually delivering a side-effecting message. The original
+    // sentinel called handlePostToAgentIpc self-ping which delivered a real
+    // webhook message to the agent's channel — operator-visible noise in
+    // #admin-clawdy on every boot (4 sentinel messages from 2 deploys).
+    //
+    // The original silent-path-bifurcation it was designed to prevent: "we
+    // added the bot-direct fallback in code but production never executes
+    // it." The dependency presence check below catches that EXACT class of
+    // bug (DI wiring break post-deploy) without the round-trip side effect.
+    // Unit tests at daemon-post-to-agent-ipc.test.ts continue to exercise
+    // the dispatch chain end-to-end with mocks.
     if (process.env.VITEST || process.env.NODE_ENV === "test") return;
     try {
       const running = manager.getRunningAgents();
@@ -8301,57 +8310,34 @@ export async function startDaemon(
         );
         return;
       }
-      const { handlePostToAgentIpc } = await import(
-        "./daemon-post-to-agent-ipc.js"
-      );
-      const sentinelResult = await handlePostToAgentIpc(
-        { from: probeAgent, to: probeAgent, message: "__A2A-01-sentinel__" },
-        {
-          runningAgents: manager.getRunningAgents(),
-          configs: resolvedAgents,
-          agentChannels: routingTableRef.current.agentToChannels,
-          webhookManager,
-          writeInbox: async (p) => {
-            const targetConfig = resolvedAgents.find((c) => c.name === p.to);
-            if (!targetConfig) {
-              throw new ManagerError(`Target agent '${p.to}' not found`);
-            }
-            const inboxDir = join(targetConfig.memoryPath, "inbox");
-            const inboxMsg = createMessage(p.from, p.to, p.content, "normal");
-            await writeMessage(inboxDir, inboxMsg);
-            return { messageId: inboxMsg.id };
-          },
-          log: {
-            info: (...args: unknown[]) => log.info(...(args as [object, string])),
-            warn: (...args: unknown[]) => log.warn(...(args as [object, string])),
-            error: (...args: unknown[]) => log.error(...(args as [object, string])),
-          },
-          botDirectSender: {
-            sendText: async (channelId: string, text: string) => {
-              const sender = botDirectSenderRef.current;
-              if (!sender) return;
-              await sender.sendText(channelId, text);
-            },
-          },
-        },
-      );
-      if (sentinelResult.delivered === true) {
+      const sender = botDirectSenderRef.current;
+      const probeChannels = routingTableRef.current.agentToChannels.get(probeAgent);
+      const wiringOk =
+        webhookManager !== undefined &&
+        sender !== null &&
+        sender !== undefined &&
+        typeof sender.sendText === "function" &&
+        probeChannels !== undefined &&
+        probeChannels.length > 0;
+      if (wiringOk) {
         log.info(
           {
             sentinel: "A2A-01",
             probeAgent,
-            messageId: sentinelResult.messageId,
+            channels: probeChannels.length,
           },
-          "[A2A-01-sentinel] OK",
+          "[A2A-01-sentinel] OK — wiring verified (webhookManager + botDirectSender + agent-channels registered)",
         );
       } else {
         log.warn(
           {
             sentinel: "A2A-01",
             probeAgent,
-            result: sentinelResult,
+            hasWebhookManager: webhookManager !== undefined,
+            hasBotDirectSender: sender !== null && sender !== undefined,
+            hasAgentChannels: probeChannels !== undefined && probeChannels.length > 0,
           },
-          "[A2A-01-sentinel] FAIL",
+          "[A2A-01-sentinel] FAIL — DI wiring incomplete",
         );
       }
     } catch (err) {
