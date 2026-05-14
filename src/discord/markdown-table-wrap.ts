@@ -32,6 +32,26 @@
 const TABLE_ROW_RE = /^\s*\|.+\|\s*$/;
 const TABLE_SEPARATOR_RE = /^\s*\|[\s:|-]+\|\s*$/;
 const CODE_FENCE_RE = /^\s*```/;
+const BACKTICK_RUN_RE = /`+/g;
+const MIN_FENCE_LEN = 3;
+
+/**
+ * Phase 122 SC-3 — longest run of consecutive backticks across the given
+ * block of lines. Used to compute an outer code fence that won't be
+ * terminated prematurely by an embedded triple-backtick (or longer) run
+ * inside a table cell.
+ */
+function longestBacktickRun(block: readonly string[]): number {
+  let longest = 0;
+  for (const line of block) {
+    BACKTICK_RUN_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = BACKTICK_RUN_RE.exec(line)) !== null) {
+      if (m[0].length > longest) longest = m[0].length;
+    }
+  }
+  return longest;
+}
 
 /**
  * Returns the input with every standalone markdown table block wrapped in
@@ -72,12 +92,15 @@ export function wrapMarkdownTablesInCodeFence(content: string): string {
         tableBlock.push(lines[i]);
         i++;
       }
-      // Wrap in code fence. The empty `text` language tag tells Discord to
-      // render plain monospaced text (no syntax highlighting). Adjacent
-      // newlines added so the fence stands alone visually.
-      out.push("```text");
+      // Phase 122 SC-3 — outer fence must be longer than the longest run
+      // of backticks inside any cell, else an embedded ``` would terminate
+      // the wrap and leak the rest of the table as raw markdown. Floor at
+      // 3 so prose without nested fences keeps the historical ```text shape.
+      const outerLen = Math.max(longestBacktickRun(tableBlock) + 1, MIN_FENCE_LEN);
+      const fence = "`".repeat(outerLen);
+      out.push(`${fence}text`);
       out.push(...tableBlock);
-      out.push("```");
+      out.push(fence);
       continue;
     }
     out.push(line);
