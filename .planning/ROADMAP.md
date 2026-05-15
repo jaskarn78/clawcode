@@ -45,7 +45,7 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 - [ ] **Phase 126: Subagent Context Isolation closeout (999.57 Plans 02/03)** — close memory-retrieval inheritance leak + heartbeat-runner full ownership transition + verification across both 2026-05-15 failure modes; Plans 02/03 already written, executable immediately
 - [ ] **Phase 127: No-useful-tokens stream timeout (999.61)** — SDK-level "no useful content tokens for N seconds → fail turn" supervisor; closes 2026-05-14 fin-acq 16-min stall pattern
 - [ ] **Phase 128: clawcode usage accuracy fixes (999.4)** — usage CLI/dashboard `resetsAt` unit fix + utilization-derive consistency; needs discuss-phase to enumerate concrete bugs (EMPTY DIR)
-- [ ] **Phase 129: clawcode status finish-up fallbacks (999.5)** — honest "N/A" for missing-source data instead of misleading zero/empty/stale; needs discuss-phase (EMPTY DIR)
+- [~] **Phase 129: clawcode status finish-up fallbacks (999.5)** — DEFERRED 2026-05-15: operator review of live `/clawcode-status` slash output showed no misleading placeholders (all fields render genuine data or honest sentinels like `Consolidated: never`). Phase has no operator-observable scope. Revivable if a misleading case surfaces later.
 
 **Wave 2 — plugin SDK + tmux skill:**
 - [ ] **Phase 130: Manifest-driven plugin SDK (999.58)** — lift OpenClaw's `plugin-sdk` manifest pattern; type-checked capability vocabulary + daemon-side validation at load time
@@ -117,20 +117,26 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 
 ---
 
-### Phase 129: clawcode status finish-up fallbacks (999.5)
+### Phase 129: clawcode status finish-up fallbacks (999.5) — DEFERRED 2026-05-15
 
-**Goal:** `clawcode status` shows honest "N/A" for missing-source data instead of misleading zero/empty/stale placeholders.
+**Status:** DEFERRED. During `/gsd-discuss-phase 129` on 2026-05-15, operator reviewed live `/clawcode-status` slash output:
 
-**Depends on:** Phase 103 telemetry surface; Phase 116 dashboard.
+```
+🦞 ClawCode v1.2.8 (2e7796e8)
+🤖 Agent: projects · 🧠 Model: claude-opus-4-7 · 🔑 sdk
+🔁 Consolidated: never
+📚 Context: 0% · 💤 Dreamt: 8 days ago (4 links)
+🧮 Tokens: 114 in / 63457 out
+🧵 Session: …58fc7f019874 • updated 15 minutes ago
+📋 Task: idle · 👥 Activation: about 1 hour ago · 🪢 Queue: idle
+7-day weekly: ▓▓▓▓▓▓▓▓▓░ 85% · resets 2 days ago
+```
 
-**Requirements:** EMPTY DIR — needs discuss-phase to enumerate concrete misleading-placeholder cases.
+All fields render genuine data; `Consolidated: never` is a truthful sentinel (no consolidations have happened on this agent), not a misleading placeholder. Operator verdict: phase has no observable scope.
 
-**Success Criteria:**
-  1. Operator-observed misleading placeholders enumerated in discuss-phase CONTEXT.md.
-  2. Helper function returns sentinel "N/A" object for missing data; render layer surfaces literal "N/A" not "0" / "" / stale-cached.
-  3. Regression test fixture covers every enumerated placeholder.
+**Original goal (preserved for revival):** `clawcode status` shows honest "N/A" for missing-source data instead of misleading zero/empty/stale placeholders. Depends on Phase 103 telemetry surface + Phase 116 dashboard.
 
-**Plans:** TBD (discuss-phase first).
+**Revival trigger:** If an operator-observed misleading placeholder surfaces in `clawcode status` CLI, `/clawcode-status` slash, or the dashboard, reopen this phase via `/gsd-phase` and rerun `/gsd-discuss-phase 129`.
 
 ---
 
