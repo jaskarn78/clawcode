@@ -198,6 +198,17 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // Operators MUST run `clawcode restart admin-clawdy` for an edit to take
   // effect. 1st application of an agent-restart classification in Phase 100
   // (vs. the 11 prior reloadable classifications in 83/86/89/90/94/95/96).
+  //
+  // Phase 999.47 Plan 02 — homelab refresh tick. Prefix-match: children
+  // of `defaults.homelab.*` all classify reloadable. The heartbeat
+  // check `homelab-refresh` reads the live resolved config via the
+  // standard ConfigReloader closure pattern (mirrors
+  // `defaults.streamStallTimeoutMs` Phase 127 precedent above). NOTE:
+  // `repoPath` is captured into refresh.sh's working directory at boot
+  // (Plan 03) and is documented as documentation-of-intent only —
+  // operators changing the inventory repo location should run
+  // `clawcode restart` for the new path to take effect cleanly.
+  "defaults.homelab",
 ]);
 
 /**
