@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
-status: opened
-stopped_at: "v2.9 closeout complete (code-side); milestone `deploy_pending` per v2.9-MILESTONE-AUDIT.md. v3.0 opened 2026-05-15 with Phases 126-135 from operator's scope screenshot. v3.1 (multi-LLM runtime) sketched for post-v3.0 with hard-deadline track before 2026-06-15 Anthropic Agent SDK credit cutover. Current position: ready to begin Phase 126 (subagent context isolation closeout — 999.57 Plans 02/03 already written). v2.9 phase summaries: 119-PHASE-SUMMARY.md, 120-FINAL-SUMMARY.md, 121/122/124/125-PHASE-SUMMARY.md, 123-VERIFICATION.md, 999.54-PHASE-SUMMARY.md. Reference: .planning/milestones/v2.9-MILESTONE-AUDIT.md (status: deploy_pending), .planning/milestones/v3.0-ROADMAP.md, .planning/milestones/v3.1-ROADMAP.md."
-last_updated: "2026-05-15T00:00:00.000Z"
-last_activity: 2026-05-15 -- v3.0 opened; ready for Phase 126 (999.57 Plans 02/03)
+status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 SHIPPED local; Plan 02 ready for dispatch; Phase 136 ready for discuss-phase
+stopped_at: "Phase 127 Plan 01 SHIPPED local (6 commits `3db91d5`, `fd60504`, `351e572`, `94b48eb`, `f310de3`, `28576a4`). Stream-stall supervisor with single-chokepoint tracker module — schema cascade + loader resolver + production wiring in persistent-session-handle.ts iterateUntilResult + synthetic stream tests. Critical deviation: plan listed only session-adapter.ts but production routes through persistent-session-handle.ts; both call sites now share `src/manager/stream-stall-tracker.ts` per feedback_silent_path_bifurcation.md. Predicate extended to recognize input_json_delta.partial_json (tool-use streams no longer false-stall). Deploy-gated on Ramy-quiet window. Plan 02 wires daemon-side Discord notification + session-log row. See `.planning/phases/127-no-useful-tokens-stream-timeout/127-01-SUMMARY.md`. Predecessor stop point: Phase 127 CONTEXT + 3 PLANs drafted (commits `5414ad3` + `d8e5b00`)."
+last_updated: "2026-05-15T14:46:24Z"
+last_activity: 2026-05-15 -- Phase 127 Plan 01 SHIPPED local (35min, 5 tasks, 8 files modified, 2 created; 6/6 synthetic stream tests green; tsc clean). Plan 02 next.
 progress:
   total_phases: 82
-  completed_phases: 32
-  total_plans: 160
-  completed_plans: 154
-  percent: 96
+  completed_phases: 25
+  total_plans: 152
+  completed_plans: 147
+  percent: 30
 ---
 
 # Project State
@@ -27,8 +27,9 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 ## Current Position
 
 **v3.0 Wave 1 (in progress):**
+
 - Phase 126: Plans 01 + 02 SHIPPED (commit `ae3764d`); Plan 03 operator-deploy-gated
-- Phase 127 (stream stall timeout): **CONTEXT.md + 3 PLANs drafted** (commits `5414ad3` + `d8e5b00`); ready for Plan 01 execution. Resume with `/gsd-execute-phase 127 --no-transition`
+- Phase 127 (stream stall timeout): **Plan 01 SHIPPED local** (6 commits `3db91d5`..`28576a4`). Plan 02 ready for dispatch (daemon-side Discord notification + session-log row + integration test STALL-04). Plan 03 deploy-gated.
 - Phase 128 (clawcode usage accuracy): EMPTY DIR — needs discuss-phase
 - Phase 129 (clawcode status fallbacks): EMPTY DIR — needs discuss-phase
 - Phase 130 (manifest plugin SDK): BACKLOG only — needs discuss-phase
@@ -39,6 +40,7 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 - Phase 135 (Discord voice channel): BACKLOG only — large port, deferred to end of milestone
 
 **v3.1 Wave 1 (parallel — opening 2026-05-15):**
+
 - Phase 136 (LlmRuntimeService seam + AnthropicAgentSdk backend extraction): READY TO START — `/gsd-discuss-phase 136` next; anchor BACKLOG at `.planning/phases/136-llm-runtime-multi-backend/BACKLOG.md`
 - Phase 137 (AnthropicApiKey backend): blocked by 136
 - Phase 138 (Credit telemetry + failover): blocked by 137
@@ -50,14 +52,21 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 **CONTEXT.md committed (`5414ad3`):** D-01..D-10 locked. D-07 (advisor pause vs threshold-cushion) deferred to plan-research; for now per-model 300000ms Opus override is the fallback.
 
 **3 plans committed (`d8e5b00`):**
-- **Plan 01 (autonomous, wave 1):** schema + type cascade + loader resolver + session-adapter tracker + AbortController + synthetic stream tests (3 cases) + RELOADABLE_FIELDS classifier doc.
+
+- **Plan 01 (autonomous, wave 1) — SHIPPED LOCAL 2026-05-15:** schema + type cascade + loader resolver (phase127-resolver log) + stream-stall tracker module + production wiring in persistent-session-handle.ts iterateUntilResult + AbortController via existing fireInterruptOnce + 6 synthetic stream tests + RELOADABLE_FIELDS classifier. 6 commits `3db91d5`/`fd60504`/`351e572`/`94b48eb`/`f310de3`/`28576a4`. Summary: `.planning/phases/127-no-useful-tokens-stream-timeout/127-01-SUMMARY.md`. **Critical deviation:** plan listed only session-adapter.ts; production routes through persistent-session-handle.ts. Both call sites now share `src/manager/stream-stall-tracker.ts` per feedback_silent_path_bifurcation.md. Predicate extended to recognize input_json_delta.partial_json.
 - **Plan 02 (autonomous, wave 2):** sessionLog.recordStall API + daemon.ts onStreamStall callback wiring + Discord webhook fire-and-forget + integration test STALL-04.
 - **Plan 03 (autonomous: false, deploy-gated):** operator deploy + journalctl resolver-log grep + synthetic stall probe + Opus advisor false-positive check (D-07) + 24h threshold tuning (D-09).
 
-**Resume command:** `/gsd-execute-phase 127 --no-transition` (kicks off Plan 01 → Plan 02; halts before Plan 03 per autonomous:false frontmatter).
+**Resume command:** `/gsd-execute-phase 127 --no-transition` (kicks off Plan 02; halts before Plan 03 per autonomous:false frontmatter).
 
 ## Recent commits (2026-05-15)
 
+- `28576a4` docs(127-01): summary — schema + tracker + synthetic stream tests complete
+- `f310de3` test(127-01-T04): synthetic stream-stall fixture — STALL-01..03 + cleanup
+- `94b48eb` feat(127-01-T03): stream-stall tracker + AbortController trip behavior
+- `351e572` feat(127-01-T05): classify streamStallTimeoutMs as reloadable
+- `fd60504` feat(127-01-T02): loader resolver cascade + phase127-resolver structured log
+- `3db91d5` feat(127-01-T01): add streamStallTimeoutMs schema + ResolvedAgentConfig field
 - `d8e5b00` docs(127): add 3 plans (schema/resolver + daemon wiring + deploy-gated verification)
 - `5414ad3` docs(127): capture phase context for no-useful-tokens stream timeout
 - `5971c46` chore: rename v3.0+v3.1 phase dirs to numeric IDs (127-136)
@@ -84,6 +93,7 @@ All 7 v2.9 phases (119-125) code-complete locally per `.planning/milestones/v2.9
 ## v3.0 Phase Map (Wave order per `.planning/milestones/v3.0-ROADMAP.md`)
 
 **Wave 1 — operator-pain hotfix-to-architecture closeouts + small lifts:**
+
 - **Phase 126: Subagent Context Isolation closeout (999.57)** — Plans 02 + 03 (Plan 03 deploy-gated). Renumber DEL-15..DEL-19 collision with existing DEL-15..DEL-18 (from 999.58/999.61) → DEL-20..DEL-24.
 - **Phase 127: No-useful-tokens stream timeout (999.61)** — discuss-phase first; SDK supervisor extension
 - **Phase 128: clawcode usage accuracy fixes (999.4)** — EMPTY DIR; discuss-phase first
