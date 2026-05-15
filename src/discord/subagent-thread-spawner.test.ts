@@ -1714,4 +1714,60 @@ describe("spawnInThread with delegateTo", () => {
       }),
     ).rejects.toThrow(/Delegate agent 'ghost-agent' not found/);
   });
+
+  // Phase 999.57 (2026-05-15) — delegated spawns must NOT auto-relay on the
+  // subagent's first-message-stream-end. The subagent must call
+  // `subagent_complete` to fire the relay. Pre-999.57 the relay grabbed
+  // turn-1 ack text (or memory-leaked content) as "final response" and
+  // archived the thread in 5-10s (production failures, admin-clawdy →
+  // research, 2026-05-15 18:04 + 18:09).
+  it("DEL-11 (999.57): delegated spawn does NOT auto-relay by default — relay is gated on subagent_complete", async () => {
+    const spy = vi.spyOn(spawner, "relayCompletionToParent").mockResolvedValue();
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+      task: "look up cool features openclaw has that we don't",
+    });
+    // Allow the fire-and-forget postInitialMessage chain to settle.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("DEL-12 (999.57): delegated spawn WITH explicit autoRelay: true bypasses the gate (legacy one-shot path)", async () => {
+    const spy = vi.spyOn(spawner, "relayCompletionToParent").mockResolvedValue();
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "quick-lookup",
+      delegateTo: "research",
+      task: "what's the current btc price",
+      autoRelay: true,
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("DEL-13 (999.57): non-delegated spawn keeps legacy auto-relay-by-default behavior (back-compat pin)", async () => {
+    const spy = vi.spyOn(spawner, "relayCompletionToParent").mockResolvedValue();
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "self-spawn",
+      task: "do a quick thing",
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("DEL-14 (999.57): subagent threadContext instructs delegate to call subagent_complete", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.soul).toContain("subagent_complete");
+    // Production-failure language carried through so future maintainers
+    // understand why this instruction exists.
+    expect(startedConfig.soul).toContain("ack-and-wait");
+  });
 });

@@ -89,7 +89,7 @@ export function buildCapabilityManifest(
   // Gated on the skill assignment to keep parity with session-config.
   if (config.skills.includes("subagent-thread")) {
     bullets.push(
-      "- **Subagent threads**: spawn_subagent_thread MCP tool ready. Defaults: `autoRelay: true` (parent channel gets a summary on completion); pass `autoArchive: true` for fire-and-forget (no relay).",
+      "- **Subagent threads**: spawn_subagent_thread MCP tool ready. Defaults: `autoRelay: true` for non-delegated spawns (first reply is summarized to your channel); `autoRelay: false` when `delegateTo` is set (Phase 999.57 — the delegate must call `subagent_complete` to relay its final answer, because multi-turn delegated work can't be summarized from turn 1). Pass `autoArchive: true` for fire-and-forget on non-delegated spawns.",
     );
   }
 

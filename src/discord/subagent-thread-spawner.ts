@@ -563,6 +563,14 @@ export class SubagentThreadSpawner {
       // via shared-workspace identity drift. Pair with daemon-side
       // resolveShareFileChannel fix at daemon.ts case "share-file".
       `When calling clawcode_share_file, pass agent="${sessionName}" (your session name above) — NOT "${config.parentAgentName}". This routes the upload to THIS thread.`,
+      // Phase 999.57 (2026-05-15) — explicit completion contract. Pre-999.57,
+      // the auto-relay fired on first-message-stream-end which produced
+      // wrong-summary failures for any subagent that needed multiple turns
+      // (production: 2026-05-15 admin-clawdy→research, two consecutive
+      // failures at 18:04 + 18:09 archived in 5-10s with ack/leaked
+      // content as "final response"). Post-999.57, delegated subagents
+      // get the full multi-turn budget and MUST signal completion explicitly.
+      `When your delegated work is fully complete and you have posted the final deliverable in this thread, call the \`subagent_complete\` MCP tool exactly once with agentName="${sessionName}". This relays your last substantive message to \`${config.parentAgentName}\`'s main channel. Do not call it on intermediate updates, acknowledgments, or tool-use preludes — only after the work is genuinely done.`,
     ];
     const delegationContext = normalizedDelegateTo
       ? [
@@ -571,6 +579,8 @@ export class SubagentThreadSpawner {
           `You are acting on behalf of \`${config.parentAgentName}\` who delegated this work to you.`,
           "Use your full identity, skills, and standards. Treat the operator's request",
           "as one fulfilled THROUGH you, not BY you.",
+          "Produce the full deliverable BEFORE calling `subagent_complete`. Do not ack-and-wait;",
+          "do not summarize a plan — execute it and post the result first.",
         ]
       : [];
     const threadContext = [...baseContext, ...delegationContext].join("\n");
@@ -675,12 +685,34 @@ export class SubagentThreadSpawner {
     // caller gets the thread URL back immediately; the LLM roundtrip runs
     // in the background and posts directly to the thread. Errors are logged.
     // Phase 100 follow-up — post-reply chain:
-    //   - autoRelay (default true): parent gets a synthetic turn in its
-    //     main channel summarizing the subagent's output
+    //   - autoRelay (default true for non-delegated spawns): parent gets a
+    //     synthetic turn in its main channel summarizing the subagent's output
     //   - autoArchive (default false): also archive thread + stop session
     //   - autoArchive implies autoRelay
+    //
+    // Phase 999.57 (2026-05-15) — auto-relay fires when the subagent's FIRST
+    // assistant stream ends (postInitialMessage awaits one SDK turn, then
+    // line 886 calls relayCompletionToParent). For one-shot Q&A subagents
+    // this is correct: the first reply IS the deliverable. For delegated
+    // multi-turn work (delegateTo set), the first reply is almost always an
+    // ack or a tool-use prelude — relaying it as "the answer" produces wrong
+    // summaries (production failures 2026-05-15 18:04 + 18:09: research
+    // subagents archived at 10s with ack-text or memory-leaked content
+    // surfaced as "final response").
+    //
+    // Fix: when delegateTo is set, default autoRelay to FALSE. The subagent
+    // must explicitly call the `subagent_complete` MCP tool (Phase 999.25)
+    // to fire the relay — see threadContext instruction injected at the
+    // baseContext build above. Callers can still pass `autoRelay: true`
+    // explicitly to opt into the legacy first-stream-end behavior for
+    // delegated spawns (e.g., when the delegate IS expected to answer in
+    // one turn).
     const autoArchive = config.autoArchive === true;
-    const autoRelay = autoArchive || config.autoRelay !== false;
+    const isDelegated = Boolean(config.delegateTo && config.delegateTo.length > 0);
+    const autoRelay = autoArchive
+      || (isDelegated
+        ? config.autoRelay === true
+        : config.autoRelay !== false);
     void this.postInitialMessage(
       thread,
       sessionName,
