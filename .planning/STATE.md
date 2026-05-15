@@ -22,25 +22,53 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** Phase 126 Plan 03 (deploy-gated) + Phase 127 discuss-phase (v3.0 Wave 1) AND Phase 136 LlmRuntimeService seam (v3.1 Wave 1 — hard-deadline track, 31 days until 2026-06-15 Anthropic cutover)
+**Current focus:** Phase 127 Plan 01 execution (v3.0 Wave 1 next) + Phase 136 LlmRuntimeService seam (v3.1 Wave 1 hard-deadline track, 31 days until 2026-06-15 Anthropic cutover)
 
 ## Current Position
 
 **v3.0 Wave 1 (in progress):**
-- Phase 126: Plans 01 + 02 SHIPPED (commit `ae3764d`); Plan 03 deploy-gated per `feedback_ramy_active_no_deploy`
-- Phase 127 (999.61 stream timeout): NEXT — needs discuss-phase
-- Phase 128 (999.4 usage accuracy): EMPTY DIR — needs discuss-phase
-- Phase 129 (999.5 status fallbacks): EMPTY DIR — needs discuss-phase
+- Phase 126: Plans 01 + 02 SHIPPED (commit `ae3764d`); Plan 03 operator-deploy-gated
+- Phase 127 (stream stall timeout): **CONTEXT.md + 3 PLANs drafted** (commits `5414ad3` + `d8e5b00`); ready for Plan 01 execution. Resume with `/gsd-execute-phase 127 --no-transition`
+- Phase 128 (clawcode usage accuracy): EMPTY DIR — needs discuss-phase
+- Phase 129 (clawcode status fallbacks): EMPTY DIR — needs discuss-phase
+- Phase 130 (manifest plugin SDK): BACKLOG only — needs discuss-phase
+- Phase 131 (tmux skill port): BACKLOG only — needs discuss-phase
+- Phase 132 (autonomous skill creation): BACKLOG only — needs discuss-phase
+- Phase 133 (clawcode as MCP server): BACKLOG only — needs discuss-phase
+- Phase 134 (MCP broker hot-reload): DEFERRED pending Plan 94-08
+- Phase 135 (Discord voice channel): BACKLOG only — large port, deferred to end of milestone
 
 **v3.1 Wave 1 (parallel — opening 2026-05-15):**
-- Phase 136 (LlmRuntimeService seam + AnthropicAgentSdk backend extraction): READY TO START — `gsd-discuss-phase 136` next
+- Phase 136 (LlmRuntimeService seam + AnthropicAgentSdk backend extraction): READY TO START — `/gsd-discuss-phase 136` next; anchor BACKLOG at `.planning/phases/136-llm-runtime-multi-backend/BACKLOG.md`
 - Phase 137 (AnthropicApiKey backend): blocked by 136
 - Phase 138 (Credit telemetry + failover): blocked by 137
 
-**Hard deadline:** 2026-06-15 (31 days). Phases 136 / 137 / 138 must merge before that to retain ClawCode affordability under Anthropic's new Agent SDK credit policy.
+**Hard deadline:** 2026-06-15 (31 days). Phases 136/137/138 must merge before that to retain ClawCode affordability under Anthropic's new Agent SDK credit policy.
 
-Status: v3.0 + v3.1 BOTH OPEN; parallel execution per operator directive 2026-05-15
-Last activity: 2026-05-15 -- Phase 126 Plan 02 SHIPPED (`ae3764d`); ROADMAP restructure (`a964443`); ready for parallel Phase 127/136 work
+## Phase 127 — Detailed status
+
+**CONTEXT.md committed (`5414ad3`):** D-01..D-10 locked. D-07 (advisor pause vs threshold-cushion) deferred to plan-research; for now per-model 300000ms Opus override is the fallback.
+
+**3 plans committed (`d8e5b00`):**
+- **Plan 01 (autonomous, wave 1):** schema + type cascade + loader resolver + session-adapter tracker + AbortController + synthetic stream tests (3 cases) + RELOADABLE_FIELDS classifier doc.
+- **Plan 02 (autonomous, wave 2):** sessionLog.recordStall API + daemon.ts onStreamStall callback wiring + Discord webhook fire-and-forget + integration test STALL-04.
+- **Plan 03 (autonomous: false, deploy-gated):** operator deploy + journalctl resolver-log grep + synthetic stall probe + Opus advisor false-positive check (D-07) + 24h threshold tuning (D-09).
+
+**Resume command:** `/gsd-execute-phase 127 --no-transition` (kicks off Plan 01 → Plan 02; halts before Plan 03 per autonomous:false frontmatter).
+
+## Recent commits (2026-05-15)
+
+- `d8e5b00` docs(127): add 3 plans (schema/resolver + daemon wiring + deploy-gated verification)
+- `5414ad3` docs(127): capture phase context for no-useful-tokens stream timeout
+- `5971c46` chore: rename v3.0+v3.1 phase dirs to numeric IDs (127-136)
+- `ae3764d` test(126-02 / 999.57): DEL-20..DEL-24 regression tests pin Plan 01 wiring
+- `a964443` docs(infra): restructure ROADMAP — nest v3.0/v3.1 phase details inline + rename 999.57 → 126
+- `bc70fdb` docs(infra): add Phase 126-142 detail sections + transition STATE.md to v3.0
+- `74dc984` docs(roadmap): promote v3.0 backlog to Phases 126-135 + v3.1 to Phases 136-142
+- `3eb80f3` docs(v2.9,v3.0,v3.1): close v2.9 closeouts + draft v3.0/v3.1 roadmaps
+
+Status: v3.0 + v3.1 BOTH OPEN; Phase 127 planned, ready for execution; Phase 136 ready for discuss-phase
+Last activity: 2026-05-15 -- Phase 127 CONTEXT + 3 PLANs drafted via autonomous workflow; next conversation executes Plan 127-01 + 127-02
 
 ## v2.9 Status (deploy_pending — superseded by v3.0)
 
