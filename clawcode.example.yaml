@@ -268,8 +268,7 @@ agents:
       1password:
         OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
   - name: personal
-    # Phase 100 follow-up — dormant by default (operator brings up on demand).
-    autoStart: false
+    autoStart: true
     workspace: /home/jjagpal/.clawcode/agents/personal
     soulFile: /home/jjagpal/.clawcode/agents/personal/SOUL.md
     identityFile: /home/jjagpal/.clawcode/agents/personal/IDENTITY.md
