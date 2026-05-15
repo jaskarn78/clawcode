@@ -561,6 +561,34 @@ export type ResolvedAgentConfig = {
   readonly debug?: {
     readonly dumpBaseOptionsOnSpawn: boolean;
   };
+  /**
+   * Phase 136 — primary agent runtime backend selection.
+   *
+   * ALWAYS populated by loader.ts (resolver fills from
+   * `agent.llmRuntime?.backend ?? defaults.llmRuntime?.backend ?? "anthropic-agent-sdk"`).
+   * Phase 136 ships the seam scaffold with a single accepted value
+   * (`"anthropic-agent-sdk"` — the current production runtime,
+   * extracted into `AnthropicAgentSdkBackend`). Phase 137 widens the
+   * Zod enum to add `"anthropic-api-key"` for pay-as-you-go billing
+   * when the 2026-06-15 Anthropic Agent SDK credit cap depletes;
+   * Phase 138 wires credit telemetry + automatic failover; Phase 141
+   * adds Codex; Phase 142 adds OpenRouter.
+   *
+   * **Construction-site consumer:** `createLlmRuntimeService(config, deps)`
+   * at `src/llm-runtime/llm-runtime-service.ts`. Single chokepoint per
+   * agent per session in `daemon.ts` — direct
+   * `await import("@anthropic-ai/claude-agent-sdk")` outside
+   * `src/llm-runtime/backends/anthropic-agent-sdk.ts` is forbidden
+   * (static-grep CI test enforces).
+   *
+   * **NON_RELOADABLE** — backend selection is captured into the
+   * session boot path at agent start; YAML edits take effect on the
+   * next `clawcode restart <agent>`. Same architectural pattern as
+   * Phase 117 `advisor.backend` and Phase 999.54 `alwaysLoad`.
+   */
+  readonly llmRuntime?: {
+    readonly backend: import("../llm-runtime/types.js").LlmRuntimeBackend;
+  };
 };
 
 /**
