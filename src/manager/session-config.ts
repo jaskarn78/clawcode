@@ -300,6 +300,31 @@ export type SessionConfigDeps = {
   readonly advisorBudget?: {
     canCall(agent: string): boolean;
   };
+  /**
+   * Phase 127 Plan 02 — per-agent stream-stall callback factory.
+   *
+   * When supplied, `buildSessionConfig` invokes this with the agent's
+   * resolved `{name, model, effort}` and threads the returned callback
+   * into `AgentSessionConfig.onStreamStall`. Plan 01 declared the hook;
+   * Plan 02 supplies the daemon-side implementation
+   * ({@link src/manager/stream-stall-callback.ts:makeStreamStallCallback})
+   * that fires the Discord webhook notification + JSONL stall row.
+   *
+   * Optional — when absent (tests, bootstrap paths, daemon boot before
+   * WebhookManager + SessionLogger are wired), the callback is OMITTED
+   * (spread-conditional pattern; `{onStreamStall: undefined}` is NEVER
+   * set). The Plan 01 tracker still emits `phase127-stream-stall` log +
+   * aborts via fireInterruptOnce(), so protective behavior holds even
+   * without this hook.
+   */
+  readonly streamStallCallbackFactory?: (args: {
+    readonly agentName: string;
+    readonly model: string;
+    readonly effort: string;
+  }) => (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void;
 };
 
 /**
@@ -1117,6 +1142,21 @@ export async function buildSessionConfig(
     // builders. Consumers default to 180_000ms.
     ...(typeof config.streamStallTimeoutMs === "number"
       ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+      : {}),
+    // Phase 127 Plan 02 — onStreamStall callback (Discord webhook +
+    // sessionLog.recordStall). Spread-conditional OMIT when the factory
+    // is absent (tests, bootstrap paths) — the Plan 01 tracker still
+    // emits the structured log + aborts, so the protective surface
+    // works without the daemon-side wiring. Production SessionManager
+    // wires the factory in `configDeps()`.
+    ...(deps.streamStallCallbackFactory !== undefined
+      ? {
+          onStreamStall: deps.streamStallCallbackFactory({
+            agentName: config.name,
+            model: config.model,
+            effort: config.effort,
+          }),
+        }
       : {}),
     // Phase 117 Plan 04 T05 — advisor model passthrough.
     //

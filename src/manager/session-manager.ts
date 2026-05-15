@@ -74,6 +74,7 @@ import { summarizeWithHaiku } from "./summarize-with-haiku.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
+import { makeStreamStallCallback } from "./stream-stall-callback.js";
 import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
@@ -2388,7 +2389,55 @@ export class SessionManager {
       // default `defaults.advisor.backend: native`).
       advisorDefaults: this.advisorDefaults,
       advisorBudget: this.advisorBudget,
+      // Phase 127 Plan 02 — stream-stall callback factory. When
+      // `webhookManager` is wired (post-construction setWebhookManager
+      // pattern), this returns a closure that emits a Discord
+      // notification + records a JSONL stall row on trip. When the
+      // webhookManager is still undefined (boot ordering, tests), the
+      // factory falls back to a sessionLogger-only callback. When even
+      // the agent name is unknown (configDeps called with no name —
+      // legacy callers in test paths), the factory itself is omitted
+      // and buildSessionConfig OMITS the `onStreamStall` field.
+      streamStallCallbackFactory:
+        agentName !== undefined
+          ? this.makeStreamStallCallbackFactory()
+          : undefined,
     };
+  }
+
+  /**
+   * Phase 127 Plan 02 — build a stall-callback factory closure.
+   *
+   * Closed over `this.webhookManager` (DI'd via setWebhookManager AFTER
+   * construction) and a late-binding lookup for the per-agent
+   * SessionLogger + active sessionId. Both lookups happen at trip
+   * time, not factory time, so the factory survives a webhookManager
+   * that lands during boot and a session that rotates mid-lifetime.
+   *
+   * The factory accepts `{agentName, model, effort}` and returns a
+   * callback the buildSessionConfig spread inserts into
+   * `AgentSessionConfig.onStreamStall`.
+   */
+  private makeStreamStallCallbackFactory(): (args: {
+    readonly agentName: string;
+    readonly model: string;
+    readonly effort: string;
+  }) => (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void {
+    return (args) =>
+      makeStreamStallCallback({
+        agentName: args.agentName,
+        model: args.model,
+        effort: args.effort,
+        webhookManager: this.webhookManager,
+        sessionLoggerProvider: () =>
+          this.memory.sessionLoggers.get(args.agentName),
+        sessionIdProvider: () =>
+          this.sessions.get(args.agentName)?.sessionId ?? "",
+        log: this.log,
+      });
   }
 
   private async performRestart(name: string, config: ResolvedAgentConfig): Promise<void> {
