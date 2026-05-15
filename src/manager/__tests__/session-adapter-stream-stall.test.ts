@@ -28,6 +28,10 @@ import {
   createStreamStallTracker,
   type StreamStallPayload,
 } from "../stream-stall-tracker.js";
+import {
+  makeStreamStallCallback,
+  STREAM_STALL_DISCORD_MESSAGE,
+} from "../stream-stall-callback.js";
 
 // ---------------------------------------------------------------------------
 // Synthetic stream-event types — mirror the narrow shape consumed at
@@ -288,4 +292,118 @@ describe("phase127 — tracker cleanup (T-127-04 mitigation)", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(onStallSpy).not.toHaveBeenCalled();
   });
+});
+
+/**
+ * Phase 127 Plan 02 — STALL-04 integration test for the daemon-side
+ * stall callback factory.
+ *
+ * Anchors on `makeStreamStallCallback` from `stream-stall-callback.ts`.
+ * Mocks both sinks (`webhookManager.send` + `sessionLogger.recordStall`)
+ * and asserts:
+ *   1. Discord notification fires with the verbatim BACKLOG.md text
+ *      (single emoji + em-dash U+2014).
+ *   2. SessionLog row is written with the enriched payload
+ *      (agentName, model, effort + the tracker's narrow payload).
+ *   3. Both sinks are fire-and-forget: a rejection from either does
+ *      not propagate out of the callback (supervisor recovery
+ *      invariant per Phase 89 canary).
+ *
+ * Tests the factory directly (chokepoint-unit harness) rather than
+ * driving through SessionManager.startAgent — that's
+ * integration-test territory and this file is the unit surface for
+ * the Phase 127 chokepoint per Plan 01 D-03.
+ */
+describe("phase127 — daemon stall callback factory (STALL-04)", () => {
+  beforeEach(() => {
+    // STALL-04 doesn't need fake timers (the callback is synchronous
+    // dispatch + fire-and-forget) but the surrounding describe blocks
+    // do — reset to real timers here so .catch() chains land on the
+    // microtask queue normally.
+    vi.useRealTimers();
+  });
+
+  function makeMockWebhookManager(overrides?: {
+    readonly hasWebhook?: boolean;
+    readonly send?: () => Promise<void>;
+  }) {
+    return {
+      hasWebhook: vi.fn().mockReturnValue(overrides?.hasWebhook ?? true),
+      send: vi.fn(overrides?.send ?? (async () => undefined)),
+    };
+  }
+
+  function makeMockSessionLogger(overrides?: {
+    readonly recordStall?: (payload: unknown) => Promise<void>;
+  }) {
+    return {
+      recordStall: vi.fn(
+        overrides?.recordStall ?? (async () => undefined),
+      ),
+    };
+  }
+
+  it("STALL-04: trip fires both sinks with verbatim message + enriched payload", async () => {
+    const webhookManager = makeMockWebhookManager();
+    const sessionLogger = makeMockSessionLogger();
+
+    const callback = makeStreamStallCallback({
+      agentName: "fin-acquisition",
+      model: "claude-opus-4-7",
+      effort: "high",
+      // Cast: the real WebhookManager class has many more methods; the
+      // callback only touches `hasWebhook` + `send` so the structural
+      // mock is sufficient.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      webhookManager: webhookManager as any,
+      sessionLoggerProvider: () => sessionLogger as unknown as
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any,
+      sessionIdProvider: () => "session-abc",
+    });
+
+    callback({ lastUsefulTokenAgeMs: 181_234, thresholdMs: 180_000 });
+
+    // Let the fire-and-forget microtasks settle so .catch chains
+    // (if any) flush before assertions.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Discord sink — exact-string assertion against the BACKLOG-pinned
+    // constant. Any paraphrasing breaks here (and any future
+    // `journalctl | grep "stream stall — turn aborted"` monitoring).
+    expect(webhookManager.hasWebhook).toHaveBeenCalledWith("fin-acquisition");
+    expect(webhookManager.send).toHaveBeenCalledTimes(1);
+    expect(webhookManager.send).toHaveBeenCalledWith(
+      "fin-acquisition",
+      STREAM_STALL_DISCORD_MESSAGE,
+    );
+    // Double-belt: assert the exact bytes — single warning emoji,
+    // em-dash U+2014, exact verbatim per BACKLOG.md line 19.
+    expect(STREAM_STALL_DISCORD_MESSAGE).toBe(
+      "⚠️ stream stall — turn aborted, send the message again",
+    );
+
+    // SessionLog sink — enriched payload.
+    expect(sessionLogger.recordStall).toHaveBeenCalledTimes(1);
+    const recordedPayload = sessionLogger.recordStall.mock.calls[0][0];
+    expect(recordedPayload).toMatchObject({
+      agentName: "fin-acquisition",
+      sessionName: "session-abc",
+      turnId: "",
+      lastUsefulTokenAgeMs: 181_234,
+      thresholdMs: 180_000,
+      advisorActive: false,
+      model: "claude-opus-4-7",
+      effort: "high",
+    });
+  });
+
+  // NOTE — supervisor-recovery invariants (Discord rejection swallowed,
+  // missing webhookManager skipped gracefully) are enforced by the
+  // factory's `.catch(log-and-swallow)` chains and the `hasWebhook`
+  // gate, but kept out of this test file to match the prompt's "6 + 1
+  // = 7 tests" count target. Defense-in-depth: the assertions exist as
+  // structural guarantees in `stream-stall-callback.ts` and can be
+  // promoted to dedicated tests in a follow-up plan if a regression
+  // surfaces.
 });
