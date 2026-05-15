@@ -1,5 +1,9 @@
 import type { AgentSessionConfig } from "./types.js";
 import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage, SlashCommand, PermissionMode } from "./sdk-types.js";
+// Phase 136 T-04 — seam chokepoint for the @anthropic-ai/claude-agent-sdk
+// dynamic import. Replaces the prior inline `await import(...)` in
+// `loadSdk()` below. See `src/llm-runtime/backends/anthropic-agent-sdk.ts`.
+import { loadAnthropicAgentSdkModule } from "../llm-runtime/index.js";
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
@@ -1404,25 +1408,20 @@ export function transformMcpServersForSdk(
   );
 }
 
-let cachedSdk: SdkModule | null = null;
-
 /**
- * Dynamically import the Claude Agent SDK.
- * Caches the module after first load.
+ * Phase 136 T-04 — SDK chokepoint migration.
+ *
+ * The dynamic `await import("@anthropic-ai/claude-agent-sdk")` and its
+ * cache moved into `src/llm-runtime/backends/anthropic-agent-sdk.ts`.
+ * `loadSdk()` is now a thin alias that delegates to the seam's free-
+ * function chokepoint. Behavior is byte-identical: same module cache
+ * semantics, same not-installed error message, same `SdkModule` cast.
+ *
+ * Phase 137 wires `LlmRuntimeService` through DI here so this whole
+ * function disappears in favour of `deps.llmRuntime.loadSdkModule()`.
  */
 async function loadSdk(): Promise<SdkModule> {
-  if (cachedSdk) {
-    return cachedSdk;
-  }
-  try {
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
-    cachedSdk = sdk as unknown as SdkModule;
-    return cachedSdk;
-  } catch {
-    throw new Error(
-      "Claude Agent SDK is not installed. Run: npm install @anthropic-ai/claude-agent-sdk",
-    );
-  }
+  return loadAnthropicAgentSdkModule();
 }
 
 /**

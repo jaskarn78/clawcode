@@ -39,10 +39,11 @@ import type {
 
 /**
  * Module-level cache shared across all `AnthropicAgentSdkBackend`
- * instances in this process. Node's dynamic-import cache already
- * deduplicates the module — this cache exists so we resolve the
- * Promise<LlmRuntimeSdkModule> exactly once per process and avoid
- * the SdkModule-shape cast per call.
+ * instances in this process AND every free-function consumer of
+ * `loadAnthropicAgentSdkModule()`. Node's dynamic-import cache
+ * already deduplicates the module — this cache exists so we resolve
+ * the Promise<LlmRuntimeSdkModule> exactly once per process and
+ * avoid the SdkModule-shape cast per call.
  *
  * Type intentionally widened to `unknown` at import time then cast
  * to `LlmRuntimeSdkModule` on first resolve — matches the pre-
@@ -50,6 +51,42 @@ import type {
  * (`cachedSdk = sdk as unknown as SdkModule`).
  */
 let cachedModule: LlmRuntimeSdkModule | null = null;
+
+/**
+ * Free-function chokepoint for the Anthropic Agent SDK dynamic
+ * import.
+ *
+ * The class-based `AnthropicAgentSdkBackend.loadSdkModule()`
+ * delegates here. Legacy call sites (`session-adapter.ts:loadSdk`,
+ * `daemon.ts` compaction triggers, `openai/endpoint-bootstrap.ts`)
+ * also call this directly during the Phase 136 migration, before
+ * Phase 137 threads `LlmRuntimeService` through DI for those sites.
+ *
+ * Exporting both shapes keeps the migration patch small (T-04
+ * touches only the 4 import lines, not the surrounding wiring) while
+ * preserving the future-pattern: Phase 137 callers receive an
+ * `LlmRuntimeService` reference and call `service.loadSdkModule()`.
+ * The free function is the back-compat ramp.
+ */
+export async function loadAnthropicAgentSdkModule(): Promise<LlmRuntimeSdkModule> {
+  if (cachedModule) {
+    return cachedModule;
+  }
+  try {
+    // The ONLY @anthropic-ai/claude-agent-sdk import in src/
+    // outside __tests__/. Static-grep CI test (T-06) enforces.
+    const sdk = await import("@anthropic-ai/claude-agent-sdk");
+    cachedModule = sdk as unknown as LlmRuntimeSdkModule;
+    return cachedModule;
+  } catch {
+    // Verbatim error message from the prior loadSdk() at
+    // src/manager/session-adapter.ts:1422 — operator-facing string
+    // preserved so existing error matchers keep working.
+    throw new Error(
+      "Claude Agent SDK is not installed. Run: npm install @anthropic-ai/claude-agent-sdk",
+    );
+  }
+}
 
 export class AnthropicAgentSdkBackend implements LlmRuntimeService {
   readonly backendId = "anthropic-agent-sdk" as const;
@@ -75,23 +112,7 @@ export class AnthropicAgentSdkBackend implements LlmRuntimeService {
   }
 
   async loadSdkModule(): Promise<LlmRuntimeSdkModule> {
-    if (cachedModule) {
-      return cachedModule;
-    }
-    try {
-      // The ONLY @anthropic-ai/claude-agent-sdk import in src/
-      // outside this file. Static-grep CI test (T-06) enforces.
-      const sdk = await import("@anthropic-ai/claude-agent-sdk");
-      cachedModule = sdk as unknown as LlmRuntimeSdkModule;
-      return cachedModule;
-    } catch {
-      // Verbatim error message from the prior loadSdk() at
-      // src/manager/session-adapter.ts:1422 — operator-facing
-      // string preserved so existing error matchers keep working.
-      throw new Error(
-        "Claude Agent SDK is not installed. Run: npm install @anthropic-ai/claude-agent-sdk",
-      );
-    }
+    return loadAnthropicAgentSdkModule();
   }
 }
 

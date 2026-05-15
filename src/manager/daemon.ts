@@ -3405,7 +3405,15 @@ export async function startDaemon(
       const { handleCompactSession } = await import(
         "./daemon-compact-session-ipc.js"
       );
-      const sdk = await import("@anthropic-ai/claude-agent-sdk");
+      // Phase 136 T-04 — direct SDK import replaced by the
+      // src/llm-runtime/ seam chokepoint. The local `sdk` reference
+      // continues to expose `sdk.forkSession(id, opts)` because
+      // `LlmRuntimeSdkModule` widens `SdkModule` with the forkSession
+      // method declaration that the bundled Agent SDK exports.
+      const { loadAnthropicAgentSdkModule } = await import(
+        "../llm-runtime/index.js"
+      );
+      const sdk = await loadAnthropicAgentSdkModule();
       // Phase 125 Plan 02 — D-01 single extractor seam. Tier 1 partition
       // runs here (full ConversationTurn[] visible); preserved turns ride
       // through the extractor head so they end up in the fork-summary
@@ -10740,7 +10748,14 @@ async function routeMethod(
       const { handleCompactSession } = await import(
         "./daemon-compact-session-ipc.js"
       );
-      const sdk = await import("@anthropic-ai/claude-agent-sdk");
+      // Phase 136 T-04 — direct SDK import replaced by the
+      // src/llm-runtime/ seam chokepoint. Mirror of the heartbeat
+      // auto-trigger callsite above; silent-path-bifurcation gate
+      // (CONTEXT D-06) — BOTH sites updated in the same commit.
+      const { loadAnthropicAgentSdkModule } = await import(
+        "../llm-runtime/index.js"
+      );
+      const sdk = await loadAnthropicAgentSdkModule();
       // Phase 125 Plan 02 — D-01 single extractor seam. Identical
       // construction to the auto-trigger callsite above. Tier 1 runs
       // here so preserved turns ride through `buildTieredExtractor`'s

@@ -34,7 +34,15 @@ export type {
 
 export { createLlmRuntimeService } from "./llm-runtime-service.js";
 
-// Backends are NOT re-exported by default — call sites should
-// receive an `LlmRuntimeService` reference via DI, not construct
-// backends directly. The static-grep CI test (T-06) treats backend
-// files as private to this package.
+// Free-function chokepoint for the Phase 136 → 137 migration ramp.
+// Legacy call sites (session-adapter.ts:loadSdk, daemon.ts compaction
+// triggers, openai/endpoint-bootstrap.ts) call this directly during
+// Phase 136 T-04 so the patch surface is the 4 import lines only —
+// not the surrounding wiring. Phase 137 threads `LlmRuntimeService`
+// through DI for those sites and the free function is retired.
+//
+// Backends themselves are NOT re-exported — call sites that need an
+// `LlmRuntimeService` get one from the factory + DI, never by
+// constructing a backend class directly. The static-grep CI test
+// (T-06) treats backend files as private to this package.
+export { loadAnthropicAgentSdkModule } from "./backends/anthropic-agent-sdk.js";
