@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionManager } from "../manager/session-manager.js";
+import type { HeartbeatRunner } from "../heartbeat/runner.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { ThreadBinding, ThreadBindingRegistry } from "./thread-types.js";
 import { DEFAULT_THREAD_CONFIG } from "./thread-types.js";
@@ -159,6 +160,19 @@ export async function discoverArtifactPaths(
  */
 export type SubagentThreadSpawnerConfig = {
   readonly sessionManager: SessionManager;
+  /**
+   * Phase 999.57 (2026-05-15) — REQUIRED. The spawner must register the
+   * subagent's config into the heartbeat runner immediately after
+   * `sessionManager.startAgent` so the existing heartbeat-disabled gate
+   * at `runner.ts:271` fires for the subagent session. Without this, the
+   * runner's local `agentConfigs` map (populated once at daemon boot from
+   * `resolvedAgents`) returns `undefined` for subagent session names and
+   * the gate short-circuits truthy — heartbeat checks fire on every
+   * subagent session regardless of the config-side `heartbeat.enabled:
+   * false` override. See RESEARCH.md Finding 1 + `runner.ts:143-147`
+   * (additive `setAgentConfigs` upsert).
+   */
+  readonly heartbeatRunner: HeartbeatRunner;
   readonly registryPath: string;
   readonly discordClient: Client;
   readonly log?: Logger;
@@ -179,6 +193,9 @@ export type SubagentThreadSpawnerConfig = {
  */
 export class SubagentThreadSpawner {
   private readonly sessionManager: SessionManager;
+  // Phase 999.57 — heartbeat-disabled gate dependency. See type doc on
+  // SubagentThreadSpawnerConfig.heartbeatRunner.
+  private readonly heartbeatRunner: HeartbeatRunner;
   private readonly registryPath: string;
   private readonly discordClient: Client;
   private readonly log: Logger;
@@ -186,6 +203,7 @@ export class SubagentThreadSpawner {
 
   constructor(config: SubagentThreadSpawnerConfig) {
     this.sessionManager = config.sessionManager;
+    this.heartbeatRunner = config.heartbeatRunner;
     this.registryPath = config.registryPath;
     this.discordClient = config.discordClient;
     this.log = config.log ?? logger;
