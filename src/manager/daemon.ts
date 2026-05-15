@@ -2345,6 +2345,38 @@ export async function startDaemon(
     );
   });
 
+  // Phase 136 T-06 — construct an LlmRuntimeService per agent at boot.
+  //
+  // The service registry below is the single chokepoint required by
+  // CONTEXT D-03a + feedback_silent_path_bifurcation: ONE
+  // createLlmRuntimeService call per agent per daemon lifetime. The
+  // factory emits one structured `phase136-llm-runtime` log line per
+  // agent (D-07) so operators can grep
+  // `journalctl -u clawcode -g phase136-llm-runtime` to verify
+  // migration coverage across the fleet.
+  //
+  // The existing call sites (session-adapter.ts:loadSdk, the two
+  // daemon.ts compaction triggers, openai/endpoint-bootstrap.ts) go
+  // through `loadAnthropicAgentSdkModule()` — the free-function
+  // chokepoint that backs every backend's `loadSdkModule()`. Phase 137
+  // threads the per-agent `LlmRuntimeService` reference into those
+  // call sites when operator-flippable backend selection actually
+  // ships; until then this registry exists for:
+  //   1. The boot-time log line (D-07 telemetry).
+  //   2. Phase 137 to consume via Map.get(agent) without refactoring
+  //      daemon construction wiring.
+  const { createLlmRuntimeService } = await import("../llm-runtime/index.js");
+  const llmRuntimeRegistry = new Map<string, import("../llm-runtime/index.js").LlmRuntimeService>();
+  for (const cfg of resolvedAgents) {
+    llmRuntimeRegistry.set(
+      cfg.name,
+      createLlmRuntimeService(cfg, { logger: log }),
+    );
+  }
+  // Reference the registry to satisfy --noUnusedLocals while Phase 137
+  // wires the actual consumers. Cheap, explicit, no behaviour.
+  void llmRuntimeRegistry;
+
   // Phase 108 — harvest every per-agent OP_SERVICE_ACCOUNT_TOKEN literal
   // (post-op:// resolution) into the daemon-side tokenHash → rawToken map
   // built above. Per-agent overrides (yaml mcpEnvOverrides.1password) live
