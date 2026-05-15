@@ -818,16 +818,46 @@ export class SubagentThreadSpawner {
           })
         : null;
 
+      // Phase 999.59 (2026-05-15) — capture the LAST accumulated text seen
+      // by the editor so the overflow handler below can chunk against the
+      // true stream content, not just the SDK's final reply.
+      //
+      // Why this matters: Claude Code SDK multi-step turns (assistant text →
+      // tool_use → tool_result → assistant text → ...) emit MANY assistant
+      // text blocks per turn. The streamFromAgent return value is the LAST
+      // text block only. `accumulated` (passed to the onChunk callback)
+      // concatenates the WHOLE stream. Production failure 2026-05-15 18:28:
+      // research subagent emitted a long table mid-stream then closed with
+      // a short "Research complete." final block (responseLength: 254).
+      // The overflow trigger `text.length > 2000` saw 254, didn't fire.
+      // Placeholder kept the editor-truncated table with no follow-up
+      // chunks. The deliverable was silently lost mid-row at BOOTSTRAP.md.
+      let accumulatedSeen = "";
       const reply = await this.sessionManager.streamFromAgent(
         sessionName,
         prompt,
-        editor ? (accumulated: string) => editor.update(accumulated) : () => {},
+        editor
+          ? (accumulated: string) => {
+              accumulatedSeen = accumulated;
+              editor.update(accumulated);
+            }
+          : (accumulated: string) => {
+              accumulatedSeen = accumulated;
+            },
       );
       if (editor) await editor.flush();
 
       // Defensive: streamFromAgent may resolve with undefined under test mocks
       // or if the SDK returns nothing. Treat undefined as empty.
-      const text = wrapMarkdownTablesInCodeFence((reply ?? "").trim());
+      //
+      // Phase 999.59 — use the longer of accumulatedSeen vs reply. In
+      // single-block turns they're identical; in multi-block turns
+      // accumulatedSeen has the full stream while reply has only the final
+      // block. Picking the longer is safe in both cases. Trim once after.
+      const baseReply = (reply ?? "").trim();
+      const baseAccum = accumulatedSeen.trim();
+      const fullContent = baseAccum.length > baseReply.length ? baseAccum : baseReply;
+      const text = wrapMarkdownTablesInCodeFence(fullContent);
       if (!canEdit && text) {
         // Fallback path — send the final reply as a fresh message.
         await thread.send(text.slice(0, 2000));
@@ -841,6 +871,10 @@ export class SubagentThreadSpawner {
       // dropped chunks there was no breadcrumb to debug from. Capture
       // totalLength + chunksSent + fullySent + lastError so the failure
       // mode is observable in production logs.
+      //
+      // Phase 999.59 — `text` now derives from accumulatedSeen|reply
+      // (whichever is longer), so multi-step turns where the SDK final
+      // block is short but the stream produced overflow now fire correctly.
       if (canEdit && text.length > 2000) {
         let cursor = EDITOR_TRUNCATE_INDEX;
         let chunksSent = 0;

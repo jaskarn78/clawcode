@@ -1802,3 +1802,199 @@ describe("spawnInThread with delegateTo", () => {
     expect(startedConfig.soul).toMatch(/1500|structured/);
   });
 });
+
+// Phase 999.59 (2026-05-15) — overflow chunking trigger uses
+// accumulatedSeen (longest stream content) instead of just the SDK final
+// reply. Pre-999.59 production failure: subagent emitted a long table
+// mid-stream then closed with a short "Research complete." final block
+// (responseLength: 254). The overflow handler's `text.length > 2000`
+// check evaluated against 254 chars and never fired, so the editor-
+// truncated placeholder was the only artifact and the deliverable was
+// silently lost mid-row.
+describe("postInitialMessage overflow trigger (Phase 999.59)", () => {
+  let tmpDir: string;
+  let registryPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "subagent-overflow-trigger-"));
+    registryPath = join(tmpDir, "thread-bindings.json");
+  });
+
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("OF-TRIG-1 (999.59): multi-block stream where final reply is short but accumulated > 2000 chars still triggers overflow chunks", async () => {
+    const logCalls: { level: string; obj: any; msg: string }[] = [];
+    const fakeLog = {
+      info: vi.fn((obj: any, msg: string) => {
+        logCalls.push({ level: "info", obj, msg });
+      }),
+      warn: vi.fn((obj: any, msg: string) => {
+        logCalls.push({ level: "warn", obj, msg });
+      }),
+      debug: vi.fn(),
+      error: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: vi.fn(() => fakeLog),
+    };
+
+    const sentChunks: string[] = [];
+    const placeholder = {
+      id: "msg-placeholder",
+      edit: vi.fn(async (_content: string) => undefined),
+    };
+    const sendTyping = vi.fn(async () => undefined);
+    const mockThread = {
+      id: "thread-of-trig-1",
+      sendTyping,
+      send: vi.fn(async (content: string) => {
+        sentChunks.push(content);
+        return placeholder;
+      }),
+    };
+    const mockChannel = {
+      id: "channel-of-trig-1",
+      threads: { create: vi.fn(async () => mockThread) },
+      isTextBased: () => true,
+    };
+    const localDiscordClient = {
+      channels: { fetch: vi.fn(async () => mockChannel) },
+      // Phase 999.36 sub-bug C: webhook send mock used by postInitialMessage
+      // pipeline. Not exercised in this test but needs to exist.
+      user: { id: "bot-user-id" },
+    };
+
+    const localSessionManager = makeMockSessionManager();
+    localSessionManager._setConfig(
+      "agent-a",
+      makeAgentConfig({
+        webhook: {
+          displayName: "Agent A",
+          avatarUrl: "https://example.com/a.png",
+          webhookUrl: "https://discord.com/api/webhooks/999/abc",
+        },
+      }),
+    );
+
+    // The production failure pattern: SDK emits a long block during the
+    // stream (via the onChunk callback's `accumulated`) but the SDK's
+    // returned reply value is the short final-block text only.
+    const longAccumulated = "Y".repeat(5000); // mid-stream table content
+    const shortFinalReply = "Research complete. See deliverable above."; // ~42 chars
+    vi.mocked(localSessionManager.streamFromAgent).mockImplementation(
+      async (_name, _msg, onChunk) => {
+        if (onChunk) onChunk(longAccumulated);
+        return shortFinalReply;
+      },
+    );
+
+    const spawner = new SubagentThreadSpawner({
+      sessionManager: localSessionManager,
+      registryPath,
+      discordClient: localDiscordClient as any,
+      log: fakeLog as any,
+    });
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "overflow-trigger-test",
+      autoRelay: false,
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The overflow handler must have fired despite the short final reply.
+    const summaryLog = logCalls.find((c) =>
+      c.msg.includes("subagent overflow chunks summary"),
+    );
+    expect(summaryLog).toBeDefined();
+    expect(summaryLog!.obj.fullySent).toBe(true);
+    // totalLength should reflect accumulatedSeen (5000), not the short final
+    // reply (~42) — proves the fix uses the longer of the two.
+    expect(summaryLog!.obj.totalLength).toBeGreaterThan(2000);
+    expect(summaryLog!.obj.chunksSent).toBeGreaterThanOrEqual(1);
+  });
+
+  it("OF-TRIG-2 (999.59): when final reply IS the full content (single-block turn), overflow still works correctly (back-compat with OF-LOG-1)", async () => {
+    const logCalls: { level: string; obj: any; msg: string }[] = [];
+    const fakeLog = {
+      info: vi.fn((obj: any, msg: string) => {
+        logCalls.push({ level: "info", obj, msg });
+      }),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      error: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: vi.fn(() => fakeLog),
+    };
+
+    const sentChunks: string[] = [];
+    const placeholder = {
+      id: "msg-placeholder",
+      edit: vi.fn(async (_content: string) => undefined),
+    };
+    const mockThread = {
+      id: "thread-of-trig-2",
+      sendTyping: vi.fn(async () => undefined),
+      send: vi.fn(async (content: string) => {
+        sentChunks.push(content);
+        return placeholder;
+      }),
+    };
+    const mockChannel = {
+      id: "channel-of-trig-2",
+      threads: { create: vi.fn(async () => mockThread) },
+      isTextBased: () => true,
+    };
+    const localDiscordClient = {
+      channels: { fetch: vi.fn(async () => mockChannel) },
+      user: { id: "bot-user-id" },
+    };
+
+    const localSessionManager = makeMockSessionManager();
+    localSessionManager._setConfig(
+      "agent-a",
+      makeAgentConfig({
+        webhook: {
+          displayName: "Agent A",
+          avatarUrl: "https://example.com/a.png",
+          webhookUrl: "https://discord.com/api/webhooks/999/abc",
+        },
+      }),
+    );
+
+    // Single-block: accumulated == reply (5000 chars in both).
+    const big = "Z".repeat(5000);
+    vi.mocked(localSessionManager.streamFromAgent).mockImplementation(
+      async (_name, _msg, onChunk) => {
+        if (onChunk) onChunk(big);
+        return big;
+      },
+    );
+
+    const spawner = new SubagentThreadSpawner({
+      sessionManager: localSessionManager,
+      registryPath,
+      discordClient: localDiscordClient as any,
+      log: fakeLog as any,
+    });
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "overflow-trigger-test-back-compat",
+      autoRelay: false,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const summaryLog = logCalls.find((c) =>
+      c.msg.includes("subagent overflow chunks summary"),
+    );
+    expect(summaryLog).toBeDefined();
+    expect(summaryLog!.obj.fullySent).toBe(true);
+    expect(summaryLog!.obj.totalLength).toBe(5000);
+  });
+});
