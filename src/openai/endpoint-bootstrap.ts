@@ -236,8 +236,15 @@ export async function startOpenAiEndpoint(
   let templateSdk: SdkModule | undefined = deps.sdk;
   if (!templateSdk) {
     try {
-      const imported = (await import("@anthropic-ai/claude-agent-sdk")) as unknown as SdkModule;
-      templateSdk = imported;
+      // Phase 136 T-04 — direct SDK import replaced by the
+      // src/llm-runtime/ seam chokepoint. Same not-installed catch
+      // semantics — the warn log fires when the SDK isn't installed
+      // and templateDriver stays disabled, identical to pre-Phase-136
+      // behaviour.
+      const { loadAnthropicAgentSdkModule } = await import(
+        "../llm-runtime/index.js"
+      );
+      templateSdk = await loadAnthropicAgentSdkModule();
     } catch (err) {
       log.warn(
         { err: (err as Error).message },
