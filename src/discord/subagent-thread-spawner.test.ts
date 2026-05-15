@@ -132,6 +132,21 @@ function makeMockSessionManager() {
 }
 
 /**
+ * Phase 999.57 — minimal HeartbeatRunner mock. The spawner's only contact
+ * with the runner is `setAgentConfigs([subagentConfig])` immediately after
+ * `sessionManager.startAgent`. We spy on that call so behavior tests can
+ * assert the subagent's heartbeat-disabled config was registered.
+ */
+function makeMockHeartbeatRunner() {
+  const mock = {
+    setAgentConfigs: vi.fn(),
+  };
+  return mock as unknown as import("../heartbeat/runner.js").HeartbeatRunner & {
+    setAgentConfigs: ReturnType<typeof vi.fn>;
+  };
+}
+
+/**
  * Create a mock Discord client with channels.fetch returning a mock channel.
  */
 function makeMockDiscordClient() {
@@ -189,6 +204,7 @@ describe("SubagentThreadSpawner", () => {
 
     spawner = new SubagentThreadSpawner({
       sessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner(),
       registryPath,
       discordClient: discordMock.client as any,
     });
@@ -436,6 +452,7 @@ describe("SubagentThreadSpawner", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager: localSessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: localDiscordClient as any,
         log: fakeLog as any,
@@ -535,6 +552,7 @@ describe("SubagentThreadSpawner", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager: localSessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: localDiscordClient as any,
         log: fakeLog as any,
@@ -626,6 +644,7 @@ describe("SubagentThreadSpawner", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager: localSessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: localDiscordClient as any,
         log: fakeLog as any,
@@ -1030,6 +1049,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1090,6 +1110,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1143,6 +1164,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1189,6 +1211,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1230,6 +1253,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1276,6 +1300,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1335,6 +1360,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1406,6 +1432,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1479,6 +1506,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
 
       const spawner = new SubagentThreadSpawner({
         sessionManager,
+        heartbeatRunner: makeMockHeartbeatRunner(),
         registryPath,
         discordClient: discordClient as any,
         turnDispatcher: turnDispatcher as any,
@@ -1563,6 +1591,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
       try {
         const spawner = new SubagentThreadSpawner({
           sessionManager,
+          heartbeatRunner: makeMockHeartbeatRunner(),
           registryPath,
           discordClient: discordClient as any,
           turnDispatcher: turnDispatcher as any,
@@ -1634,6 +1663,7 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
       try {
         const spawner = new SubagentThreadSpawner({
           sessionManager,
+          heartbeatRunner: makeMockHeartbeatRunner(),
           registryPath,
           discordClient: discordClient as any,
           turnDispatcher: turnDispatcher as any,
@@ -1714,6 +1744,7 @@ describe("spawnInThread with delegateTo", () => {
 
     spawner = new SubagentThreadSpawner({
       sessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner(),
       registryPath,
       discordClient: discordMock.client as any,
     });
@@ -2043,6 +2074,7 @@ describe("postInitialMessage overflow trigger (Phase 999.59)", () => {
 
     const spawner = new SubagentThreadSpawner({
       sessionManager: localSessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner(),
       registryPath,
       discordClient: localDiscordClient as any,
       log: fakeLog as any,
@@ -2128,6 +2160,7 @@ describe("postInitialMessage overflow trigger (Phase 999.59)", () => {
 
     const spawner = new SubagentThreadSpawner({
       sessionManager: localSessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner(),
       registryPath,
       discordClient: localDiscordClient as any,
       log: fakeLog as any,
