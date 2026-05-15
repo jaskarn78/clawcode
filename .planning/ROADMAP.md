@@ -60,7 +60,7 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 - [ ] **Phase 135: Discord voice channel support (999.56)** — port from OpenClaw `extensions/discord/src/voice/` (24 files); `/vc {join,leave,status}` slash + voice bridge
 
 **Promoted from backlog (operator-promoted 2026-05-15):**
-- [ ] **Phase 999.47: Homelab Inventory canonical source-of-truth** — version-controlled, agent-readable inventory at `/home/clawcode/homelab/` for hosts/VMs/containers/tunnels/services/DNS; hybrid auto-discovery + operator semantic fill-in; hourly croner refresh with DRIFT.md quarantine; RAG-indexed into agents' `memory_chunks`
+- [x] **Phase 999.47: Homelab Inventory canonical source-of-truth — SHIPPED 2026-05-15** — version-controlled inventory at `/home/clawcode/homelab/` on clawdy, hourly refresh.sh + drift quarantine + verify.sh live, Plan 02 daemon code deployed (checkCount 14, homelab-refresh registered), first refresh tick committed `130c8d8` under clawcode-refresh identity. SC-1 ✓ / SC-2 ✓ / SC-3 ✓ / SC-4 ✓ / SC-5 PARTIAL (5/10 agents seeded per operator scope) / SC-6 ✓ / SC-7 ✓ code-path-live / SC-8 ✓.
 
 
 
@@ -263,10 +263,10 @@ All fields render genuine data; `Consolidated: never` is a truthful sentinel (no
   8. `verify.sh` exits 0 against the populated inventory; exits non-zero if any inventoried item is unreachable.
 
 **Plans:** 4 plans
-- [x] 999.47-01-PLAN.md — Repo scaffold on clawdy + initial anchor inventory (SC-1, SC-6) — operator-gated
-- [x] 999.47-02-PLAN.md — Daemon homelab-refresh heartbeat tick + .refresh-last.json schema + clawcode homelab reindex CLI (SC-2, SC-4, SC-7) — autonomous
-- [ ] 999.47-03-PLAN.md — refresh.sh + verify.sh + drift quarantine + lib/ pollers + deploy-to-clawdy.sh (SC-2, SC-3, SC-8) — operator-gated
-- [ ] 999.47-04-PLAN.md — workspace.ts pointer-line bake-in + seed-memory-pointer.sh fleet backfill (SC-5) — operator-gated
+- [x] 999.47-01-PLAN.md — Repo scaffold on clawdy + initial anchor inventory (SC-1, SC-6) — SHIPPED 2026-05-15 (`9dc8234` on clawdy)
+- [x] 999.47-02-PLAN.md — Daemon homelab-refresh heartbeat tick + .refresh-last.json schema + clawcode homelab reindex CLI (SC-2, SC-4, SC-7) — SHIPPED 2026-05-15 (`74c498a..00672fd`)
+- [x] 999.47-03-PLAN.md — refresh.sh + verify.sh + drift quarantine + lib/ pollers + deploy-to-clawdy.sh (SC-2, SC-3, SC-8) — SHIPPED 2026-05-15 (`7a058e6..54e0242` local; `48d8337` + `130c8d8` on clawdy)
+- [x] 999.47-04-PLAN.md — workspace.ts pointer-line bake-in + seed-memory-pointer.sh fleet backfill (SC-5) — PARTIAL 2026-05-15 (5/10 agents seeded per operator scope decision; fin agents deferred to follow-up)
 
 ---
 

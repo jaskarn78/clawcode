@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
-status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 + Plan 02 SHIPPED LOCAL (Ramy-active deploy hold on Plan 03); Phase 136 ready for discuss-phase
-stopped_at: Phase 999.47 Plan 02 SHIPPED LOCAL (homelab daemon refresh tick + reindex CLI + telemetry)
-last_updated: "2026-05-15T23:22:00.000Z"
-last_activity: 2026-05-15 -- Phase 999.47 Plan 02 SHIPPED LOCAL (5 commits 74c498a..00672fd; 36 new tests; CHECK_REGISTRY 13→14; defaults.homelab wired through ResolvedAgentConfig). Next: Plan 03 (refresh.sh body) or back to Phase 136 discuss-phase.
+status: v3.0 + v3.1 BOTH OPEN; Phase 999.47 SHIPPED LIVE on clawdy (full homelab inventory loop live); Phase 136 ready for discuss-phase
+stopped_at: Phase 999.47 SHIPPED (Plans 01+02+03 full, 04 partial-by-operator-scope; daemon deploy live; first refresh tick committed under clawcode-refresh identity)
+last_updated: "2026-05-15T23:55:00.000Z"
+last_activity: 2026-05-15 -- Phase 999.47 SHIPPED LIVE on clawdy. Plan 03 SUMMARY landed (3 task commits 7a058e6..54e0242 + operator-deploy 48d8337 + first machine-refresh 130c8d8); Plan 02 daemon live (checkCount 14, homelab-refresh registered); verify.sh exit 0 (SC-8); 32 drift items quarantined + 9 stale-marked on first live tick. Next: Phase 136 discuss-phase or operator triage of DRIFT.md.
 progress:
   total_phases: 83
-  completed_phases: 26
+  completed_phases: 27
   total_plans: 159
-  completed_plans: 152
-  percent: 31
+  completed_plans: 154
+  percent: 33
 ---
 
 # Project State
