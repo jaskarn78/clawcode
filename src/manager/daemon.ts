@@ -8898,7 +8898,19 @@ async function routeMethod(
           )
         : allAssignments;
 
-      return { catalog, assignments };
+      // Phase 130 Plan 03 T-02 — surface refused skills per agent. When
+      // `agent` is supplied, return only that agent's unloaded list (matches
+      // the `assignments` filter shape). When unfiltered, return the full map.
+      const unloadedSkills: Record<string, readonly UnloadedSkillEntry[]> = {};
+      if (agentFilter !== undefined) {
+        unloadedSkills[agentFilter] = manager.getUnloadedSkills(agentFilter);
+      } else {
+        for (const c of configs) {
+          unloadedSkills[c.name] = manager.getUnloadedSkills(c.name);
+        }
+      }
+
+      return { catalog, assignments, unloadedSkills };
     }
 
     // Phase 999.2 Plan 02 D-RNI-IPC-01 — canonical name `ask-agent` and the
