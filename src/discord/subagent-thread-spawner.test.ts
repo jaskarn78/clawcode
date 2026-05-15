@@ -1982,6 +1982,93 @@ describe("spawnInThread with delegateTo", () => {
     expect(startedConfig.soul).toContain("clawcode_share_file");
     expect(startedConfig.soul).toMatch(/1500|structured/);
   });
+
+  // Phase 999.61 (2026-05-15) — system-reminder discrimination. Production:
+  // research subagent saw a Claude Code runtime <system-reminder> and replied
+  // "Ignoring the reminder — current task is a focused Q&A, no todo list
+  // needed" instead of executing the delegated task. Two-pronged fix pinned
+  // by DEL-17 and DEL-18 below: (1) threadContext instructs the subagent to
+  // distinguish reminders from task; (2) postInitialMessage wraps `task`
+  // with an explicit YOUR TASK header + ignore-reminders directive.
+  it("DEL-17 (999.61): subagent threadContext instructs distinguishing TASK from <system-reminder> tags", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    // The instruction names the system-reminder tag explicitly.
+    expect(startedConfig.soul).toContain("system-reminder");
+    // The contract is stated: task is the initial user message; reminders are
+    // runtime nudges, not work.
+    expect(startedConfig.soul).toMatch(/runtime nudge|harness/);
+    // The negative path is also covered: if the first user message looks
+    // suspicious, ask the parent — never silently ack-and-stop.
+    expect(startedConfig.soul).toContain("ack-and-stop");
+  });
+
+  it("DEL-18 (999.61): postInitialMessage wraps task with YOUR TASK header + ignore-reminders directive", async () => {
+    const localSessionManager = makeMockSessionManager();
+    localSessionManager._setConfig(
+      "agent-a",
+      makeAgentConfig({
+        webhook: {
+          displayName: "Agent A",
+          avatarUrl: "https://example.com/a.png",
+          webhookUrl: "https://discord.com/api/webhooks/123/abc",
+        },
+      }),
+    );
+    // Capture the prompt passed into streamFromAgent.
+    let capturedPrompt = "";
+    vi.mocked(localSessionManager.streamFromAgent).mockImplementation(
+      async (_name, msg, _onChunk) => {
+        capturedPrompt = msg;
+        return "ok";
+      },
+    );
+
+    const placeholder = {
+      id: "msg-placeholder",
+      edit: vi.fn(async (_content: string) => undefined),
+    };
+    const mockThread = {
+      id: "thread-del-18",
+      sendTyping: vi.fn(async () => undefined),
+      send: vi.fn(async () => placeholder),
+    };
+    const mockChannel = {
+      id: "channel-del-18",
+      threads: { create: vi.fn(async () => mockThread) },
+      isTextBased: () => true,
+    };
+    const localDiscordClient = {
+      channels: { fetch: vi.fn(async () => mockChannel) },
+      user: { id: "bot-user-id" },
+    };
+
+    const localSpawner = new SubagentThreadSpawner({
+      sessionManager: localSessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner() as any,
+      registryPath,
+      discordClient: localDiscordClient as any,
+    });
+
+    await localSpawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "task-frame-test",
+      task: "investigate openclaw vs clawcode on GitHub",
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The task itself appears in the prompt.
+    expect(capturedPrompt).toContain("investigate openclaw vs clawcode on GitHub");
+    // The directive frame is present.
+    expect(capturedPrompt).toContain("# YOUR TASK");
+    expect(capturedPrompt).toContain("system-reminder");
+    // The instruction to ignore runtime reminders is explicit.
+    expect(capturedPrompt).toMatch(/runtime nudges?|NOT your task/);
+  });
 });
 
 // Phase 999.59 (2026-05-15) — overflow chunking trigger uses

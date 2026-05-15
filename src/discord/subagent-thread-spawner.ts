@@ -735,6 +735,21 @@ export class SubagentThreadSpawner {
       // to a workspace file + share. The relay's artifactsLine (relayCompletionToParent:300-303)
       // already surfaces shared files in the parent's summary.
       `If your deliverable is structured (tables, lists, code, multi-section docs) OR longer than ~1500 characters, write it to a markdown file in your workspace FIRST, then call \`clawcode_share_file\` with agent="${sessionName}" to surface it in this thread. Do NOT rely on posting long content as plain Discord messages — Discord caps individual messages at 2000 characters and silent mid-content truncation has caused real production failures. Posting a short summary (~3-5 sentences) in the thread alongside the shared file is fine; the file is the authoritative deliverable.`,
+      // Phase 999.61 (2026-05-15) — system-reminder discrimination.
+      // Production: research subagent received a Claude Code runtime nudge
+      // wrapped in <system-reminder> tags ("The task tools haven't been
+      // used recently. If you're working on tasks that would benefit from
+      // tracking progress, consider using TaskCreate...") and posted
+      // "Ignoring the reminder — current task is a focused Q&A, no todo
+      // list needed" instead of executing the delegated task. The model
+      // misread the runtime nudge as the operator's task and bailed.
+      //
+      // <system-reminder> tags carry instructions from the harness, not
+      // from the operator. Subagents must distinguish: their TASK is the
+      // initial user message (the `task` parameter passed to
+      // spawn_subagent_thread by the parent agent). Reminders are
+      // metadata to consult, not work to execute.
+      `**Important — distinguishing your TASK from runtime nudges:** Your task is the FIRST user message you receive (sent by your parent agent at spawn time). It describes what you must deliver. Any text wrapped in \`<system-reminder>\` tags is a runtime nudge from the Claude Code harness — NOT from your parent and NOT your task. Read \`<system-reminder>\` content if it's actionable to your task (e.g., "consider using TaskCreate" → use it if it helps you execute), but do NOT respond to reminders, do NOT acknowledge them in chat, and absolutely do NOT treat them as your task. If your first user message looks like a reminder rather than a real task, ASK the parent agent for clarification via thread.send — never silently ack-and-stop.`,
     ];
     const delegationContext = normalizedDelegateTo
       ? [
@@ -941,8 +956,29 @@ export class SubagentThreadSpawner {
     // stop it whether the stream succeeded or threw (see import comment).
     let typingHandle: { stop: () => void } | null = null;
     try {
+      // Phase 999.61 (2026-05-15) — wrap the operator's task with an
+      // explicit directive frame. Production failure: research subagent
+      // received a Claude Code `<system-reminder>` (the periodic TaskCreate
+      // nudge) on its first turn alongside the actual task, and the model
+      // responded to the reminder ("Ignoring the reminder — current task
+      // is a focused Q&A, no todo list needed") instead of executing the
+      // delegated work. The raw `task` string gave no structural signal
+      // that THIS was the task vs. a runtime reminder.
+      //
+      // Fix: frame the task with a clear header + explicit "ignore
+      // reminders" reminder so the model has a robust anchor for what to
+      // execute. Pair with the threadContext instruction injected in the
+      // baseContext build (see "distinguishing your TASK from runtime
+      // nudges" line above) which lives in the system prompt.
       const prompt = task
-        ? task
+        ? (
+            `# YOUR TASK (delivered by parent agent)\n\n` +
+            `${task}\n\n` +
+            `---\n\n` +
+            `**Execute this task.** Produce the deliverable in this turn or across multiple turns as needed. ` +
+            `If you see \`<system-reminder>\` tags below or in subsequent turns, those are runtime nudges from the Claude Code harness — they are NOT your task and you should NOT respond to them. ` +
+            `Your task is the text above. When the deliverable is complete, follow the subagent_complete + clawcode_share_file contract from your system prompt.`
+          )
         : `You've just been spawned in a Discord thread titled "${threadName}". ` +
           `Introduce yourself in 1-2 short sentences based on your soul and state what you're ready to do. ` +
           `No filler, no meta-commentary about being an AI.`;
