@@ -2069,6 +2069,284 @@ describe("spawnInThread with delegateTo", () => {
     // The instruction to ignore runtime reminders is explicit.
     expect(capturedPrompt).toMatch(/runtime nudges?|NOT your task/);
   });
+
+  // ------------------------------------------------------------------
+  // Phase 126 (originally Phase 999.57) — Plan 02 regression tests
+  // ------------------------------------------------------------------
+  // DEL-15..DEL-19 from the original plan are renumbered to DEL-20..DEL-24
+  // because DEL-15..DEL-18 already exist above (filed by 999.58/999.61
+  // hotfix work before Plan 02 executed).
+  //
+  // These tests pin the Plan 01 production wiring: heartbeat override +
+  // heartbeatRunner.setAgentConfigs() upsert + memory-retrieval suppression
+  // + defensive markers + no-upward-leakage. A future refactor that
+  // removes the factory call OR drops the runner registration OR weakens
+  // a field default will fail at least one of these tests.
+  // ------------------------------------------------------------------
+
+  it("DEL-20-delegated (Phase 126 / D-01): subagent inherits heartbeat.enabled=false AND heartbeatRunner.setAgentConfigs is called with the subagent config", async () => {
+    // Phase 999.57 / D-01 (corrected per RESEARCH Finding 1) — heartbeat
+    // override AND runner registration together close the gate at
+    // runner.ts:271. The override field alone is dead code (agentConfigs
+    // map populated once at boot); the setAgentConfigs upsert is what
+    // makes the existing gate fire.
+    const heartbeatRunner = makeMockHeartbeatRunner();
+    const sourceConfigSnapshot = structuredClone(
+      sessionManager.getAgentConfig("research"),
+    );
+
+    const localSpawner = new SubagentThreadSpawner({
+      sessionManager,
+      heartbeatRunner,
+      registryPath,
+      discordClient: discordMock.client as any,
+    });
+
+    await localSpawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-20-delegated",
+      delegateTo: "research",
+    });
+
+    const startedConfig = sessionManager.startAgent.mock
+      .calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.heartbeat.enabled).toBe(false);
+
+    // setAgentConfigs invoked exactly once with [subagentConfig]
+    const setCalls = (heartbeatRunner as any).setAgentConfigs.mock.calls;
+    expect(setCalls).toHaveLength(1);
+    expect(setCalls[0][0]).toHaveLength(1);
+    const registeredConfig = setCalls[0][0][0];
+    expect(registeredConfig.heartbeat.enabled).toBe(false);
+
+    // The two paths converge on the same config object (referential identity)
+    expect(registeredConfig).toBe(startedConfig);
+
+    // No upward mutation: source `research` config unchanged
+    expect(sessionManager.getAgentConfig("research")).toEqual(
+      sourceConfigSnapshot,
+    );
+  });
+
+  it("DEL-21-delegated (Phase 126 / D-02+D-04+Finding 4): memory retrieval, MEMORY.md auto-load, and conversation flush all suppressed for subagent", async () => {
+    // Phase 999.57 / D-02 + D-04 + Finding 4 — memoryAutoLoad, topK,
+    // tokenBudget, and memory.conversation.flushIntervalMinutes all zero.
+    // Conditional spread (per Pitfall 3) preserves other conversation
+    // block fields if the source supplied them.
+    sessionManager._setConfig(
+      "research",
+      makeAgentConfig({
+        name: "research",
+        memoryAutoLoad: true,
+        memoryRetrievalTopK: 8,
+        memoryRetrievalTokenBudget: 2000,
+        memory: {
+          compactionThreshold: 80,
+          searchTopK: 10,
+          consolidation: {
+            enabled: false,
+            weeklyThreshold: 7,
+            monthlyThreshold: 4,
+            schedule: "0 3 * * *",
+          },
+          decay: {
+            halfLifeDays: 30,
+            semanticWeight: 0.7,
+            decayWeight: 0.3,
+          },
+          deduplication: {
+            enabled: false,
+            similarityThreshold: 0.9,
+          },
+          conversation: {
+            flushIntervalMinutes: 15,
+          },
+        } as any,
+      }),
+    );
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-21-delegated",
+      delegateTo: "research",
+    });
+
+    const startedConfig = sessionManager.startAgent.mock
+      .calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.memoryAutoLoad).toBe(false);
+    expect(startedConfig.memoryRetrievalTopK).toBe(0);
+    expect((startedConfig as any).memoryRetrievalTokenBudget).toBe(0);
+    expect((startedConfig.memory as any).conversation?.flushIntervalMinutes).toBe(0);
+  });
+
+  it("DEL-22-delegated (Phase 126 / D-03 — Correction 3 per RESEARCH Finding 3): defensive markers — memoryScannerEnabled=false + memoryFlushIntervalMs=900_000 (schema default no-op)", async () => {
+    // Phase 999.57 / D-03 — set-membership defensive markers. memoryScannerEnabled
+    // has no runtime consumer for subagents (daemon-boot-only registration
+    // at daemon.ts:3239-3274 iterates resolvedAgents, not subagents); test
+    // pins the field as documentation-of-intent so a future refactor that
+    // wires per-session scanners cannot silently leak.
+    sessionManager._setConfig(
+      "research",
+      makeAgentConfig({
+        name: "research",
+        memoryScannerEnabled: true,
+        memoryFlushIntervalMs: 60_000,
+      }),
+    );
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-22-delegated",
+      delegateTo: "research",
+    });
+
+    const startedConfig = sessionManager.startAgent.mock
+      .calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.memoryScannerEnabled).toBe(false);
+    expect(startedConfig.memoryFlushIntervalMs).toBe(900_000);
+  });
+
+  it("DEL-23-delegated (Phase 126 / D-05 — reframed per RESEARCH Finding 2): heartbeat-gate skip via registered subagent config (combined contract)", async () => {
+    // Phase 999.57 / D-05 — no `inboxEnabled` field exists on
+    // ResolvedAgentConfig (grep-confirmed in RESEARCH Finding 2). The
+    // inbox heartbeat-check leak is closed transitively via
+    // heartbeatRunner.setAgentConfigs registration: the runner gate at
+    // runner.ts:271 finds the subagent's config with heartbeat.enabled=false
+    // and short-circuits the tick. Live runner.tick() integration check
+    // runs in Plan 03 on clawdy.
+    const heartbeatRunner = makeMockHeartbeatRunner();
+
+    const localSpawner = new SubagentThreadSpawner({
+      sessionManager,
+      heartbeatRunner,
+      registryPath,
+      discordClient: discordMock.client as any,
+    });
+
+    const result = await localSpawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-23-delegated",
+      delegateTo: "research",
+    });
+
+    const setCalls = (heartbeatRunner as any).setAgentConfigs.mock.calls;
+    expect(setCalls).toHaveLength(1);
+    const registeredConfig = setCalls[0][0][0];
+    expect(registeredConfig.heartbeat.enabled).toBe(false);
+    // The registered config carries the subagent's session name — NOT the
+    // source agent's name. The gate at runner.ts:271 must find this entry
+    // when its tick fires for the subagent session.
+    expect(registeredConfig.name).toBe(result.sessionName);
+  });
+
+  it("DEL-24-delegated (Phase 126 / D-09): no upward leakage — parent and source agent configs immutable across spawn", async () => {
+    // Phase 999.57 / D-09 — no upward leakage. Parent and source agent
+    // configs must remain immutable across spawn. structuredClone snapshot
+    // before; toEqual compare after.
+    const parentConfigBefore = structuredClone(
+      sessionManager.getAgentConfig("agent-a"),
+    );
+    const sourceConfigBefore = structuredClone(
+      sessionManager.getAgentConfig("research"),
+    );
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-24-delegated",
+      delegateTo: "research",
+    });
+
+    expect(sessionManager.getAgentConfig("agent-a")).toEqual(parentConfigBefore);
+    expect(sessionManager.getAgentConfig("research")).toEqual(sourceConfigBefore);
+  });
+});
+
+// ------------------------------------------------------------------
+// Phase 126 / Plan 02 — non-delegated (D-06) regression tests
+// ------------------------------------------------------------------
+// D-06 requires the inheritance overrides apply to BOTH spawn paths
+// (delegated and non-delegated). The delegated path has dense existing
+// tests above; this sibling describe block adds D-06 coverage for the
+// non-delegated path: a subagent spawned from agent-a's own identity
+// (no delegateTo) gets the same heartbeat + memory suppression slice.
+// ------------------------------------------------------------------
+describe("spawnInThread without delegateTo (non-delegated) — Phase 126 D-06 inheritance overrides", () => {
+  let tmpDir: string;
+  let registryPath: string;
+  let sessionManager: ReturnType<typeof makeMockSessionManager>;
+  let discordMock: ReturnType<typeof makeMockDiscordClient>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "subagent-nondelegate-"));
+    registryPath = join(tmpDir, "thread-bindings.json");
+    sessionManager = makeMockSessionManager();
+    discordMock = makeMockDiscordClient();
+
+    sessionManager._setConfig(
+      "agent-a",
+      makeAgentConfig({
+        name: "agent-a",
+        memoryAutoLoad: true,
+        memoryRetrievalTopK: 8,
+        memoryRetrievalTokenBudget: 2000,
+        heartbeat: {
+          enabled: true,
+          intervalSeconds: 60,
+          checkTimeoutSeconds: 30,
+          contextFill: { warningThreshold: 70, criticalThreshold: 90 },
+        },
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("DEL-20-non-delegated (Phase 126 / D-01+D-06): non-delegated subagent inherits heartbeat.enabled=false AND heartbeatRunner.setAgentConfigs is called", async () => {
+    const heartbeatRunner = makeMockHeartbeatRunner();
+    const spawner = new SubagentThreadSpawner({
+      sessionManager,
+      heartbeatRunner,
+      registryPath,
+      discordClient: discordMock.client as any,
+    });
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-20-non-delegated",
+      // NOTE: no delegateTo
+    });
+
+    const startedConfig = sessionManager.startAgent.mock
+      .calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.heartbeat.enabled).toBe(false);
+
+    const setCalls = (heartbeatRunner as any).setAgentConfigs.mock.calls;
+    expect(setCalls).toHaveLength(1);
+    expect(setCalls[0][0][0].heartbeat.enabled).toBe(false);
+  });
+
+  it("DEL-21-non-delegated (Phase 126 / D-02+D-04+D-06): non-delegated subagent has memoryAutoLoad=false + memoryRetrievalTopK=0 + memoryRetrievalTokenBudget=0", async () => {
+    const spawner = new SubagentThreadSpawner({
+      sessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner(),
+      registryPath,
+      discordClient: discordMock.client as any,
+    });
+
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "del-21-non-delegated",
+    });
+
+    const startedConfig = sessionManager.startAgent.mock
+      .calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.memoryAutoLoad).toBe(false);
+    expect(startedConfig.memoryRetrievalTopK).toBe(0);
+    expect((startedConfig as any).memoryRetrievalTokenBudget).toBe(0);
+  });
 });
 
 // Phase 999.59 (2026-05-15) — overflow chunking trigger uses
