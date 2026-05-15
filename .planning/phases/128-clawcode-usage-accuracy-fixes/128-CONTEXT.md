@@ -1,8 +1,22 @@
 # Phase 128: clawcode Usage Accuracy Fixes — Context
 
 **Gathered:** 2026-05-15
-**Status:** Ready for planning
+**Status:** PARKED 2026-05-15 — operator decision after spike confirmed no SDK pull API exists
 **Mode:** Operator-reported bug (2026-05-15) — `clawcode usage` shows weekly at 89% when actual Anthropic usage is under 50%.
+
+## PARKED — 2026-05-15
+
+T-01 survey (`128-01-SURVEY.md`) and a follow-up confirmation grep against `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` both establish:
+
+- The Claude Agent SDK exposes rate-limit data via push event (`SDKRateLimitEvent`) only.
+- No pull-style query method exists. `getContextUsage()` at `sdk.d.ts:2123` is context-window telemetry, not rate-limit state.
+- The plan's "preferred" D-02 path (SDK pull) is therefore impossible. The fallback (synthetic 1-token probe) self-pollutes the rate limit it measures.
+
+The bug is a stale-display annoyance — not a correctness issue. Operators can mentally discount the high-water mark until Anthropic ships a pull API, at which point this phase resumes against a clean source.
+
+**Resume trigger:** Anthropic publishes a pull-style rate-limit endpoint, OR operator decides the display drift is causing measurable harm.
+
+**Artifacts retained:** `128-CONTEXT.md`, `128-01-PLAN.md`, `128-01-SURVEY.md`. Executor worktree pruned 2026-05-15.
 
 <canonical_refs>
 ## Canonical References
