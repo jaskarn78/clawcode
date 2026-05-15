@@ -154,6 +154,7 @@ import { PolicyEvaluator } from "../triggers/policy-evaluator.js";
 import { PolicyWatcher } from "../triggers/policy-watcher.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
 import { loadSkillManifest, type UnloadedSkillEntry } from "./skill-loader.js";
+import { notifyUnloadedSkills } from "./skill-load-notifier.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
@@ -7687,6 +7688,15 @@ export async function startDaemon(
   // fallback, no-bot-token/no-bindings path). Before this call, restartAgent
   // greetings are no-ops. Exactly one call, post-convergence.
   manager.setWebhookManager(webhookManager);
+
+  // Phase 130 Plan 03 T-01 — fire-and-forget Discord notification per agent
+  // for any skills that the Plan 02 manifest loader refused at boot.
+  // Single emission point: the unloadedSkillsByAgent map is sealed once
+  // at boot (no hot-reload yet for this surface — D-06 reload-on-edit
+  // belongs to a follow-up plan). Fire-and-forget per Phase 89 canary —
+  // boot continues regardless of webhook delivery outcome.
+  notifyUnloadedSkills({ unloadedSkillsByAgent, webhookManager, log });
+
   // Phase 100 follow-up — also expose to the TriggerEngine deliveryFn
   // closure constructed earlier at boot (~line 1935). The closure reads
   // `.current` lazily at trigger-fire time, so this single post-convergence
