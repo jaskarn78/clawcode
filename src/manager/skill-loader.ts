@@ -37,6 +37,18 @@ import {
  * statuses surface via the discriminator; callers should switch on
  * `status` rather than null-checking `manifest`.
  */
+/**
+ * Per-agent record of a skill that failed Phase 130 load-time validation.
+ * Plan 02 accumulates this on daemon boot; Plan 03 reads it to render the
+ * batched Discord notification and the `clawcode skills <agent>` CLI table.
+ */
+export type UnloadedSkillEntry = {
+  readonly name: string;
+  readonly status: "refused-mcp-missing" | "parse-error";
+  readonly reason?: string;
+  readonly missingMcp?: readonly string[];
+};
+
 export type LoadSkillManifestResult =
   | { readonly status: "loaded"; readonly manifest: SkillManifest }
   | {

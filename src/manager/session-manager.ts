@@ -75,6 +75,7 @@ import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
 import { makeStreamStallCallback } from "./stream-stall-callback.js";
+import type { UnloadedSkillEntry } from "./skill-loader.js";
 import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
@@ -195,6 +196,14 @@ export class SessionManager {
   /** Phase 65 -- tracks the active ConversationStore session ID per agent. */
   private readonly activeConversationSessionIds: Map<string, string> = new Map();
   private skillsCatalog: SkillsCatalog = new Map();
+  /**
+   * Phase 130 Plan 02 — per-agent record of skills the manifest-loader
+   * REFUSED at boot (status: refused-mcp-missing or parse-error). Plan 03
+   * surfaces this map via Discord webhook batch (boot-time) and via
+   * `clawcode skills <agent>` CLI table. Initialized empty; populated
+   * by daemon at boot via `setUnloadedSkillsByAgent`.
+   */
+  private unloadedSkillsByAgent: ReadonlyMap<string, readonly UnloadedSkillEntry[]> = new Map();
   private allAgentConfigs: readonly ResolvedAgentConfig[] = [];
   /**
    * Phase 52 Plan 02 — per-agent prefixHash across turns.
@@ -524,6 +533,24 @@ export class SessionManager {
   set _lastStabilityPromise(v: Promise<void> | null) { this.recovery._lastStabilityPromise = v; }
 
   setSkillsCatalog(catalog: SkillsCatalog): void { this.skillsCatalog = catalog; }
+
+  /**
+   * Phase 130 Plan 02 — daemon-boot setter for the per-agent unloaded-skills
+   * map (DI'd from `unloadedSkillsByAgent` constructed in daemon.ts:5a).
+   * Plan 03 CLI handler reads this via `getUnloadedSkills(agentName)`.
+   */
+  setUnloadedSkillsByAgent(map: ReadonlyMap<string, readonly UnloadedSkillEntry[]>): void {
+    this.unloadedSkillsByAgent = map;
+  }
+
+  /**
+   * Phase 130 Plan 02 — per-agent accessor for refused-skill records.
+   * Returns an empty array (not undefined) when the agent has no refusals
+   * so callers don't need null-checks. Plan 03 T-02 CLI consumes this.
+   */
+  getUnloadedSkills(agentName: string): readonly UnloadedSkillEntry[] {
+    return this.unloadedSkillsByAgent.get(agentName) ?? [];
+  }
 
   /**
    * Phase 89 GREET-01 — inject the WebhookManager reference after both this
