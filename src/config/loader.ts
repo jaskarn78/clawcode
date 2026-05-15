@@ -312,14 +312,7 @@ export function resolveAgentConfig(
       // resolvedMcpMap BEFORE this `has("clawcode")` gate, skipping this
       // auto-inject — so per-agent `alwaysLoad: false` (inline-object form)
       // wins. NON-RELOADABLE per D-04: change takes effect on agent restart.
-      //
-      // ROLLBACK 2026-05-15 — set to false after production agents failed to
-      // come back up post-deploy. transformMcpServersForSdk's spread-conditional
-      // omits the field entirely when not strictly `=== true`, restoring the
-      // pre-cascade deferred-loading behavior. Root cause investigation pending;
-      // cascade types/tests remain in place so re-enabling is a one-line flip
-      // once the failure mode is understood.
-      alwaysLoad: false,
+      alwaysLoad: true,
     });
   }
 
