@@ -571,6 +571,16 @@ export class SubagentThreadSpawner {
       // content as "final response"). Post-999.57, delegated subagents
       // get the full multi-turn budget and MUST signal completion explicitly.
       `When your delegated work is fully complete and you have posted the final deliverable in this thread, call the \`subagent_complete\` MCP tool exactly once with agentName="${sessionName}". This relays your last substantive message to \`${config.parentAgentName}\`'s main channel. Do not call it on intermediate updates, acknowledgments, or tool-use preludes — only after the work is genuinely done.`,
+      // Phase 999.58 (2026-05-15) — long-deliverable contract. Production
+      // failure: research subagent produced a multi-section capability-gap
+      // table that hit Discord's 2000-char cap mid-row at "BOOTSTRAP.md".
+      // The relay then summarized truncated content. Root cause: subagents
+      // had no instruction to use clawcode_share_file for long output, so
+      // they default to posting everything as Discord messages. Fix:
+      // explicit contract — anything structured or > ~1500 chars must go
+      // to a workspace file + share. The relay's artifactsLine (relayCompletionToParent:300-303)
+      // already surfaces shared files in the parent's summary.
+      `If your deliverable is structured (tables, lists, code, multi-section docs) OR longer than ~1500 characters, write it to a markdown file in your workspace FIRST, then call \`clawcode_share_file\` with agent="${sessionName}" to surface it in this thread. Do NOT rely on posting long content as plain Discord messages — Discord caps individual messages at 2000 characters and silent mid-content truncation has caused real production failures. Posting a short summary (~3-5 sentences) in the thread alongside the shared file is fine; the file is the authoritative deliverable.`,
     ];
     const delegationContext = normalizedDelegateTo
       ? [

@@ -1770,4 +1770,35 @@ describe("spawnInThread with delegateTo", () => {
     // understand why this instruction exists.
     expect(startedConfig.soul).toContain("ack-and-wait");
   });
+
+  // Phase 999.58 (2026-05-15) — long-deliverable contract. Production
+  // failure: research subagent's capability-gap table hit Discord's 2000-char
+  // cap mid-row at BOOTSTRAP.md. The relay summarized truncated content
+  // because no file artifact was shared. Pin: subagents must be told to
+  // use clawcode_share_file for long/structured deliverables.
+  it("DEL-15 (999.58): subagent threadContext instructs use of clawcode_share_file for long deliverables", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "research-task",
+      delegateTo: "research",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    // The instruction mentions the share tool.
+    expect(startedConfig.soul).toContain("clawcode_share_file");
+    // The threshold guidance is present (1500 chars or structured content).
+    expect(startedConfig.soul).toMatch(/1500|structured/);
+    // The failure-mode reasoning is captured so the prompt isn't fragile —
+    // a future maintainer who reads it understands the 2000-char Discord cap.
+    expect(startedConfig.soul).toContain("2000");
+  });
+
+  it("DEL-16 (999.58): non-delegated subagent ALSO gets the long-deliverable instruction (baseContext, not delegationContext)", async () => {
+    await spawner.spawnInThread({
+      parentAgentName: "agent-a",
+      threadName: "self-spawn",
+    });
+    const startedConfig = sessionManager.startAgent.mock.calls[0][1] as ResolvedAgentConfig;
+    expect(startedConfig.soul).toContain("clawcode_share_file");
+    expect(startedConfig.soul).toMatch(/1500|structured/);
+  });
 });
