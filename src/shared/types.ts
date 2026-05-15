@@ -157,6 +157,25 @@ export type ResolvedAgentConfig = {
    */
   readonly memoryRetrievalTopK: number;
   /**
+   * Phase 127 — stream-stall supervisor threshold (ms). Populated by
+   * loader.ts via cascade:
+   *   agent.streamStallTimeoutMs ??
+   *   defaults.modelOverrides?.[resolved.model]?.streamStallTimeoutMs ??
+   *   defaults.streamStallTimeoutMs (180000 baseline).
+   * Consumed by the SDK iteration loop (persistent-session-handle.ts
+   * production path + wrapSdkQuery test path) — the per-turn stall checker
+   * compares Date.now() - lastUsefulTokenAt against this value, aborting
+   * the in-flight turn on trip. Reloadable: the checker re-reads on each
+   * setInterval tick so a yaml edit applies within
+   * Math.min(threshold/4, 30000)ms without daemon restart.
+   *
+   * Optional at the type level for back-compat with the ~25 existing
+   * ResolvedAgentConfig test factories (same precedent as
+   * `memoryRetrievalTokenBudget?: number` above). Production loader.ts
+   * always populates it; consumers default to 180000ms when undefined.
+   */
+  readonly streamStallTimeoutMs?: number;
+  /**
    * Phase 115 sub-scope 3 — populated by loader.ts from
    * agent.memoryRetrievalTokenBudget ?? defaults.memoryRetrievalTokenBudget.
    * Range 500-8000 (zod-validated). Consumed by

@@ -1235,6 +1235,17 @@ export const agentSchema = z.object({
   // omitted, resolver falls back to defaults.memoryRetrievalTopK (5 per
   // D-RETRIEVAL). Reloadable (next turn picks up the new value).
   memoryRetrievalTopK: z.number().int().positive().max(50).optional(),
+  // Phase 127 — per-agent stream-stall supervisor threshold (ms). When
+  // the SDK iteration loop sees no useful content tokens (text_delta or
+  // input_json_delta.partial_json) for this many milliseconds, the
+  // current turn is aborted via AbortController and a structured
+  // `phase127-stream-stall` log line is emitted. Optional here; resolver
+  // fills from `defaults.modelOverrides[agent.model].streamStallTimeoutMs`
+  // first, then `defaults.streamStallTimeoutMs` (180000ms baseline).
+  // Reloadable — the stall-check setInterval re-reads the threshold on
+  // each tick, so a YAML edit applies within Math.min(threshold/4, 30000)ms.
+  // Range 30000-1800000ms (30s — 30min) to bound foot-guns.
+  streamStallTimeoutMs: z.number().int().min(30_000).max(1_800_000).optional(),
   // Phase 115 sub-scope 3 — per-agent override for the per-turn
   // <memory-context> token budget. When omitted, resolver falls back to
   // defaults.memoryRetrievalTokenBudget (1500 per Phase 115 D-02). Range
@@ -1954,6 +1965,45 @@ export const defaultsSchema = z.object({
       browser: z.enum(["node", "static", "python"]).default("node"),
     })
     .optional(),
+  // Phase 127 — fleet-wide stream-stall supervisor threshold (ms). Default
+  // 180000ms (3 min) per CONTEXT.md. Cascade lookup order in loader:
+  //   agent.streamStallTimeoutMs ??
+  //   defaults.modelOverrides[agent.model].streamStallTimeoutMs ??
+  //   defaults.streamStallTimeoutMs (this value)
+  // Reloadable — tracker re-reads on each setInterval tick.
+  //
+  // `.optional()` after `.default(180_000)` mirrors the Phase 999.6
+  // preDeploySnapshotMaxAgeHours / Phase 999.12 heartbeatInboxTimeoutMs
+  // pattern above — z.infer<typeof defaultsSchema>.streamStallTimeoutMs
+  // becomes `number | undefined` at the type level so existing
+  // DefaultsConfig test factories continue to compile without an explicit
+  // entry; the loader resolver uses `?? 180_000` to materialize the
+  // baseline at consumption time.
+  streamStallTimeoutMs: z
+    .number()
+    .int()
+    .min(30_000)
+    .max(1_800_000)
+    .default(180_000)
+    .optional(),
+  // Phase 127 — per-model stream-stall threshold overrides. Operators set
+  // Opus longer (e.g. 300000ms) to cover advisor consults and Haiku shorter
+  // (e.g. 90000ms) since Haiku turns are expected to be fast. The resolver
+  // cascade picks up the entry keyed by the agent's resolved model; an
+  // agent-level `streamStallTimeoutMs` still beats this. Reloadable.
+  modelOverrides: z
+    .record(
+      z.enum(["haiku", "sonnet", "opus"]),
+      z.object({
+        streamStallTimeoutMs: z
+          .number()
+          .int()
+          .min(30_000)
+          .max(1_800_000)
+          .optional(),
+      }),
+    )
+    .optional(),
   // Phase 117 Plan 06 — fleet-wide advisor block. Mirrors the shimRuntime
   // canary dial: `.optional()` so omission yields `undefined` (operators on
   // pre-117 configs see no behavior change at parse time; loader resolvers
@@ -2267,6 +2317,11 @@ export const configSchema = z.object({
     // preserves pre-115-04 interleaved order with no marker (revert path).
     cacheBreakpointPlacement: "static-first" as const,
     memoryScannerEnabled: true,
+    // Phase 127 — fleet-wide stream-stall supervisor default mirrors
+    // defaultsSchema.streamStallTimeoutMs above (180000ms / 3 min). Per-model
+    // overrides (Opus 300000 / Haiku 90000) are operator-set; this literal
+    // applies only when `defaults:` is OMITTED entirely from clawcode.yaml.
+    streamStallTimeoutMs: 180_000,
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
