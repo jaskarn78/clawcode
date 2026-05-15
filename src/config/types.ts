@@ -256,6 +256,20 @@ export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // change must run: `clawcode restart <agent>`.
   "agents.*.cacheBreakpointPlacement",
   "defaults.cacheBreakpointPlacement",
+  // Phase 136 — llmRuntime.backend is captured into the SDK / backend
+  // boot path at session start (createLlmRuntimeService → backend
+  // constructor); it is NOT re-read per turn. Same architectural pattern
+  // as Phase 117 advisor.backend (NON_RELOADABLE via the same set) and
+  // Phase 999.54 mcpServers.alwaysLoad. A clawcode.yaml edit takes
+  // effect ONLY on the NEXT agent restart. Operators wanting an
+  // immediate change must run: `clawcode restart <agent>` (or the whole
+  // daemon for fleet-wide). Doc-of-intent — the differ falls through
+  // to false for unclassified paths, so the explicit entries mirror
+  // the Phase 100 / Phase 115 precedent.
+  "agents.*.llmRuntime",
+  "agents.*.llmRuntime.backend",
+  "defaults.llmRuntime",
+  "defaults.llmRuntime.backend",
   // Phase 999.54 (D-04) — mcpServers[].alwaysLoad is captured into the SDK's
   // baseOptions inside session-adapter.ts createSession / resumeSession via
   // transformMcpServersForSdk (Plan 01) when the session is built; it is NOT

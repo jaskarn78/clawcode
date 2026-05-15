@@ -574,6 +574,16 @@ export type ResolvedAgentConfig = {
    * Phase 138 wires credit telemetry + automatic failover; Phase 141
    * adds Codex; Phase 142 adds OpenRouter.
    *
+   * **Optional at the type level for back-compat** with existing
+   * ResolvedAgentConfig test factories (~30 inline test fixtures)
+   * that don't go through the resolver. Same precedent as
+   * `preserveLastTurns?: number` (Phase 125 Plan 02) and
+   * `vision?: { ... }` (Phase 113). Downstream consumers (the
+   * `createLlmRuntimeService` factory at
+   * `src/llm-runtime/llm-runtime-service.ts`) read the field via
+   * `config.llmRuntime?.backend ?? "anthropic-agent-sdk"` so a
+   * missing block resolves to the Phase 136 baseline.
+   *
    * **Construction-site consumer:** `createLlmRuntimeService(config, deps)`
    * at `src/llm-runtime/llm-runtime-service.ts`. Single chokepoint per
    * agent per session in `daemon.ts` — direct

@@ -1151,6 +1151,44 @@ export type ImageConfig = z.infer<typeof imageConfigSchema>;
 // burning budget on a misconfigured agent.
 // ---------------------------------------------------------------------------
 export const advisorBackendSchema = z.enum(["native", "fork"]); // "portable-fork" intentionally excluded — Phase 118 follow-up
+
+// ---------------------------------------------------------------------------
+// Phase 136 — LlmRuntime (primary agent runtime) backend schema.
+//
+// The Zod source of truth for what operators can put in `clawcode.yaml`
+// under `agents[*].llmRuntime.backend` / `defaults.llmRuntime.backend`.
+// Phase 136 ships ONE accepted value — `"anthropic-agent-sdk"`, the
+// current production runtime extracted into `AnthropicAgentSdkBackend`.
+//
+// Phase 137 widens this enum to add `"anthropic-api-key"` (pay-as-you-go
+// safety valve when the 2026-06-15 Agent SDK credit cap depletes).
+// Phase 140 adds `"claude-code-interactive"` (probe-gated, drives the real
+// claude CLI binary through tmux). Phase 141 adds `"openai-codex"`,
+// Phase 142 adds `"openrouter"`. The `"portable-fork"` literal is
+// intentionally EXCLUDED — it exists as a scaffold-only backend (mirrors
+// Phase 117 `portable-fork` advisor) and is unselectable from YAML.
+//
+// See:
+//   - .planning/phases/136-llm-runtime-multi-backend/136-CONTEXT.md §D-04
+//   - src/llm-runtime/types.ts — LlmRuntimeBackend type union (mirror of
+//     this enum; the two must stay in sync).
+// ---------------------------------------------------------------------------
+export const llmRuntimeBackendSchema = z.enum(["anthropic-agent-sdk"]);
+export const llmRuntimeConfigSchema = z.object({
+  backend: llmRuntimeBackendSchema.default("anthropic-agent-sdk"),
+});
+/**
+ * Per-agent llmRuntime override — every field optional so an operator can
+ * flip just `backend` without re-specifying anything else. Loader resolver
+ * (`resolveLlmRuntimeBackend` below) handles the per-agent → defaults →
+ * hardcoded-baseline fall-through. Mirrors `agentAdvisorOverrideSchema`
+ * (Phase 117).
+ */
+export const agentLlmRuntimeOverrideSchema = z
+  .object({
+    backend: llmRuntimeBackendSchema.optional(),
+  })
+  .partial();
 export const advisorCachingSchema = z.object({
   enabled: z.boolean().default(true),
   ttl: z.enum(["5m", "1h"]).default("5m"),
@@ -1361,6 +1399,21 @@ export const agentSchema = z.object({
    * `defaults.advisor` — `"portable-fork"` is rejected at parse time.
    */
   advisor: agentAdvisorOverrideSchema.optional(),
+  /**
+   * Phase 136 — per-agent LlmRuntime backend override.
+   *
+   * Mirrors the Phase 117 `advisor` shape: every field optional so an
+   * operator can flip just `backend` for canary rollout. Phase 136 ships
+   * with the enum locked to a single value (`"anthropic-agent-sdk"`); a
+   * per-agent block is functionally equivalent to omission until Phase 137
+   * widens the enum.
+   *
+   * Survives agent restart (loader re-resolves on every spawn). Locked
+   * by NON_RELOADABLE_FIELDS — runtime backend selection is a session-
+   * boot baseOptions field, not a per-turn knob. Same architectural
+   * pattern as Phase 117 `advisor.backend` and Phase 999.54 `alwaysLoad`.
+   */
+  llmRuntime: agentLlmRuntimeOverrideSchema.optional(),
   /**
    * Phase 124 Plan 02 D-06 — per-agent override for the auto-compaction
    * trigger ratio (0..1). When omitted, loader's `resolveAutoCompactAt`
@@ -2015,6 +2068,18 @@ export const defaultsSchema = z.object({
   // backend to gate IPC dispatch; Plan 117-08 reads the same backend for
   // the capability manifest. See `advisorConfigSchema` block above.
   advisor: advisorConfigSchema.optional(),
+  /**
+   * Phase 136 — fleet-wide LlmRuntime backend baseline.
+   *
+   * Optional at parse time so pre-Phase-136 configs see no parse error.
+   * Loader's `resolveLlmRuntimeBackend` falls through to the hardcoded
+   * baseline `"anthropic-agent-sdk"` when neither agent nor defaults
+   * supply the block. Phase 137 onwards: operators can flip the whole
+   * fleet to a new backend by setting `defaults.llmRuntime.backend` and
+   * `clawcode restart`-ing (NON_RELOADABLE — captured into session
+   * baseOptions at spawn).
+   */
+  llmRuntime: llmRuntimeConfigSchema.optional(),
   // Phase 124 Plan 02 D-06 — fleet-wide auto-compaction trigger ratio.
   // Plan 125 consumes the resolved value to decide when to fire compaction
   // automatically; Phase 124 only ships the schema + reload integration.

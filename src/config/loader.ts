@@ -770,6 +770,17 @@ export function resolveAgentConfig(
     // an operator declares `debug: {}` (empty block), the parsed value is
     // `{ dumpBaseOptionsOnSpawn: false }` — explicit-off rather than absent.
     debug: agent.debug,
+    // Phase 136 — LlmRuntime backend resolution. Cascade:
+    //   agents.<n>.llmRuntime.backend → defaults.llmRuntime.backend → "anthropic-agent-sdk"
+    // Always populated post-resolve so downstream consumers (the
+    // createLlmRuntimeService factory in daemon.ts) read it
+    // unconditionally. NON_RELOADABLE — see src/config/types.ts.
+    llmRuntime: {
+      backend:
+        agent.llmRuntime?.backend ??
+        defaults.llmRuntime?.backend ??
+        "anthropic-agent-sdk",
+    },
   };
 }
 
