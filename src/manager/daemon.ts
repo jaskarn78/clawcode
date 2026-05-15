@@ -153,6 +153,8 @@ import { loadPolicies, PolicyValidationError } from "../triggers/policy-loader.j
 import { PolicyEvaluator } from "../triggers/policy-evaluator.js";
 import { PolicyWatcher } from "../triggers/policy-watcher.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
+import { loadSkillManifest, type UnloadedSkillEntry } from "./skill-loader.js";
+import { notifyUnloadedSkills } from "./skill-load-notifier.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
@@ -2443,8 +2445,57 @@ export async function startDaemon(
   const skillsCatalog = await scanSkillsDirectory(skillsPath, log);
   log.info({ skills: skillsCatalog.size }, "skills catalog loaded");
 
+  // Phase 130 Plan 02 — per-agent accumulator of refused skills. Plan 03
+  // T-01 reads this immediately after boot to emit ONE batched Discord
+  // notification per agent; Plan 03 T-02 surfaces it on the
+  // `clawcode skills <agent>` CLI table via the manager's getter.
+  const unloadedSkillsByAgent = new Map<string, UnloadedSkillEntry[]>();
+
+  // Phase 130 Plan 02 — single chokepoint for SKILL.md manifest validation.
+  // For each per-agent skill, call `loadSkillManifest` once with the agent's
+  // enabled MCP server names. Skills that REFUSE (status: refused-mcp-missing
+  // or parse-error) are filtered OUT of the link list so no broken symlink is
+  // created in the agent's workspace. Manifest-missing falls through as a
+  // back-compat warning (D-03a) — pre-Phase-130 skills still load.
+  //
+  // The per-agent `unloadedSkills` accumulator is captured into
+  // `unloadedSkillsByAgent` for Plan 03's Discord webhook batch + CLI surface.
+  // Silent-path-bifurcation guard: this is the ONLY call to `loadSkillManifest`
+  // in daemon.ts. CLI's `clawcode skills --validate` (Plan 03 T-02) reuses the
+  // same module; tests reuse the same module. ONE chokepoint, ONE log emission
+  // shape, ONE refusal taxonomy.
   for (const agent of resolvedAgents) {
-    await linkAgentSkills(join(agent.workspace, "skills"), agent.skills, skillsCatalog, log);
+    const enabledMcp = agent.mcpServers.map((s) => s.name);
+    const loadedSkills: string[] = [];
+    const unloaded: UnloadedSkillEntry[] = [];
+    for (const skillName of agent.skills) {
+      const entry = skillsCatalog.get(skillName);
+      if (!entry) {
+        // Skill name listed in config but absent from the catalog — preserve
+        // the existing `linkAgentSkills` warn-and-skip behavior (NOT a Phase
+        // 130 refusal). Falls through with the original name so downstream
+        // logging is unchanged.
+        loadedSkills.push(skillName);
+        continue;
+      }
+      const result = loadSkillManifest(entry.path, enabledMcp);
+      if (result.status === "loaded" || result.status === "manifest-missing") {
+        // Back-compat: manifest-missing is a warn, not a refusal (D-03a).
+        loadedSkills.push(skillName);
+        continue;
+      }
+      unloaded.push({
+        name: skillName,
+        status: result.status,
+        reason: result.status === "refused-mcp-missing" || result.status === "parse-error" ? result.reason : undefined,
+        missingMcp:
+          result.status === "refused-mcp-missing"
+            ? [...result.missingMcp]
+            : undefined,
+      });
+    }
+    unloadedSkillsByAgent.set(agent.name, unloaded);
+    await linkAgentSkills(join(agent.workspace, "skills"), loadedSkills, skillsCatalog, log);
   }
 
   // Phase 88 Plan 02 MKT-01 — resolve marketplace legacy sources once at
@@ -3200,6 +3251,11 @@ export async function startDaemon(
 
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
+
+  // Phase 130 Plan 02 — wire the per-agent refused-skill map. Plan 03's
+  // CLI (`clawcode skills <agent>`) reads `manager.getUnloadedSkills(name)`
+  // to render the per-skill status table.
+  manager.setUnloadedSkillsByAgent(unloadedSkillsByAgent);
 
   // Phase 90 MEM-02 — build a lazy MemoryStore proxy. Scanners are
   // constructed at boot but the per-agent MemoryStore doesn't exist until
@@ -7632,6 +7688,15 @@ export async function startDaemon(
   // fallback, no-bot-token/no-bindings path). Before this call, restartAgent
   // greetings are no-ops. Exactly one call, post-convergence.
   manager.setWebhookManager(webhookManager);
+
+  // Phase 130 Plan 03 T-01 — fire-and-forget Discord notification per agent
+  // for any skills that the Plan 02 manifest loader refused at boot.
+  // Single emission point: the unloadedSkillsByAgent map is sealed once
+  // at boot (no hot-reload yet for this surface — D-06 reload-on-edit
+  // belongs to a follow-up plan). Fire-and-forget per Phase 89 canary —
+  // boot continues regardless of webhook delivery outcome.
+  notifyUnloadedSkills({ unloadedSkillsByAgent, webhookManager, log });
+
   // Phase 100 follow-up — also expose to the TriggerEngine deliveryFn
   // closure constructed earlier at boot (~line 1935). The closure reads
   // `.current` lazily at trigger-fire time, so this single post-convergence
@@ -8833,7 +8898,19 @@ async function routeMethod(
           )
         : allAssignments;
 
-      return { catalog, assignments };
+      // Phase 130 Plan 03 T-02 — surface refused skills per agent. When
+      // `agent` is supplied, return only that agent's unloaded list (matches
+      // the `assignments` filter shape). When unfiltered, return the full map.
+      const unloadedSkills: Record<string, readonly UnloadedSkillEntry[]> = {};
+      if (agentFilter !== undefined) {
+        unloadedSkills[agentFilter] = manager.getUnloadedSkills(agentFilter);
+      } else {
+        for (const c of configs) {
+          unloadedSkills[c.name] = manager.getUnloadedSkills(c.name);
+        }
+      }
+
+      return { catalog, assignments, unloadedSkills };
     }
 
     // Phase 999.2 Plan 02 D-RNI-IPC-01 — canonical name `ask-agent` and the
