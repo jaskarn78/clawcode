@@ -22,14 +22,25 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** Phase 126 — Subagent Context Isolation closeout (999.57 Plans 02/03 — pre-written, executable)
+**Current focus:** Phase 126 Plan 03 (deploy-gated) + Phase 127 discuss-phase (v3.0 Wave 1) AND Phase 136 LlmRuntimeService seam (v3.1 Wave 1 — hard-deadline track, 31 days until 2026-06-15 Anthropic cutover)
 
 ## Current Position
 
-Phase: 126 (Subagent Context Isolation closeout — 999.57) — READY TO START
-Plan: 2 of 3 (Plan 01 shipped; Plan 02 ready; Plan 03 deploy-gated)
-Status: v3.0 OPENED; Wave 1 ready to execute
-Last activity: 2026-05-15 -- v3.0 milestone opened with Phases 126-135; v2.9 closeout commit `3eb80f3`; ROADMAP promotion `74dc984`
+**v3.0 Wave 1 (in progress):**
+- Phase 126: Plans 01 + 02 SHIPPED (commit `ae3764d`); Plan 03 deploy-gated per `feedback_ramy_active_no_deploy`
+- Phase 127 (999.61 stream timeout): NEXT — needs discuss-phase
+- Phase 128 (999.4 usage accuracy): EMPTY DIR — needs discuss-phase
+- Phase 129 (999.5 status fallbacks): EMPTY DIR — needs discuss-phase
+
+**v3.1 Wave 1 (parallel — opening 2026-05-15):**
+- Phase 136 (LlmRuntimeService seam + AnthropicAgentSdk backend extraction): READY TO START — `gsd-discuss-phase 136` next
+- Phase 137 (AnthropicApiKey backend): blocked by 136
+- Phase 138 (Credit telemetry + failover): blocked by 137
+
+**Hard deadline:** 2026-06-15 (31 days). Phases 136 / 137 / 138 must merge before that to retain ClawCode affordability under Anthropic's new Agent SDK credit policy.
+
+Status: v3.0 + v3.1 BOTH OPEN; parallel execution per operator directive 2026-05-15
+Last activity: 2026-05-15 -- Phase 126 Plan 02 SHIPPED (`ae3764d`); ROADMAP restructure (`a964443`); ready for parallel Phase 127/136 work
 
 ## v2.9 Status (deploy_pending — superseded by v3.0)
 
