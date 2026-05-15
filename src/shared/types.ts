@@ -1,7 +1,7 @@
 // Phase 95 DREAM-01..03 — dream config type lives in the config schema.
 // We import the inferred zod type so ResolvedAgentConfig.dream stays in
 // lockstep with the schema definition (one source of truth).
-import type { DreamConfig } from "../config/schema.js";
+import type { DreamConfig, HomelabConfig } from "../config/schema.js";
 
 /**
  * Resolved agent configuration after defaults merging.
@@ -122,6 +122,16 @@ export type ResolvedAgentConfig = {
    * daemon's IPC handler checks `dream?.enabled === true`.
    */
   readonly dream?: DreamConfig;
+  /**
+   * Phase 999.47 Plan 02 — fleet-level homelab refresh tick config.
+   * Propagated from `defaults.homelab` by the loader resolver (no
+   * per-agent override at this time; homelab is fleet-wide). When
+   * `defaults.homelab` is omitted from clawcode.yaml, this field is
+   * undefined and the heartbeat check (`src/heartbeat/checks/homelab-
+   * refresh.ts`) falls back to the documented constants. Reloadable
+   * subset documented in `RELOADABLE_FIELDS` (src/config/types.ts).
+   */
+  readonly homelab?: HomelabConfig;
   /**
    * Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set, the
    * LLM physically cannot invoke any tool whose name matches an entry. Used

@@ -483,6 +483,34 @@ export const dreamConfigSchema = z.object({
 export type DreamConfig = z.infer<typeof dreamConfigSchema>;
 
 /**
+ * Phase 999.47 Plan 02 — homelab refresh tick configuration.
+ *
+ * Governs the hourly `homelab-refresh` heartbeat check that polls the
+ * homelab inventory at `repoPath` and emits the SC-7 telemetry log
+ * line (`phase999.47-homelab-refresh`).
+ *
+ * Reload classification (RELOADABLE_FIELDS in src/config/types.ts):
+ *   - `refreshIntervalMinutes` reloadable — next tick reads the live
+ *     resolved value via the standard ConfigReloader closure pattern.
+ *   - `repoPath` documented-of-intent NON-reloadable — the bash
+ *     `scripts/refresh.sh` working directory is captured at boot;
+ *     operators changing the inventory repo location should run
+ *     `clawcode restart` so the new path is materialized cleanly.
+ *   - `enabled` reloadable — flips the heartbeat check between
+ *     active / no-op without daemon bounce.
+ */
+export const homelabConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  // D-04 hourly cadence; min 5min guards against runaway poll
+  // budgets if an operator typoes the YAML.
+  refreshIntervalMinutes: z.int().min(5).default(60),
+  repoPath: z.string().min(1).default("/home/clawcode/homelab"),
+});
+
+/** Inferred Phase 999.47 homelab config type. */
+export type HomelabConfig = z.infer<typeof homelabConfigSchema>;
+
+/**
  * Heartbeat monitoring configuration schema.
  * Controls the periodic health check system for agents.
  */
@@ -2244,32 +2272,13 @@ export const defaultsSchema = z.object({
   /**
    * Phase 999.47 Plan 02 — homelab refresh tick configuration.
    *
-   * Governs the hourly `homelab-refresh` heartbeat check that polls the
-   * homelab inventory at `repoPath` and emits the SC-7 telemetry log
-   * line (`phase999.47-homelab-refresh`). Optional — pre-Phase-999.47
-   * configs see no behaviour change at parse time; the heartbeat check
-   * falls back to the documented defaults (interval 60min, repoPath
-   * /home/clawcode/homelab) at consumption time.
-   *
-   * Reload classification (RELOADABLE_FIELDS in src/config/types.ts):
-   *   - `refreshIntervalMinutes` reloadable — next tick reads the live
-   *     resolved value via the standard ConfigReloader closure pattern.
-   *   - `repoPath` documented-of-intent NON-reloadable — the bash
-   *     `scripts/refresh.sh` working directory is captured at boot;
-   *     operators changing the inventory repo location should run
-   *     `clawcode restart` so the new path is materialized cleanly.
-   *   - `enabled` reloadable — flips the heartbeat check between
-   *     active / no-op without daemon bounce.
+   * See `homelabConfigSchema` below for the resolved shape. Optional —
+   * pre-Phase-999.47 configs see no behaviour change at parse time;
+   * the heartbeat check falls back to the documented defaults
+   * (interval 60min, repoPath /home/clawcode/homelab) at consumption
+   * time.
    */
-  homelab: z
-    .object({
-      enabled: z.boolean().default(true),
-      // D-04 hourly cadence; min 5min guards against runaway poll
-      // budgets if an operator typoes the YAML.
-      refreshIntervalMinutes: z.int().min(5).default(60),
-      repoPath: z.string().min(1).default("/home/clawcode/homelab"),
-    })
-    .optional(),
+  homelab: homelabConfigSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

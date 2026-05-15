@@ -642,6 +642,12 @@ export function resolveAgentConfig(
     // (defaults.dream has all three fields with zod defaults filled);
     // we just thread the resolved object through.
     dream: agent.dream ?? defaults.dream,
+    // Phase 999.47 Plan 02 — homelab refresh tick config. Fleet-level
+    // (no per-agent override surface today), so we read directly from
+    // defaults.homelab. UNDEFINED when defaults.homelab is omitted from
+    // clawcode.yaml — the heartbeat check falls back to documented
+    // constants in that case.
+    homelab: defaults.homelab,
     // Phase 90 MEM-01 — agent-level memoryAutoLoad beats defaults.memoryAutoLoad;
     // undefined falls back to defaults (zod default = true). Cannot use `??`
     // here: `false ?? true` would (correctly) yield false, but `undefined ??

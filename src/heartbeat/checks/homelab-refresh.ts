@@ -188,24 +188,29 @@ type HomelabConfig = {
 
 /**
  * Resolve the homelab config block. Per-agent overrides are NOT
- * supported (homelab is fleet-level); we read `defaults.homelab`
- * via the daemon's resolved-config registry by looking at the
- * sentinel agent's config and inspecting any attached homelab block.
+ * supported (homelab is fleet-level); the loader resolver propagates
+ * `defaults.homelab` verbatim into every ResolvedAgentConfig. We read
+ * it from the sentinel agent's resolved config and fall back to
+ * documented constants when `defaults.homelab` is omitted from
+ * clawcode.yaml entirely.
  *
- * Falls back to documented defaults if the operator hasn't set the
- * block in clawcode.yaml.
- *
- * v1 deliverable: journalctl-grep surface; the agent config doesn't
- * currently carry the fleet-level `defaults.homelab` block. We use
- * the documented defaults as the operating values. A follow-up phase
- * can plumb the defaults block into per-agent resolved configs if
- * operators need YAML-tunable cadence.
+ * Reload semantics: ConfigReloader (Phase 22) re-resolves every
+ * agent's ResolvedAgentConfig when clawcode.yaml changes. The next
+ * heartbeat tick reads the updated `cfg.homelab` via this function,
+ * so a YAML edit to `defaults.homelab.refreshIntervalMinutes` or
+ * `enabled` takes effect on the very next tick — no daemon restart
+ * required. `repoPath` reads the live value too, but operators
+ * should restart for cleanliness (refresh.sh's cwd is captured by
+ * the subprocess at boot).
  */
-function resolveHomelabConfig(_ctx: CheckContext): HomelabConfig {
+function resolveHomelabConfig(ctx: CheckContext): HomelabConfig {
+  const agentConfig = ctx.sessionManager.getAgentConfig?.(ctx.agentName);
+  const fromConfig = agentConfig?.homelab;
   return {
-    enabled: true,
-    refreshIntervalMinutes: DEFAULT_REFRESH_INTERVAL_MINUTES,
-    repoPath: DEFAULT_REPO_PATH,
+    enabled: fromConfig?.enabled ?? true,
+    refreshIntervalMinutes:
+      fromConfig?.refreshIntervalMinutes ?? DEFAULT_REFRESH_INTERVAL_MINUTES,
+    repoPath: fromConfig?.repoPath ?? DEFAULT_REPO_PATH,
   };
 }
 

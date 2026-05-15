@@ -24,12 +24,22 @@ function makeCtx(opts: {
   agentName?: string;
   runningAgents?: readonly string[];
   repoPath?: string;
+  enabled?: boolean;
+  refreshIntervalMinutes?: number;
 }): CheckContext {
   const runningAgents = opts.runningAgents ?? ["agent-a"];
   const agentName = opts.agentName ?? runningAgents[0];
+  const agentConfig = {
+    name: agentName,
+    homelab: {
+      enabled: opts.enabled ?? true,
+      refreshIntervalMinutes: opts.refreshIntervalMinutes ?? 60,
+      repoPath: opts.repoPath ?? "/home/clawcode/homelab",
+    },
+  };
   const sessionManager = {
     getRunningAgents: vi.fn().mockReturnValue(runningAgents),
-    getAgentConfig: vi.fn().mockReturnValue({ name: agentName }),
+    getAgentConfig: vi.fn().mockReturnValue(agentConfig),
   } as unknown as CheckContext["sessionManager"];
   return {
     agentName,
@@ -101,91 +111,50 @@ describe("homelab-refresh heartbeat check", () => {
   beforeEach(() => {
     repoPath = mkdtempSync(join(tmpdir(), "homelab-refresh-"));
     mkdirSync(join(repoPath, "scripts"), { recursive: true });
-    // Override the default repo path by monkey-patching DEFAULT_REPO_PATH-
-    // dependent logic via setReindexRunner + setExeca; but the production
-    // code reads cfg.repoPath internally as `/home/clawcode/homelab` by
-    // default. We tunnel the test's tempdir through by hooking execa to
-    // resolve regardless of script path, and by writing the .refresh-last.json
-    // at the production path. Cleanest: patch the prod path read via
-    // exposing a test-only override on the module — but for the v1 tests
-    // we shim by capturing the cwd from execa.
   });
 
   afterEach(() => {
     rmSync(repoPath, { recursive: true, force: true });
   });
 
-  // The check uses a hard-coded DEFAULT_REPO_PATH internally. We mock
-  // execa to capture the cwd it would write to, then write the test
-  // fixture .refresh-last.json at THAT path. Cleanest test pattern
-  // without a config-injection seam — and faithfully exercises the
-  // production code path that reads `cfg.repoPath`.
-  function setupRefreshAtProdPath(refreshJson: unknown | string | null) {
-    // The production default repoPath is "/home/clawcode/homelab".
-    // We can't write there in tests; instead we patch execa to first
-    // redirect the script to write into our tempdir, then assert the
-    // test fixture lives there. But the production code reads from
-    // cfg.repoPath/.refresh-last.json — so the cleanest approach is
-    // to skip the prod-path coupling: we re-export a test setter for
-    // the repo path. Add that next.
-    return refreshJson;
-  }
+  // The ctx-config seam (added 2026-05-15 post-advisor-feedback) lets
+  // each test inject its own repoPath via `makeCtx({ repoPath })`. The
+  // execa mock writes the .refresh-last.json fixture directly into
+  // that tempdir, and the check's readAndParseRefreshOutput reads from
+  // the same path — full end-to-end coverage with NO try/catch swallow.
 
   it("Test 1: happy path — emits one info pino call with operator-grep shape, triggers reindex", async () => {
-    // Write fixture at production path indirection: we patch execa to
-    // "succeed" (exit 0) AND write the fixture file synchronously into
-    // the cfg.repoPath the check will read. Achieved via the execa
-    // mock side-effect — when "bash refresh.sh" is invoked, we drop
-    // the fixture file at the expected path.
     const reindexSpy = vi.fn().mockResolvedValue(undefined);
     __setReindexRunnerForTests(reindexSpy);
 
     const execaSpy = vi.fn().mockImplementation(async (_cmd, _args, opts) => {
-      // The "refresh script" writes the JSON output file as part of its
-      // contract; emulate that here.
-      const cwd = (opts as { cwd?: string }).cwd ?? repoPath;
-      try {
-        mkdirSync(cwd, { recursive: true });
-        writeRefreshJson(cwd, happyRefreshJson());
-      } catch {
-        /* path may not be writable in tests — caller writes fixture instead */
-      }
+      const cwd = (opts as { cwd?: string }).cwd!;
+      writeRefreshJson(cwd, happyRefreshJson());
       return { stdout: "", stderr: "", exitCode: 0 };
     });
     __setExecaForTests(execaSpy);
 
-    // Pre-write the fixture into the prod default path; if writable,
-    // the check will read it. Otherwise the execa mock seeded it above.
-    // We MUST hit the prod path because the check reads
-    // /home/clawcode/homelab/.refresh-last.json.
-    // For the test pass, we redirect by injecting a fake repoPath via
-    // execa's cwd capture — the readAndParseRefreshOutput reads from
-    // the same cfg.repoPath the check resolved. Since we can't inject
-    // config here without widening the seam, we test via the execa-
-    // captured cwd cycle: writeRefreshJson lives wherever execa says cwd is.
-    // The production code's cfg.repoPath is fixed to /home/clawcode/homelab.
-    // If that path isn't writable in CI, we skip with a documented
-    // limitation — the contract-level tests cover the schema; the
-    // happy-path here covers the wiring.
-
-    // Reality check: production cfg.repoPath is hard-coded. Tests that
-    // need fixture files MUST write to /home/clawcode/homelab. We test
-    // this conservatively — verify the call mechanics + logger shape,
-    // not the actual file IO under the prod path.
-
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const result = await homelabRefreshCheck.execute(ctx);
 
     expect(execaSpy).toHaveBeenCalled();
-    // Either healthy with telemetry OR warning with synthetic-failure
-    // payload depending on whether /home/clawcode/homelab exists. Both
-    // paths are valid — we assert the operator-grep tag fires either way.
-    const allLogs = [...infoSpy.mock.calls, ...warnSpy.mock.calls];
-    const phaseTagFired = allLogs.some(
-      (call) => call[1] === "phase999.47-homelab-refresh",
+    expect(result.status).toBe("healthy");
+
+    const infoCalls = infoSpy.mock.calls.filter(
+      (call: unknown[]) => call[1] === "phase999.47-homelab-refresh",
     );
-    expect(phaseTagFired).toBe(true);
-    expect(["healthy", "warning"]).toContain(result.status);
+    expect(infoCalls).toHaveLength(1);
+    const payload = infoCalls[0][0] as Record<string, unknown>;
+    expect(payload.ok).toBe(true);
+    expect(payload.hostCount).toBe(6);
+    expect(payload.vmCount).toBe(4);
+    expect(payload.containerCount).toBe(2);
+    expect(payload.driftCount).toBe(1);
+    expect(payload.commitsha).toBe("abc1234abcdef");
+
+    // Reindex was triggered fire-and-forget.
+    expect(reindexSpy).toHaveBeenCalledTimes(1);
+    expect(reindexSpy).toHaveBeenCalledWith(repoPath);
   });
 
   it("Test 2: .refresh-last.json missing → warning with synthetic refresh-output-missing reason", async () => {
@@ -194,53 +163,46 @@ describe("homelab-refresh heartbeat check", () => {
     __setExecaForTests(
       vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 }),
     );
-    // Reindex must NOT fire in this path.
     const reindexSpy = vi.fn().mockResolvedValue(undefined);
     __setReindexRunnerForTests(reindexSpy);
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const result = await homelabRefreshCheck.execute(ctx);
 
-    // Either we hit the missing-output branch OR (if the prod path
-    // exists with a real .refresh-last.json from a prior test) we hit
-    // the parse-success branch. We assert the failure-path shape only
-    // when warnSpy got hit with the synthetic payload.
+    expect(result.status).toBe("warning");
     const warnCalls = warnSpy.mock.calls.filter(
       (call: unknown[]) => call[1] === "phase999.47-homelab-refresh",
     );
-    if (warnCalls.length > 0) {
-      const payload = warnCalls[0][0] as Record<string, unknown>;
-      // One of these reasons should appear; missing > malformed > other.
-      expect(["refresh-output-missing", "refresh-output-malformed"]).toContain(
-        payload.reason as string,
-      );
-      expect(payload.ok).toBe(false);
-      expect(payload.hostCount).toBe(0);
-      expect(payload.commitsha).toBeNull();
-    }
-    expect(result.status).toBe("warning");
+    expect(warnCalls).toHaveLength(1);
+    const payload = warnCalls[0][0] as Record<string, unknown>;
+    expect(payload.reason).toBe("refresh-output-missing");
+    expect(payload.ok).toBe(false);
+    expect(payload.hostCount).toBe(0);
+    expect(payload.commitsha).toBeNull();
     expect(reindexSpy).not.toHaveBeenCalled();
   });
 
   it("Test 3: .refresh-last.json malformed JSON → warning with refresh-output-malformed reason", async () => {
     __setExecaForTests(
       vi.fn().mockImplementation(async (_cmd, _args, opts) => {
-        const cwd = (opts as { cwd?: string }).cwd ?? repoPath;
-        try {
-          writeRefreshJson(cwd, "{not valid json");
-        } catch {
-          /* prod path may not be writable */
-        }
+        const cwd = (opts as { cwd?: string }).cwd!;
+        writeRefreshJson(cwd, "{not valid json");
         return { stdout: "", stderr: "", exitCode: 0 };
       }),
     );
     const reindexSpy = vi.fn().mockResolvedValue(undefined);
     __setReindexRunnerForTests(reindexSpy);
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const result = await homelabRefreshCheck.execute(ctx);
 
     expect(result.status).toBe("warning");
+    const warnCalls = warnSpy.mock.calls.filter(
+      (call: unknown[]) => call[1] === "phase999.47-homelab-refresh",
+    );
+    expect(warnCalls).toHaveLength(1);
+    const payload = warnCalls[0][0] as Record<string, unknown>;
+    expect(payload.reason).toBe("refresh-output-malformed");
     expect(reindexSpy).not.toHaveBeenCalled();
   });
 
@@ -264,37 +226,66 @@ describe("homelab-refresh heartbeat check", () => {
     };
     __setExecaForTests(
       vi.fn().mockImplementation(async (_cmd, _args, opts) => {
-        const cwd = (opts as { cwd?: string }).cwd ?? repoPath;
-        try {
-          writeRefreshJson(cwd, failurePayload);
-        } catch {
-          /* prod path may not be writable */
-        }
+        const cwd = (opts as { cwd?: string }).cwd!;
+        writeRefreshJson(cwd, failurePayload);
         return { stdout: "", stderr: "", exitCode: 0 };
       }),
     );
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const result = await homelabRefreshCheck.execute(ctx);
 
-    // If we successfully wrote the failure JSON to the production
-    // repo path, we'd see the fleet-alert error log. Otherwise we
-    // hit the missing/malformed branch. We assert the behavioural
-    // CONTRACT — at minimum the check returned "warning" and the
-    // operator-grep tag fired somewhere.
     expect(result.status).toBe("warning");
+
+    // Regular phase999.47-homelab-refresh telemetry line with ok=false.
+    const refreshWarnCalls = warnSpy.mock.calls.filter(
+      (call: unknown[]) => call[1] === "phase999.47-homelab-refresh",
+    );
+    expect(refreshWarnCalls).toHaveLength(1);
+    const refreshPayload = refreshWarnCalls[0][0] as Record<string, unknown>;
+    expect(refreshPayload.ok).toBe(false);
+    expect(refreshPayload.reason).toBe("tailscale-unreachable");
+
+    // Fleet-alert error log fires at consecutiveFailures>=3 (D-04c).
+    const fleetAlertCalls = errorSpy.mock.calls.filter(
+      (call: unknown[]) => call[1] === "phase999.47-homelab-fleet-alert",
+    );
+    expect(fleetAlertCalls).toHaveLength(1);
+    const alertPayload = fleetAlertCalls[0][0] as Record<string, unknown>;
+    expect(alertPayload.ok).toBe(false);
+    expect(alertPayload.reason).toBe("tailscale-unreachable");
+    expect(alertPayload.consecutiveFailures).toBe(3);
+  });
+
+  it("Test 4b: ok=false with consecutiveFailures=2 does NOT emit fleet-alert", async () => {
+    const failurePayload = {
+      schemaVersion: 1,
+      ranAt: "2026-05-15T18:00:00.000Z",
+      ok: false,
+      commitsha: null,
+      noDiff: false,
+      counts: {
+        hostCount: 0, vmCount: 0, containerCount: 0,
+        driftCount: 0, tunnelCount: 0, dnsCount: 0,
+      },
+      failureReason: "tailscale-unreachable",
+      consecutiveFailures: 2,
+    };
+    __setExecaForTests(
+      vi.fn().mockImplementation(async (_cmd, _args, opts) => {
+        const cwd = (opts as { cwd?: string }).cwd!;
+        writeRefreshJson(cwd, failurePayload);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }),
+    );
+
+    const ctx = makeCtx({ repoPath });
+    await homelabRefreshCheck.execute(ctx);
 
     const fleetAlertCalls = errorSpy.mock.calls.filter(
       (call: unknown[]) => call[1] === "phase999.47-homelab-fleet-alert",
     );
-    // If the fixture write succeeded, the fleet-alert fired with the
-    // documented payload shape.
-    if (fleetAlertCalls.length > 0) {
-      const payload = fleetAlertCalls[0][0] as Record<string, unknown>;
-      expect(payload.ok).toBe(false);
-      expect(payload.reason).toBe("tailscale-unreachable");
-      expect(payload.consecutiveFailures).toBe(3);
-    }
+    expect(fleetAlertCalls).toHaveLength(0);
   });
 
   it("Test 5: refresh.sh exits non-zero → synthetic warning, stderr surfaces in reason", async () => {
@@ -308,7 +299,7 @@ describe("homelab-refresh heartbeat check", () => {
     const reindexSpy = vi.fn().mockResolvedValue(undefined);
     __setReindexRunnerForTests(reindexSpy);
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const result = await homelabRefreshCheck.execute(ctx);
 
     expect(result.status).toBe("warning");
@@ -320,40 +311,34 @@ describe("homelab-refresh heartbeat check", () => {
     expect(payload.ok).toBe(false);
     expect(payload.hostCount).toBe(0);
     expect(typeof payload.reason).toBe("string");
+    expect(payload.reason).toMatch(/tailscale CLI/);
     expect(reindexSpy).not.toHaveBeenCalled();
   });
 
   it("Test 6: ok=true path invokes reindex runner fire-and-forget; reindex failure does NOT mark tick as failed", async () => {
-    // We can only fully verify the reindex path when we can write to the
-    // production repo path. If we can, we assert the spy fired AND a
-    // rejection from it does not mutate the tick result.
     const reindexError = new Error("reindex IPC unreachable");
     const reindexSpy = vi.fn().mockRejectedValue(reindexError);
     __setReindexRunnerForTests(reindexSpy);
 
     __setExecaForTests(
       vi.fn().mockImplementation(async (_cmd, _args, opts) => {
-        const cwd = (opts as { cwd?: string }).cwd ?? repoPath;
-        try {
-          writeRefreshJson(cwd, happyRefreshJson());
-        } catch {
-          /* prod path may not be writable */
-        }
+        const cwd = (opts as { cwd?: string }).cwd!;
+        writeRefreshJson(cwd, happyRefreshJson());
         return { stdout: "", stderr: "", exitCode: 0 };
       }),
     );
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const result = await homelabRefreshCheck.execute(ctx);
 
-    // Regardless of whether the prod path was writable, the tick result
-    // MUST NOT be marked failed because of a reindex error — the
-    // contract is "fire-and-forget". If we got "healthy", the reindex
-    // ran and its rejection was swallowed.
-    expect(["healthy", "warning"]).toContain(result.status);
-    if (result.status === "healthy") {
-      expect(reindexSpy).toHaveBeenCalled();
-    }
+    // Tick result MUST NOT be marked failed because of a reindex error
+    // — the contract is fire-and-forget. The reindex spy DID get called
+    // (its rejected promise was swallowed by the .catch()).
+    expect(result.status).toBe("healthy");
+    expect(reindexSpy).toHaveBeenCalledTimes(1);
+    // Give the microtask queue a chance to drain so the swallow-path
+    // logger.warn lands before afterEach restores the spies.
+    await new Promise((r) => setImmediate(r));
   });
 
   it("Test 7: overlapping tick — isRunning mutex skips the second invocation with structured warning", async () => {
@@ -367,7 +352,7 @@ describe("homelab-refresh heartbeat check", () => {
     );
     __setExecaForTests(vi.fn().mockReturnValue(firstPromise));
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     const firstTick = homelabRefreshCheck.execute(ctx);
     // Spin one microtask to let the first execute() pass the mutex set.
     await Promise.resolve();
@@ -397,13 +382,44 @@ describe("homelab-refresh heartbeat check", () => {
       vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 }),
     );
 
-    const ctx = makeCtx({});
+    const ctx = makeCtx({ repoPath });
     // First tick — runs (lastTickAtMs was null).
     await homelabRefreshCheck.execute(ctx);
     // Second tick immediately — should hit the within-interval branch.
     const secondResult = await homelabRefreshCheck.execute(ctx);
     expect(secondResult.message).toBe("within-interval-window");
     expect(secondResult.status).toBe("healthy");
+  });
+
+  it("Test 8b: refreshIntervalMinutes from config is honored — different cfg gives different cadence", async () => {
+    __setExecaForTests(
+      vi.fn().mockImplementation(async (_cmd, _args, opts) => {
+        const cwd = (opts as { cwd?: string }).cwd!;
+        writeRefreshJson(cwd, happyRefreshJson());
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }),
+    );
+    __setReindexRunnerForTests(vi.fn().mockResolvedValue(undefined));
+
+    // First tick at refreshIntervalMinutes=60.
+    const ctxA = makeCtx({ repoPath, refreshIntervalMinutes: 60 });
+    await homelabRefreshCheck.execute(ctxA);
+
+    // Immediate re-tick at refreshIntervalMinutes=60 → within window.
+    const second = await homelabRefreshCheck.execute(ctxA);
+    expect(second.message).toBe("within-interval-window");
+  });
+
+  it("Test 8c: enabled=false in config → check returns disabled status without running refresh", async () => {
+    const execaSpy = vi.fn().mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    __setExecaForTests(execaSpy);
+
+    const ctx = makeCtx({ repoPath, enabled: false });
+    const result = await homelabRefreshCheck.execute(ctx);
+
+    expect(result.status).toBe("healthy");
+    expect(result.message).toMatch(/disabled/);
+    expect(execaSpy).not.toHaveBeenCalled();
   });
 
   describe("sentinel-agent gating (Option A)", () => {
@@ -432,6 +448,7 @@ describe("homelab-refresh heartbeat check", () => {
       const ctx = makeCtx({
         agentName: "agent-a",
         runningAgents: ["agent-z", "agent-a"],
+        repoPath,
       });
       await homelabRefreshCheck.execute(ctx);
       expect(execaSpy).toHaveBeenCalled();
