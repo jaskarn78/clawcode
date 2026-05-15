@@ -25,6 +25,8 @@ const EXPECTED_FILENAMES: ReadonlyMap<string, string> = new Map([
   ["consolidation", "consolidation.ts"],
   ["context-fill", "context-fill.ts"],
   ["fs-probe", "fs-probe.ts"],
+  // Phase 999.47 Plan 02 — fleet-level hourly homelab inventory refresh.
+  ["homelab-refresh", "homelab-refresh.ts"],
   ["inbox", "inbox.ts"],
   // Phase 108 — pool liveness probe for OnePasswordMcpBroker.
   ["mcp-broker", "mcp-broker.ts"],
@@ -38,8 +40,8 @@ const EXPECTED_FILENAMES: ReadonlyMap<string, string> = new Map([
 ]);
 
 describe("CHECK_REGISTRY ↔ disk lockstep", () => {
-  it("registers all 13 known checks", () => {
-    expect(CHECK_REGISTRY).toHaveLength(13);
+  it("registers all 14 known checks", () => {
+    expect(CHECK_REGISTRY).toHaveLength(14);
   });
 
   it("every CHECK_REGISTRY entry has a unique name", () => {

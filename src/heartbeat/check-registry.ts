@@ -31,6 +31,7 @@ import autoLinker from "./checks/auto-linker.js";
 import consolidation from "./checks/consolidation.js";
 import contextFill from "./checks/context-fill.js";
 import fsProbe from "./checks/fs-probe.js";
+import homelabRefresh from "./checks/homelab-refresh.js";
 import inbox from "./checks/inbox.js";
 import mcpBroker from "./checks/mcp-broker.js";
 import mcpReconnect from "./checks/mcp-reconnect.js";
@@ -46,6 +47,9 @@ export const CHECK_REGISTRY: readonly CheckModule[] = Object.freeze([
   consolidation,
   contextFill,
   fsProbe,
+  // Phase 999.47 Plan 02 — hourly homelab inventory refresh tick.
+  // Fleet-level (sentinel-agent gated; one tick per fleet per hour).
+  homelabRefresh,
   inbox,
   // Phase 108 — pool liveness probe for the daemon-managed
   // OnePasswordMcpBroker. NEVER calls a tool dispatch path; only reads
