@@ -7,6 +7,12 @@ import { join } from "node:path";
  *
  * Each day gets a separate file at {memoryDir}/YYYY-MM-DD.md.
  * Entries are appended with timestamp, role, and content.
+ *
+ * Phase 127 — also writes structured event rows (e.g. `recordStall`) to a
+ * sibling `events.jsonl` file in the same memoryDir. The two writers stay
+ * separate so the daily markdown remains human-readable (no JSON blobs
+ * mixed in) and JSONL consumers (Phase 124/125 compaction extractors)
+ * can `readlines + JSON.parse` without markdown-aware preprocessing.
  */
 export class SessionLogger {
   private readonly memoryDir: string;
@@ -17,6 +23,43 @@ export class SessionLogger {
     if (!existsSync(memoryDir)) {
       mkdirSync(memoryDir, { recursive: true });
     }
+  }
+
+  /**
+   * Phase 127 — record a stream-stall event in the session JSONL.
+   *
+   * Appends a single JSONL row to `{memoryDir}/events.jsonl`:
+   * `{type: "stall", reason: "no-useful-tokens-timeout", timestamp, ...payload}`.
+   *
+   * Phase 124/125 compaction extractors consume this file as a stall
+   * pattern indicator in the active-state header so operators can see
+   * "agent had N stalls this week" without scraping logs. The format is
+   * intentionally narrow + flat — adding a new event type later means
+   * adding a new method here, not generalising this one.
+   *
+   * Fire-and-forget at the call site: the awaitable shape exists for
+   * tests that assert call ordering, but daemon callers MUST `.catch`
+   * the rejection so a transient fs error doesn't break supervisor
+   * recovery (Phase 89 canary precedent).
+   */
+  async recordStall(payload: {
+    readonly agentName: string;
+    readonly sessionName: string;
+    readonly turnId: string;
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+    readonly advisorActive: boolean;
+    readonly model: string;
+    readonly effort: string;
+  }): Promise<void> {
+    const row = {
+      type: "stall" as const,
+      reason: "no-useful-tokens-timeout" as const,
+      timestamp: new Date().toISOString(),
+      ...payload,
+    };
+    const filePath = join(this.memoryDir, "events.jsonl");
+    await appendFile(filePath, JSON.stringify(row) + "\n", "utf-8");
   }
 
   /**
