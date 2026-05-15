@@ -44,7 +44,7 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 **Wave 1 — operator-pain hotfix-to-architecture closeouts + small lifts:**
 - [ ] **Phase 126: Subagent Context Isolation closeout (999.57 Plans 02/03)** — close memory-retrieval inheritance leak + heartbeat-runner full ownership transition + verification across both 2026-05-15 failure modes; Plans 02/03 already written, executable immediately
 - [ ] **Phase 127: No-useful-tokens stream timeout (999.61)** — SDK-level "no useful content tokens for N seconds → fail turn" supervisor; closes 2026-05-14 fin-acq 16-min stall pattern
-- [ ] **Phase 128: clawcode usage accuracy fixes (999.4)** — usage CLI/dashboard `resetsAt` unit fix + utilization-derive consistency; needs discuss-phase to enumerate concrete bugs (EMPTY DIR)
+- [~] **Phase 128: clawcode usage accuracy fixes (999.4)** — PARKED 2026-05-15: T-01 survey + follow-up confirmation grep both established the Claude Agent SDK has no pull-style rate-limit query method. The plan's preferred D-02 path is impossible; the fallback (synthetic 1-token probe) self-pollutes the rate limit it measures. Bug is a stale-display annoyance, not a correctness issue. Revivable if Anthropic ships a pull endpoint OR display drift causes measurable harm.
 - [~] **Phase 129: clawcode status finish-up fallbacks (999.5)** — DEFERRED 2026-05-15: operator review of live `/clawcode-status` slash output showed no misleading placeholders (all fields render genuine data or honest sentinels like `Consolidated: never`). Phase has no operator-observable scope. Revivable if a misleading case surfaces later.
 
 **Wave 2 — plugin SDK + tmux skill:**
@@ -100,20 +100,17 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 
 ---
 
-### Phase 128: clawcode usage accuracy fixes (999.4)
+### Phase 128: clawcode usage accuracy fixes (999.4) — PARKED 2026-05-15
 
-**Goal:** `clawcode usage` CLI + dashboard surface honest values: `resetsAt` in the correct unit (seconds-vs-ms suspect), `utilization` derived consistently between CLI and dashboard surfaces.
+**Status:** PARKED 2026-05-15. T-01 survey + follow-up grep of `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` confirmed the Claude Agent SDK exposes rate-limit data via push event (`SDKRateLimitEvent`) only — no pull-style query method exists. The plan's preferred D-02 path is impossible. The fallback (synthetic 1-token probe) self-pollutes the rate limit it measures.
 
-**Depends on:** Phase 116 (dashboard usage page redesign — `/dashboard/v2/usage` is the live surface).
+Bug is a stale-display annoyance (operators see "weekly 89%" after actual usage drops), not a correctness issue. Operators can mentally discount the high-water mark.
 
-**Requirements:** EMPTY DIR at `.planning/phases/999.4-clawcode-usage-accuracy-fixes-resetsAt-units-utilization-derive/` — needs discuss-phase to enumerate concrete bugs.
+**Original goal (preserved for revival):** `clawcode usage` CLI + dashboard surface honest values: `resetsAt` in the correct unit, `utilization` derived consistently between CLI and dashboard surfaces.
 
-**Success Criteria:**
-  1. Operator-observed bug enumerated in discuss-phase CONTEXT.md.
-  2. `clawcode usage` CLI output matches dashboard `/dashboard/v2/usage` for every metric (resetsAt, utilization, credit-remaining, projected runout).
-  3. Static-grep regression test pins the source-of-truth helper as single chokepoint.
+**Revival trigger:** Anthropic publishes a pull-style rate-limit endpoint, OR display drift causes operator-observed measurable harm.
 
-**Plans:** TBD (discuss-phase first).
+**Artifacts retained:** `.planning/phases/128-clawcode-usage-accuracy-fixes/{128-CONTEXT.md, 128-01-PLAN.md, 128-01-SURVEY.md}`. Executor worktree pruned 2026-05-15.
 
 ---
 

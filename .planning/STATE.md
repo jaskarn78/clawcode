@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 
 - Phase 126: Plans 01 + 02 SHIPPED (commit `ae3764d`); Plan 03 operator-deploy-gated
 - Phase 127 (stream stall timeout): **Plan 01 SHIPPED local** (6 commits `3db91d5`..`28576a4`). Plan 02 ready for dispatch (daemon-side Discord notification + session-log row + integration test STALL-04). Plan 03 deploy-gated.
-- Phase 128 (clawcode usage accuracy): EMPTY DIR — needs discuss-phase
-- Phase 129 (clawcode status fallbacks): EMPTY DIR — needs discuss-phase
+- Phase 128 (clawcode usage accuracy): PARKED 2026-05-15 — SDK pull API absent, fallback hacky. See `.planning/phases/128-clawcode-usage-accuracy-fixes/128-CONTEXT.md` § PARKED for revival trigger.
+- Phase 129 (clawcode status fallbacks): DEFERRED 2026-05-15 — no operator-observable scope. See `.planning/ROADMAP.md` § Phase 129 for revival trigger.
 - Phase 130 (manifest plugin SDK): BACKLOG only — needs discuss-phase
 - Phase 131 (tmux skill port): BACKLOG only — needs discuss-phase
 - Phase 132 (autonomous skill creation): BACKLOG only — needs discuss-phase
@@ -100,8 +100,8 @@ All 7 v2.9 phases (119-125) code-complete locally per `.planning/milestones/v2.9
 
 - **Phase 126: Subagent Context Isolation closeout (999.57)** — Plans 02 + 03 (Plan 03 deploy-gated). Renumber DEL-15..DEL-19 collision with existing DEL-15..DEL-18 (from 999.58/999.61) → DEL-20..DEL-24.
 - **Phase 127: No-useful-tokens stream timeout (999.61)** — discuss-phase first; SDK supervisor extension
-- **Phase 128: clawcode usage accuracy fixes (999.4)** — EMPTY DIR; discuss-phase first
-- **Phase 129: clawcode status finish-up fallbacks (999.5)** — EMPTY DIR; discuss-phase first
+- **Phase 128: clawcode usage accuracy fixes (999.4)** — PARKED 2026-05-15 (SDK pull API absent)
+- **Phase 129: clawcode status finish-up fallbacks (999.5)** — DEFERRED 2026-05-15 (no observable scope)
 
 **Wave 2:** Phase 130 (plugin SDK), Phase 131 (tmux skill)
 **Wave 3:** Phase 132 (autonomous skill creation), Phase 133 (clawcode-as-MCP-server)
