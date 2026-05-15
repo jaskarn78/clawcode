@@ -525,6 +525,46 @@ export function resolveAgentConfig(
   const resolvedWorkspace =
     agent.workspace ?? join(expandHome(defaults.basePath), agent.name);
 
+  // Phase 127 — stream-stall supervisor threshold resolver cascade.
+  // Precedence (highest → lowest):
+  //   1. agent.streamStallTimeoutMs (operator-pinned per-agent override)
+  //   2. defaults.modelOverrides[resolved.model].streamStallTimeoutMs
+  //      (operator-tuned per-model override — Opus longer for advisor
+  //      consults, Haiku shorter for fast turns)
+  //   3. defaults.streamStallTimeoutMs (fleet-wide baseline, 180000ms
+  //      enforced by schema default-then-optional combo)
+  //   4. Hardcoded 180000ms fallback (defensive — required because the
+  //      schema field is .optional() at the type level, so the runtime
+  //      value MAY be undefined when migrated configs predate Phase 127)
+  // Emits a single `phase127-resolver` log line per agent at resolution
+  // time so operators can `journalctl -u clawcode | grep phase127-resolver`
+  // and see which side of the cascade fed the active threshold. Mirrors
+  // the Phase 999.54-02 D-05a `phase999.54-resolver` precedent (single
+  // structured-log emission per agent, JSON-stringified payload, grep-
+  // friendly key).
+  const resolvedModelForStallCascade = agent.model ?? defaults.model;
+  const streamStallTimeoutMs =
+    agent.streamStallTimeoutMs ??
+    defaults.modelOverrides?.[resolvedModelForStallCascade]
+      ?.streamStallTimeoutMs ??
+    defaults.streamStallTimeoutMs ??
+    180_000;
+  const streamStallSourcedFrom: "agent" | `modelOverrides.${string}` | "default" =
+    agent.streamStallTimeoutMs !== undefined
+      ? "agent"
+      : defaults.modelOverrides?.[resolvedModelForStallCascade]
+            ?.streamStallTimeoutMs !== undefined
+        ? `modelOverrides.${resolvedModelForStallCascade}`
+        : "default";
+  console.info(
+    "phase127-resolver",
+    JSON.stringify({
+      agent: agent.name,
+      threshold: streamStallTimeoutMs,
+      sourcedFrom: streamStallSourcedFrom,
+    }),
+  );
+
   return {
     name: agent.name,
     workspace: resolvedWorkspace,
@@ -622,6 +662,13 @@ export function resolveAgentConfig(
     // since topK=0 would be invalid (positive int constraint).
     memoryRetrievalTopK:
       agent.memoryRetrievalTopK ?? defaults.memoryRetrievalTopK,
+    // Phase 127 — pre-resolved above via the cascade
+    // (agent → defaults.modelOverrides[model] → defaults.streamStallTimeoutMs →
+    // 180000 fallback). The `phase127-resolver` structured log line has
+    // already been emitted; here we just thread the resolved value into
+    // ResolvedAgentConfig so consumers (persistent-session-handle.ts +
+    // wrapSdkQuery) can read it without re-running the cascade.
+    streamStallTimeoutMs,
     // Phase 115 sub-scope 3 — per-agent token budget beats defaults. Both
     // sides are positive-int constrained by zod (min 500); `??` fallback is
     // safe since 0 is already excluded. Pre-115 left this knob dead — Phase
