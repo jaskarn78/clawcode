@@ -59,6 +59,185 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 - [ ] **Phase 134: MCP broker hot-reload (999.53)** — DEFERRED pending Plan 94-08 / config-mutator infra; promote mid-milestone if 94-08 lands
 - [ ] **Phase 135: Discord voice channel support (999.56)** — port from OpenClaw `extensions/discord/src/voice/` (24 files); `/vc {join,leave,status}` slash + voice bridge
 
+
+
+
+### Phase 126: Subagent Context Isolation closeout (999.57 Plans 02/03)
+
+**Goal:** Close the memory-retrieval inheritance leak + heartbeat-runner full ownership transition + verification across both 2026-05-15 observed failure modes (Run 1 stale-context bleed, Run 2 ack-and-wait).
+
+**Depends on:** Plan 01 already shipped (commits `b097c1a` `041238a` `ea904fa` `61c56f5` `7ef8c75` `dc0f24d` `5b4e962`); hotfix `07bd5b0` gates auto-relay on delegateTo.
+
+**Requirements:** Promoted from `.planning/phases/999.57-subagent-context-isolation/BACKLOG.md` + RESEARCH + CONTEXT (D-01..D-11). Plans 02 (regression tests DEL-15..DEL-19 — RESOLVE NUMBERING COLLISION with existing DEL-15..DEL-18 from 999.58/999.61) and 03 (deploy + live verification on clawdy) are pre-written.
+
+**Success Criteria:**
+  1. Plan 02 regression tests pin heartbeat override + memory retrieval suppression + no-upward-leakage (renumber to DEL-20..DEL-24 to avoid collision).
+  2. Plan 03 deploy + admin-clawdy spawns a fresh subagent on the original failing prompt; first assistant turn surfaces NO stale memory + produces real research output.
+  3. journalctl on clawdy shows NO heartbeat tick fires for subagent's session name during its lifetime.
+  4. Phase 02 RESEARCH Correction 3 + Pitfall 1 are pinned by tests; Plan 01 wiring future-regression-proofed.
+
+**Plans:** 02 (autonomous), 03 (operator-deploy-gated, NOT autonomous)
+
+**Sequencing note:** Plan 02 is small (~5 test cases). Plan 03 is deploy-gated per `feedback_ramy_active_no_deploy` — do NOT run autonomously.
+
+---
+
+### Phase 127: No-useful-tokens stream timeout (999.61)
+
+**Goal:** SDK-level "no useful content tokens for N seconds → fail the turn" supervisor extension. Closes the 2026-05-14 fin-acq 16-min stall pattern (stream technically had keepalive bytes, no useful tokens, no timeout fired).
+
+**Depends on:** Phase 117 advisor pattern (similar fork-orchestration shape).
+
+**Requirements:** Per `.planning/phases/999.61-no-useful-tokens-stream-timeout/BACKLOG.md` — hotfix `91535c7` (subagent discriminates `<system-reminder>` from task; explicit TASK frame) addresses one failure surface; the architectural SDK-supervisor timeout is the remaining work.
+
+**Success Criteria:**
+  1. New supervisor timeout config field (`llmRuntime.noUsefulTokensTimeoutMs`, default 120000) accepted by Zod + propagated through resolver + applied at SDK-stream supervisor.
+  2. Synthetic stall test (keepalive-only stream for N+1 seconds) triggers turn failure with a recognizable error code.
+  3. Hot-reloadable via existing ConfigWatcher path (similar to Phase 110 `shimRuntime`).
+  4. Live verification on clawdy via journalctl: zero new stalls > 120s observed across a 24h soak on `fin-acquisition` and `research` agents.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 128: clawcode usage accuracy fixes (999.4)
+
+**Goal:** `clawcode usage` CLI + dashboard surface honest values: `resetsAt` in the correct unit (seconds-vs-ms suspect), `utilization` derived consistently between CLI and dashboard surfaces.
+
+**Depends on:** Phase 116 (dashboard usage page redesign — `/dashboard/v2/usage` is the live surface).
+
+**Requirements:** EMPTY DIR at `.planning/phases/999.4-clawcode-usage-accuracy-fixes-resetsAt-units-utilization-derive/` — needs discuss-phase to enumerate concrete bugs.
+
+**Success Criteria:**
+  1. Operator-observed bug enumerated in discuss-phase CONTEXT.md.
+  2. `clawcode usage` CLI output matches dashboard `/dashboard/v2/usage` for every metric (resetsAt, utilization, credit-remaining, projected runout).
+  3. Static-grep regression test pins the source-of-truth helper as single chokepoint.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 129: clawcode status finish-up fallbacks (999.5)
+
+**Goal:** `clawcode status` shows honest "N/A" for missing-source data instead of misleading zero/empty/stale placeholders.
+
+**Depends on:** Phase 103 telemetry surface; Phase 116 dashboard.
+
+**Requirements:** EMPTY DIR — needs discuss-phase to enumerate concrete misleading-placeholder cases.
+
+**Success Criteria:**
+  1. Operator-observed misleading placeholders enumerated in discuss-phase CONTEXT.md.
+  2. Helper function returns sentinel "N/A" object for missing data; render layer surfaces literal "N/A" not "0" / "" / stale-cached.
+  3. Regression test fixture covers every enumerated placeholder.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 130: Manifest-driven plugin SDK (999.58)
+
+**Goal:** Lift OpenClaw's `plugin-sdk` manifest pattern — type-checked capability vocabulary + daemon-side validation at load time for MCP servers and skills. Replace freeform discovery with contracts.
+
+**Depends on:** v3.0 Phase 126 surface clarity (subagent context isolation closeout); OpenClaw `plugin-sdk/*` reference.
+
+**Requirements:** Per `.planning/phases/999.58-manifest-driven-plugin-sdk/BACKLOG.md` — hotfix `24b3548` (subagent clawcode_share_file instruction) addresses one surface; the architectural manifest pattern is the milestone deliverable.
+
+**Success Criteria:**
+  1. Manifest schema (Zod) for MCP servers + skills, with capability vocabulary.
+  2. Daemon validates manifests at load time; manifest-less surfaces produce structured warn log, not silent load.
+  3. At least 3 existing skills migrated to manifest pattern (e.g., `subagent-thread`, `cron-poll`, one of the marketplace skills).
+  4. Hot-reload via ConfigWatcher when manifest fields change.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 131: tmux remote-control skill (999.50)
+
+**Goal:** Port OpenClaw `skills/tmux/` to ClawCode as a first-class manifest-described skill; surface as `/tmux` Discord slash command via the existing skill→slash auto-registration path. Prerequisite for v3.1 Phase 140 (drives interactive Claude Code CLI).
+
+**Depends on:** Phase 130 (manifest pattern); OpenClaw `skills/tmux/` source.
+
+**Requirements:** Per `.planning/phases/999.50-tmux-remote-control-skill/BACKLOG.md`. References: Hwee-Boon Yar's tmux+claude blog, mcpmarket tmux skill, Hermes Agent's claude-code skill.
+
+**Success Criteria:**
+  1. `skills/tmux/SKILL.md` with manifest frontmatter (per Phase 130).
+  2. `scripts/find-sessions.sh` + `scripts/wait-for-text.sh` ported with same flags.
+  3. Agent can list / send-keys / capture-pane via skill recipes.
+  4. `/tmux` Discord slash command works in admin-clawdy channel.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 132: Autonomous skill creation (999.59)
+
+**Goal:** Hermes-Agent learning-loop pattern — after long successful turns, agent proposes a reusable skill draft (name + trigger + steps + acceptance criteria) staged for operator review at `~/.clawcode/agents/<agent>/skills/drafts/`.
+
+**Depends on:** Phase 130 (manifest pattern — drafts are manifest-shaped); skills marketplace surface (v2.2).
+
+**Requirements:** Per `.planning/phases/999.59-autonomous-skill-creation/BACKLOG.md` — hotfix `9ff5ab0` (accumulatedSeen overflow trigger) addresses one related surface.
+
+**Success Criteria:**
+  1. Heuristic for "long successful turn" (token threshold + tool-call diversity + verifier passes).
+  2. Skill-draft generator runs as out-of-band Haiku worker; output staged to `skills/drafts/<slug>.md`.
+  3. `/clawcode-skills-review` Discord slash command lists pending drafts; operator approves → moves to active skills dir + commits.
+  4. Regression test: synthetic "long turn" fixture produces a valid manifest-shaped draft.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 133: ClawCode as MCP server (999.60)
+
+**Goal:** Expose `delegate_task` / `ask_agent` / `task_status` over MCP. External Claude Code / Cursor / OpenClaw gateways can route work to ClawCode agents without Discord.
+
+**Depends on:** Existing MCP server scaffold (`src/mcp/server.ts`); Phase 130 manifest pattern.
+
+**Requirements:** Per `.planning/phases/999.60-clawcode-as-mcp-server/BACKLOG.md` — hotfix `accf2e0` (subagent file auto-dump into parent main channel) addresses one related surface; the MCP server-mode exposure is the milestone deliverable.
+
+**Success Criteria:**
+  1. `clawcode mcp-server` CLI subcommand starts a stdio MCP server exposing `delegate_task` / `ask_agent` / `task_status`.
+  2. External Claude Code session can `mcp__clawcode__ask_agent <agent> <question>` and receive a response within 2s.
+  3. Auth/access policy: per-agent allowlist; default-deny for unauthenticated callers.
+  4. `task_status <task_id>` returns delivery state from daemon's TurnDispatcher.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 134: MCP broker hot-reload — DEFERRED (999.53)
+
+**Goal:** Hot-reload `OP_SERVICE_ACCOUNT_TOKEN` rotation without daemon restart. Current state: rotation requires daemon restart, which kicks all 14 agents.
+
+**Depends on:** **Plan 94-08 / config-mutator infra (NOT YET LANDED)** — per commit `92b0721`, this phase is explicitly deferred until that infra ships.
+
+**Requirements:** Per `.planning/phases/999.53-mcp-broker-hot-reload-token-rotation/BACKLOG.md`.
+
+**Success Criteria:** (to be defined when 94-08 lands)
+
+**Status:** **DEFERRED** — promote mid-milestone if Plan 94-08 lands; else re-file to v3.x.
+
+---
+
+### Phase 135: Discord voice channel support (999.56)
+
+**Goal:** Native `/vc {join,leave,status}` slash commands + agent voice bridge ported from OpenClaw `extensions/discord/src/voice/` (24 files). Agent joins voice channel, transcribes speech, generates voice-optimized response, speaks back.
+
+**Depends on:** OpenClaw source; existing skill/slash registration; discord.js voice extensions.
+
+**Requirements:** Per `.planning/phases/999.56-discord-voice-channel-support/BACKLOG.md`. Reference spec at `~/voice-channel-prompt.md` on OC server.
+
+**Success Criteria:**
+  1. `/vc join` / `/vc leave` / `/vc status` slash commands registered per-agent.
+  2. Voice in: STT pipeline → text → agent turn.
+  3. Voice out: agent response → TTS → playback.
+  4. Agent's full tool/MCP/skill catalog intact during voice interaction.
+
+**Plans:** TBD (discuss-phase first). Large lift — may split into v3.0.1 dot-release if it overflows.
+
+---
+
 ### v3.1 Multi-LLM Runtime + Subscription-Pool Fallback (Phases 136-142) - PROPOSED 2026-05-15
 
 Triggered by Anthropic's 2026-05-14 Agent SDK credit policy (effective **2026-06-15**). Full scope: `.planning/milestones/v3.1-ROADMAP.md`. Anchor BACKLOG: `.planning/phases/999.62-llm-runtime-multi-backend-and-claude-code-fallback/BACKLOG.md`.
@@ -75,6 +254,138 @@ Triggered by Anthropic's 2026-05-14 Agent SDK credit policy (effective **2026-06
 **Strategic track:**
 - [ ] **Phase 141: OpenAiCodex backend + tool-use schema translator** (Wave 5) — decouple from Anthropic; tool-use parity is long pole
 - [ ] **Phase 142: OpenRouter passthrough backend** (Wave 6) — single gateway to Gemini, DeepSeek, MiniMax, etc.
+
+
+
+
+### Phase 136: LlmRuntimeService seam + AnthropicAgentSdk backend extraction (Wave 1)
+
+**Goal:** Introduce provider-neutral `LlmRuntimeService` seam at `src/llm-runtime/`. Extract current Agent SDK usage as `AnthropicAgentSdk` backend behind the seam. Zero behavior change for current deploy.
+
+**Depends on:** Phase 117 advisor-backend pattern (template for per-agent config-flippable rollback).
+
+**Requirements:** Per `.planning/phases/999.62-llm-runtime-multi-backend-and-claude-code-fallback/BACKLOG.md` Wave 1.
+
+**Success Criteria:**
+  1. `LlmRuntimeService` interface defined; current Anthropic Agent SDK code extracted as `AnthropicAgentSdkBackend`.
+  2. Existing test suite passes with `anthropic-agent-sdk` as default backend.
+  3. Per-agent `llmRuntime.backend` schema accepted (Zod) but only `anthropic-agent-sdk` value valid at this wave.
+
+**Plans:** TBD (discuss-phase first).
+
+---
+
+### Phase 137: AnthropicApiKey backend + per-agent backend selection (Wave 2)
+
+**Goal:** Add `AnthropicApiKeyBackend` — direct Anthropic API billing path. Per-agent `llmRuntime.backend: anthropic-api-key` override in `clawcode.yaml` with ConfigWatcher hot-reload.
+
+**Depends on:** Phase 136 (seam scaffold).
+
+**Requirements:** Per Wave 2 of 999.62 BACKLOG.
+
+**Success Criteria:**
+  1. Operator can flip single agent (e.g., `research`) from `anthropic-agent-sdk` → `anthropic-api-key` via config-edit-and-reload.
+  2. Outbound auth verified on next turn (different auth path, same `Anthropic-Version` header).
+  3. ConfigWatcher hot-reload path triggers without daemon restart.
+  4. Backwards-compatible: agents without `llmRuntime` field default to `anthropic-agent-sdk`.
+
+**Plans:** TBD.
+
+---
+
+### Phase 138: Credit telemetry + Discord alerts + auto-failover (Wave 3)
+
+**Goal:** Daemon polls Anthropic billing (or local approximation from token counts × rates). Surface `agent-sdk-credit: $X / $200 (P%, projected runout YYYY-MM-DD)` in `clawcode status` + dashboard. Discord alerts at 75/90/99%. Auto-failover at 95% threshold.
+
+**Depends on:** Phase 137 (failover target — AnthropicApiKey backend).
+
+**Requirements:** Per Wave 3 of 999.62 BACKLOG.
+
+**Success Criteria:**
+  1. `clawcode status` shows credit metrics for authenticated account.
+  2. Dashboard renders sparkline for credit consumption rate.
+  3. Discord alerts fire at 75% / 90% / 99% thresholds (admin-clawdy channel).
+  4. Simulated-depletion integration test triggers failover (config-flip to AnthropicApiKey).
+
+**Plans:** TBD.
+
+**Hard deadline:** This phase + 136/137 must merge before **2026-06-15** per Anthropic Agent SDK credit policy.
+
+---
+
+### Phase 139: Concurrent-session probe + tmux optimization spike (Wave 4.5 — LOAD-BEARING)
+
+**Goal:** Empirical probe on clawdy: spawn N ∈ {1, 3, 5, 7, 10} concurrent `claude` interactive sessions against one Max 20x account. Compare per-turn latency across (a) Agent SDK baseline, (b) naive tmux + capture-pane, (c) optimized direct-PTY + persistent REPL + structural-cue parsing.
+
+**Depends on:** Phase 131 (tmux skill — operator-facing surface) + Phase 137 (so the operator can fall back to AnthropicApiKey if probe fails).
+
+**Requirements:** Per Wave 4.5 of 999.62 BACKLOG.
+
+**Success Criteria:**
+  1. `PROBE-RESULTS.md` documents: concurrent-session cap (N where degradation appears), latency floor on optimized path, failure modes at the cap.
+  2. Go/no-go recommendation for Phase 140.
+
+**Plans:** TBD.
+
+**Pass criteria for Phase 140:** concurrent-session cap ≥ 7 AND optimized latency ≤ 1.6× Agent SDK baseline (hard fail at >2.5×).
+
+---
+
+### Phase 140: ClaudeCodeInteractive backend (Wave 4 — PROBE-GATED)
+
+**Goal:** Drive the real `claude` binary via `node-pty` + persistent REPL + structural-cue end-of-turn detection. Subscription-pool path (interactive Claude Code keeps its native auth + rate-limits).
+
+**Depends on:** Phase 139 probe pass.
+
+**Requirements:** Per Wave 4 of 999.62 BACKLOG. CONDITIONAL on Phase 139 outcome.
+
+**Success Criteria:** (if probe passes)
+  1. Per-agent `llmRuntime.backend: claude-code-interactive` plus `tmuxHost: <hostname>` selectable.
+  2. Round-trip latency on optimized stack < 1.6× Agent SDK baseline (sustained across 1h soak).
+  3. Tool-call protocol parity: spawn_subagent_thread, post_to_agent, ask_advisor all functional.
+  4. Failover to AnthropicApiKey if interactive session is evicted/throttled mid-turn.
+
+**Plans:** TBD.
+
+**Status:** CONDITIONAL on Phase 139.
+
+---
+
+### Phase 141: OpenAiCodex backend + tool-use schema translator (Wave 5)
+
+**Goal:** Add `OpenAiCodexBackend` — decouple from Anthropic entirely. Tool-use schema translator: Anthropic Messages API ↔ OpenAI function-calling.
+
+**Depends on:** Phase 136 seam + claude-code-proxy translation rules (reference).
+
+**Requirements:** Per Wave 5 of 999.62 BACKLOG. Tool-use parity is the long pole.
+
+**Success Criteria:**
+  1. Single agent (`research`) flips to `openai-codex` backend; full ClawCode functionality (memory, MCP tools, advisor) intact.
+  2. Per-backend tool-use compatibility test suite pins divergence.
+  3. Cost telemetry parity with Anthropic billing surfaces.
+  4. Phase 117 `AdvisorService` falls back to `fork` backend (separate Opus session) when executor is on Codex.
+
+**Plans:** TBD.
+
+---
+
+### Phase 142: OpenRouter passthrough backend (Wave 6)
+
+**Goal:** Add `OpenRouterBackend` — single gateway to Gemini, DeepSeek, MiniMax, Mistral, etc. Convenience layer atop individual Anthropic/Codex backends.
+
+**Depends on:** Phase 141 (translator pattern is reusable for OpenRouter's Anthropic-compatible passthrough mode).
+
+**Requirements:** Per Wave 6 of 999.62 BACKLOG.
+
+**Success Criteria:**
+  1. Per-agent `llmRuntime.backend: openrouter` + `openrouter.model: <model-id>` config.
+  2. At least 3 non-Anthropic models tested (Gemini, DeepSeek, MiniMax) for tool-call reliability.
+  3. Per-model cost tracking in `clawcode usage`.
+  4. Documented caching mechanism per model (or explicit "no cache" note for cost projections).
+
+**Plans:** TBD.
+
+---
 
 <details>
 <summary>v1.0 Core Multi-Agent System (Phases 1-5) - SHIPPED 2026-04-09</summary>
@@ -2401,311 +2712,3 @@ Result: ~6× signal-to-noise spread between high-signal client-doc-from-priority
 
 ---
 
-## Phase Details — v3.0
-
-### Phase 126: Subagent Context Isolation closeout (999.57 Plans 02/03)
-
-**Goal:** Close the memory-retrieval inheritance leak + heartbeat-runner full ownership transition + verification across both 2026-05-15 observed failure modes (Run 1 stale-context bleed, Run 2 ack-and-wait).
-
-**Depends on:** Plan 01 already shipped (commits `b097c1a` `041238a` `ea904fa` `61c56f5` `7ef8c75` `dc0f24d` `5b4e962`); hotfix `07bd5b0` gates auto-relay on delegateTo.
-
-**Requirements:** Promoted from `.planning/phases/999.57-subagent-context-isolation/BACKLOG.md` + RESEARCH + CONTEXT (D-01..D-11). Plans 02 (regression tests DEL-15..DEL-19 — RESOLVE NUMBERING COLLISION with existing DEL-15..DEL-18 from 999.58/999.61) and 03 (deploy + live verification on clawdy) are pre-written.
-
-**Success Criteria:**
-  1. Plan 02 regression tests pin heartbeat override + memory retrieval suppression + no-upward-leakage (renumber to DEL-20..DEL-24 to avoid collision).
-  2. Plan 03 deploy + admin-clawdy spawns a fresh subagent on the original failing prompt; first assistant turn surfaces NO stale memory + produces real research output.
-  3. journalctl on clawdy shows NO heartbeat tick fires for subagent's session name during its lifetime.
-  4. Phase 02 RESEARCH Correction 3 + Pitfall 1 are pinned by tests; Plan 01 wiring future-regression-proofed.
-
-**Plans:** 02 (autonomous), 03 (operator-deploy-gated, NOT autonomous)
-
-**Sequencing note:** Plan 02 is small (~5 test cases). Plan 03 is deploy-gated per `feedback_ramy_active_no_deploy` — do NOT run autonomously.
-
----
-
-### Phase 127: No-useful-tokens stream timeout (999.61)
-
-**Goal:** SDK-level "no useful content tokens for N seconds → fail the turn" supervisor extension. Closes the 2026-05-14 fin-acq 16-min stall pattern (stream technically had keepalive bytes, no useful tokens, no timeout fired).
-
-**Depends on:** Phase 117 advisor pattern (similar fork-orchestration shape).
-
-**Requirements:** Per `.planning/phases/999.61-no-useful-tokens-stream-timeout/BACKLOG.md` — hotfix `91535c7` (subagent discriminates `<system-reminder>` from task; explicit TASK frame) addresses one failure surface; the architectural SDK-supervisor timeout is the remaining work.
-
-**Success Criteria:**
-  1. New supervisor timeout config field (`llmRuntime.noUsefulTokensTimeoutMs`, default 120000) accepted by Zod + propagated through resolver + applied at SDK-stream supervisor.
-  2. Synthetic stall test (keepalive-only stream for N+1 seconds) triggers turn failure with a recognizable error code.
-  3. Hot-reloadable via existing ConfigWatcher path (similar to Phase 110 `shimRuntime`).
-  4. Live verification on clawdy via journalctl: zero new stalls > 120s observed across a 24h soak on `fin-acquisition` and `research` agents.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 128: clawcode usage accuracy fixes (999.4)
-
-**Goal:** `clawcode usage` CLI + dashboard surface honest values: `resetsAt` in the correct unit (seconds-vs-ms suspect), `utilization` derived consistently between CLI and dashboard surfaces.
-
-**Depends on:** Phase 116 (dashboard usage page redesign — `/dashboard/v2/usage` is the live surface).
-
-**Requirements:** EMPTY DIR at `.planning/phases/999.4-clawcode-usage-accuracy-fixes-resetsAt-units-utilization-derive/` — needs discuss-phase to enumerate concrete bugs.
-
-**Success Criteria:**
-  1. Operator-observed bug enumerated in discuss-phase CONTEXT.md.
-  2. `clawcode usage` CLI output matches dashboard `/dashboard/v2/usage` for every metric (resetsAt, utilization, credit-remaining, projected runout).
-  3. Static-grep regression test pins the source-of-truth helper as single chokepoint.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 129: clawcode status finish-up fallbacks (999.5)
-
-**Goal:** `clawcode status` shows honest "N/A" for missing-source data instead of misleading zero/empty/stale placeholders.
-
-**Depends on:** Phase 103 telemetry surface; Phase 116 dashboard.
-
-**Requirements:** EMPTY DIR — needs discuss-phase to enumerate concrete misleading-placeholder cases.
-
-**Success Criteria:**
-  1. Operator-observed misleading placeholders enumerated in discuss-phase CONTEXT.md.
-  2. Helper function returns sentinel "N/A" object for missing data; render layer surfaces literal "N/A" not "0" / "" / stale-cached.
-  3. Regression test fixture covers every enumerated placeholder.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 130: Manifest-driven plugin SDK (999.58)
-
-**Goal:** Lift OpenClaw's `plugin-sdk` manifest pattern — type-checked capability vocabulary + daemon-side validation at load time for MCP servers and skills. Replace freeform discovery with contracts.
-
-**Depends on:** v3.0 Phase 126 surface clarity (subagent context isolation closeout); OpenClaw `plugin-sdk/*` reference.
-
-**Requirements:** Per `.planning/phases/999.58-manifest-driven-plugin-sdk/BACKLOG.md` — hotfix `24b3548` (subagent clawcode_share_file instruction) addresses one surface; the architectural manifest pattern is the milestone deliverable.
-
-**Success Criteria:**
-  1. Manifest schema (Zod) for MCP servers + skills, with capability vocabulary.
-  2. Daemon validates manifests at load time; manifest-less surfaces produce structured warn log, not silent load.
-  3. At least 3 existing skills migrated to manifest pattern (e.g., `subagent-thread`, `cron-poll`, one of the marketplace skills).
-  4. Hot-reload via ConfigWatcher when manifest fields change.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 131: tmux remote-control skill (999.50)
-
-**Goal:** Port OpenClaw `skills/tmux/` to ClawCode as a first-class manifest-described skill; surface as `/tmux` Discord slash command via the existing skill→slash auto-registration path. Prerequisite for v3.1 Phase 140 (drives interactive Claude Code CLI).
-
-**Depends on:** Phase 130 (manifest pattern); OpenClaw `skills/tmux/` source.
-
-**Requirements:** Per `.planning/phases/999.50-tmux-remote-control-skill/BACKLOG.md`. References: Hwee-Boon Yar's tmux+claude blog, mcpmarket tmux skill, Hermes Agent's claude-code skill.
-
-**Success Criteria:**
-  1. `skills/tmux/SKILL.md` with manifest frontmatter (per Phase 130).
-  2. `scripts/find-sessions.sh` + `scripts/wait-for-text.sh` ported with same flags.
-  3. Agent can list / send-keys / capture-pane via skill recipes.
-  4. `/tmux` Discord slash command works in admin-clawdy channel.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 132: Autonomous skill creation (999.59)
-
-**Goal:** Hermes-Agent learning-loop pattern — after long successful turns, agent proposes a reusable skill draft (name + trigger + steps + acceptance criteria) staged for operator review at `~/.clawcode/agents/<agent>/skills/drafts/`.
-
-**Depends on:** Phase 130 (manifest pattern — drafts are manifest-shaped); skills marketplace surface (v2.2).
-
-**Requirements:** Per `.planning/phases/999.59-autonomous-skill-creation/BACKLOG.md` — hotfix `9ff5ab0` (accumulatedSeen overflow trigger) addresses one related surface.
-
-**Success Criteria:**
-  1. Heuristic for "long successful turn" (token threshold + tool-call diversity + verifier passes).
-  2. Skill-draft generator runs as out-of-band Haiku worker; output staged to `skills/drafts/<slug>.md`.
-  3. `/clawcode-skills-review` Discord slash command lists pending drafts; operator approves → moves to active skills dir + commits.
-  4. Regression test: synthetic "long turn" fixture produces a valid manifest-shaped draft.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 133: ClawCode as MCP server (999.60)
-
-**Goal:** Expose `delegate_task` / `ask_agent` / `task_status` over MCP. External Claude Code / Cursor / OpenClaw gateways can route work to ClawCode agents without Discord.
-
-**Depends on:** Existing MCP server scaffold (`src/mcp/server.ts`); Phase 130 manifest pattern.
-
-**Requirements:** Per `.planning/phases/999.60-clawcode-as-mcp-server/BACKLOG.md` — hotfix `accf2e0` (subagent file auto-dump into parent main channel) addresses one related surface; the MCP server-mode exposure is the milestone deliverable.
-
-**Success Criteria:**
-  1. `clawcode mcp-server` CLI subcommand starts a stdio MCP server exposing `delegate_task` / `ask_agent` / `task_status`.
-  2. External Claude Code session can `mcp__clawcode__ask_agent <agent> <question>` and receive a response within 2s.
-  3. Auth/access policy: per-agent allowlist; default-deny for unauthenticated callers.
-  4. `task_status <task_id>` returns delivery state from daemon's TurnDispatcher.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 134: MCP broker hot-reload — DEFERRED (999.53)
-
-**Goal:** Hot-reload `OP_SERVICE_ACCOUNT_TOKEN` rotation without daemon restart. Current state: rotation requires daemon restart, which kicks all 14 agents.
-
-**Depends on:** **Plan 94-08 / config-mutator infra (NOT YET LANDED)** — per commit `92b0721`, this phase is explicitly deferred until that infra ships.
-
-**Requirements:** Per `.planning/phases/999.53-mcp-broker-hot-reload-token-rotation/BACKLOG.md`.
-
-**Success Criteria:** (to be defined when 94-08 lands)
-
-**Status:** **DEFERRED** — promote mid-milestone if Plan 94-08 lands; else re-file to v3.x.
-
----
-
-### Phase 135: Discord voice channel support (999.56)
-
-**Goal:** Native `/vc {join,leave,status}` slash commands + agent voice bridge ported from OpenClaw `extensions/discord/src/voice/` (24 files). Agent joins voice channel, transcribes speech, generates voice-optimized response, speaks back.
-
-**Depends on:** OpenClaw source; existing skill/slash registration; discord.js voice extensions.
-
-**Requirements:** Per `.planning/phases/999.56-discord-voice-channel-support/BACKLOG.md`. Reference spec at `~/voice-channel-prompt.md` on OC server.
-
-**Success Criteria:**
-  1. `/vc join` / `/vc leave` / `/vc status` slash commands registered per-agent.
-  2. Voice in: STT pipeline → text → agent turn.
-  3. Voice out: agent response → TTS → playback.
-  4. Agent's full tool/MCP/skill catalog intact during voice interaction.
-
-**Plans:** TBD (discuss-phase first). Large lift — may split into v3.0.1 dot-release if it overflows.
-
----
-
-## Phase Details — v3.1
-
-### Phase 136: LlmRuntimeService seam + AnthropicAgentSdk backend extraction (Wave 1)
-
-**Goal:** Introduce provider-neutral `LlmRuntimeService` seam at `src/llm-runtime/`. Extract current Agent SDK usage as `AnthropicAgentSdk` backend behind the seam. Zero behavior change for current deploy.
-
-**Depends on:** Phase 117 advisor-backend pattern (template for per-agent config-flippable rollback).
-
-**Requirements:** Per `.planning/phases/999.62-llm-runtime-multi-backend-and-claude-code-fallback/BACKLOG.md` Wave 1.
-
-**Success Criteria:**
-  1. `LlmRuntimeService` interface defined; current Anthropic Agent SDK code extracted as `AnthropicAgentSdkBackend`.
-  2. Existing test suite passes with `anthropic-agent-sdk` as default backend.
-  3. Per-agent `llmRuntime.backend` schema accepted (Zod) but only `anthropic-agent-sdk` value valid at this wave.
-
-**Plans:** TBD (discuss-phase first).
-
----
-
-### Phase 137: AnthropicApiKey backend + per-agent backend selection (Wave 2)
-
-**Goal:** Add `AnthropicApiKeyBackend` — direct Anthropic API billing path. Per-agent `llmRuntime.backend: anthropic-api-key` override in `clawcode.yaml` with ConfigWatcher hot-reload.
-
-**Depends on:** Phase 136 (seam scaffold).
-
-**Requirements:** Per Wave 2 of 999.62 BACKLOG.
-
-**Success Criteria:**
-  1. Operator can flip single agent (e.g., `research`) from `anthropic-agent-sdk` → `anthropic-api-key` via config-edit-and-reload.
-  2. Outbound auth verified on next turn (different auth path, same `Anthropic-Version` header).
-  3. ConfigWatcher hot-reload path triggers without daemon restart.
-  4. Backwards-compatible: agents without `llmRuntime` field default to `anthropic-agent-sdk`.
-
-**Plans:** TBD.
-
----
-
-### Phase 138: Credit telemetry + Discord alerts + auto-failover (Wave 3)
-
-**Goal:** Daemon polls Anthropic billing (or local approximation from token counts × rates). Surface `agent-sdk-credit: $X / $200 (P%, projected runout YYYY-MM-DD)` in `clawcode status` + dashboard. Discord alerts at 75/90/99%. Auto-failover at 95% threshold.
-
-**Depends on:** Phase 137 (failover target — AnthropicApiKey backend).
-
-**Requirements:** Per Wave 3 of 999.62 BACKLOG.
-
-**Success Criteria:**
-  1. `clawcode status` shows credit metrics for authenticated account.
-  2. Dashboard renders sparkline for credit consumption rate.
-  3. Discord alerts fire at 75% / 90% / 99% thresholds (admin-clawdy channel).
-  4. Simulated-depletion integration test triggers failover (config-flip to AnthropicApiKey).
-
-**Plans:** TBD.
-
-**Hard deadline:** This phase + 136/137 must merge before **2026-06-15** per Anthropic Agent SDK credit policy.
-
----
-
-### Phase 139: Concurrent-session probe + tmux optimization spike (Wave 4.5 — LOAD-BEARING)
-
-**Goal:** Empirical probe on clawdy: spawn N ∈ {1, 3, 5, 7, 10} concurrent `claude` interactive sessions against one Max 20x account. Compare per-turn latency across (a) Agent SDK baseline, (b) naive tmux + capture-pane, (c) optimized direct-PTY + persistent REPL + structural-cue parsing.
-
-**Depends on:** Phase 131 (tmux skill — operator-facing surface) + Phase 137 (so the operator can fall back to AnthropicApiKey if probe fails).
-
-**Requirements:** Per Wave 4.5 of 999.62 BACKLOG.
-
-**Success Criteria:**
-  1. `PROBE-RESULTS.md` documents: concurrent-session cap (N where degradation appears), latency floor on optimized path, failure modes at the cap.
-  2. Go/no-go recommendation for Phase 140.
-
-**Plans:** TBD.
-
-**Pass criteria for Phase 140:** concurrent-session cap ≥ 7 AND optimized latency ≤ 1.6× Agent SDK baseline (hard fail at >2.5×).
-
----
-
-### Phase 140: ClaudeCodeInteractive backend (Wave 4 — PROBE-GATED)
-
-**Goal:** Drive the real `claude` binary via `node-pty` + persistent REPL + structural-cue end-of-turn detection. Subscription-pool path (interactive Claude Code keeps its native auth + rate-limits).
-
-**Depends on:** Phase 139 probe pass.
-
-**Requirements:** Per Wave 4 of 999.62 BACKLOG. CONDITIONAL on Phase 139 outcome.
-
-**Success Criteria:** (if probe passes)
-  1. Per-agent `llmRuntime.backend: claude-code-interactive` plus `tmuxHost: <hostname>` selectable.
-  2. Round-trip latency on optimized stack < 1.6× Agent SDK baseline (sustained across 1h soak).
-  3. Tool-call protocol parity: spawn_subagent_thread, post_to_agent, ask_advisor all functional.
-  4. Failover to AnthropicApiKey if interactive session is evicted/throttled mid-turn.
-
-**Plans:** TBD.
-
-**Status:** CONDITIONAL on Phase 139.
-
----
-
-### Phase 141: OpenAiCodex backend + tool-use schema translator (Wave 5)
-
-**Goal:** Add `OpenAiCodexBackend` — decouple from Anthropic entirely. Tool-use schema translator: Anthropic Messages API ↔ OpenAI function-calling.
-
-**Depends on:** Phase 136 seam + claude-code-proxy translation rules (reference).
-
-**Requirements:** Per Wave 5 of 999.62 BACKLOG. Tool-use parity is the long pole.
-
-**Success Criteria:**
-  1. Single agent (`research`) flips to `openai-codex` backend; full ClawCode functionality (memory, MCP tools, advisor) intact.
-  2. Per-backend tool-use compatibility test suite pins divergence.
-  3. Cost telemetry parity with Anthropic billing surfaces.
-  4. Phase 117 `AdvisorService` falls back to `fork` backend (separate Opus session) when executor is on Codex.
-
-**Plans:** TBD.
-
----
-
-### Phase 142: OpenRouter passthrough backend (Wave 6)
-
-**Goal:** Add `OpenRouterBackend` — single gateway to Gemini, DeepSeek, MiniMax, Mistral, etc. Convenience layer atop individual Anthropic/Codex backends.
-
-**Depends on:** Phase 141 (translator pattern is reusable for OpenRouter's Anthropic-compatible passthrough mode).
-
-**Requirements:** Per Wave 6 of 999.62 BACKLOG.
-
-**Success Criteria:**
-  1. Per-agent `llmRuntime.backend: openrouter` + `openrouter.model: <model-id>` config.
-  2. At least 3 non-Anthropic models tested (Gemini, DeepSeek, MiniMax) for tool-call reliability.
-  3. Per-model cost tracking in `clawcode usage`.
-  4. Documented caching mechanism per model (or explicit "no cache" note for cost projections).
-
-**Plans:** TBD.
-
----
