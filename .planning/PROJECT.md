@@ -100,15 +100,17 @@ Persistent, intelligent AI agents that each maintain their own identity, memory,
 
 ### Active
 
-v2.9 Reliability & Routing — requirements pending definition (see `## Current Milestone` below). Closes the operator-pain gaps in A2A delivery, dashboard observability, subagent UX, and MCP lifecycle verification surfaced in `.planning/BACKLOG-CONSOLIDATED.md`.
+- **v2.9 Reliability & Routing** — `deploy_pending` per `v2.9-MILESTONE-AUDIT.md` (2026-05-15). All 7 phases (119, 120, 121, 122, 123, 124, 125) code-complete locally; production visual/soak verification gated on next Ramy-quiet deploy window.
+- **v3.0 Architectural Surface Expansion + Operator-Pain Backlog** — PROPOSED 2026-05-15 per `v3.0-ROADMAP.md`. Closes 11-item 999.x backlog accumulated during v2.9 (subagent context isolation, plugin SDK, autonomous skill creation, clawcode-as-MCP-server, usage/status fallbacks, tmux skill, Discord voice, etc.).
+- **v3.1 Multi-LLM Runtime + Subscription-Pool Fallback** — PROPOSED 2026-05-15 per `v3.1-ROADMAP.md`. Provider-neutral `LlmRuntimeService` seam triggered by Anthropic's 2026-05-14 Agent SDK credit policy (effective **2026-06-15**). Hard-deadline track: Anthropic API key + failover before 2026-06-15.
 
-### Out of Scope
+### Out of Scope (revised 2026-05-15)
 
 - claude-runner bridge — was an OpenClaw workaround, not needed here
 - Gateway/routing layer — Claude Code processes handle Discord directly via the existing plugin
 - WhatsApp/Telegram/other channel support — Discord only for now
-- Custom model providers (Ollama, OpenRouter, etc.) — using Claude Code's native model selection
-- Voice/TTS integration — not in scope
+- ~~Custom model providers (Ollama, OpenRouter, etc.) — using Claude Code's native model selection~~ **— REVISED:** v3.1 introduces provider-neutral `LlmRuntimeService` seam supporting Anthropic API key, OpenAI Codex, OpenRouter (+ probe-gated interactive Claude Code CLI). Local models (Ollama, llama.cpp) remain out of scope pending small-model tool-call reliability improvements.
+- Voice/TTS integration — ~~not in scope~~ **— REVISED:** v3.0 includes 999.56 Discord voice channel support port from OpenClaw.
 - Synchronous agent-to-agent RPC — async inbox pattern is simpler and more reliable
 - Shared global memory — violates workspace isolation; per-agent memory with explicit sharing via admin
 - Full graph visualization UI — use CLI DOT output + Graphviz instead
@@ -116,8 +118,10 @@ v2.9 Reliability & Routing — requirements pending definition (see `## Current 
 - Shared knowledge graph across agents — violates workspace isolation
 - Automatic personality evolution — identity drift is a feature-killing bug
 - LLM-powered entity/relation extraction — doubles token cost on writes
+- Header spoofing against Anthropic — permanently off the table per v3.1 BACKLOG research
+- Browser automation against claude.ai — permanently off the table per v3.1 BACKLOG research
 
-## Current Milestone: v2.9 Reliability & Routing
+## Current Milestone: v2.9 Reliability & Routing (deploy_pending) / v3.0 (proposed) / v3.1 (proposed)
 
 **Goal:** Close the operator-pain gaps in cross-agent message delivery, post-Phase-116 dashboard observability, subagent UX, and MCP lifecycle verification — formally retiring the v2.8 backlog and surfacing post-Phase-116 dashboard regressions as a first-class theme.
 
