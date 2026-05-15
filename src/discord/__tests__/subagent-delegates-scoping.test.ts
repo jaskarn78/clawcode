@@ -94,6 +94,16 @@ function makeAgentConfig(
   } as ResolvedAgentConfig;
 }
 
+/**
+ * Phase 999.57 — minimal HeartbeatRunner mock for spawner ctor.
+ */
+function makeMockHeartbeatRunner() {
+  const mock = {
+    setAgentConfigs: vi.fn(),
+  };
+  return mock as unknown as import("../../heartbeat/runner.js").HeartbeatRunner;
+}
+
 function makeMockSessionManager() {
   const configs = new Map<string, ResolvedAgentConfig>();
   const running = new Set<string>();
@@ -169,6 +179,7 @@ describe("Phase 106 DSCOPE — subagent config strips `delegates`", () => {
     discordMock = makeMockDiscordClient();
     spawner = new SubagentThreadSpawner({
       sessionManager,
+      heartbeatRunner: makeMockHeartbeatRunner(),
       registryPath,
       discordClient: discordMock.client as any,
     });

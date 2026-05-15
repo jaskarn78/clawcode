@@ -7644,6 +7644,12 @@ export async function startDaemon(
   subagentThreadSpawner = discordBridge
     ? new SubagentThreadSpawner({
         sessionManager: manager,
+        // Phase 999.57 (2026-05-15) — required dep. The spawner upserts the
+        // subagent's heartbeat-disabled config into the runner's local map
+        // immediately after sessionManager.startAgent so the existing
+        // runner.ts:271 gate fires for subagent sessions. heartbeatRunner
+        // is constructed at line 3300 above, well before this point.
+        heartbeatRunner,
         registryPath: THREAD_REGISTRY_PATH,
         discordClient: discordBridge.discordClient,
         log,
