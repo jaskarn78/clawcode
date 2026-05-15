@@ -59,6 +59,9 @@ Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle st
 - [ ] **Phase 134: MCP broker hot-reload (999.53)** — DEFERRED pending Plan 94-08 / config-mutator infra; promote mid-milestone if 94-08 lands
 - [ ] **Phase 135: Discord voice channel support (999.56)** — port from OpenClaw `extensions/discord/src/voice/` (24 files); `/vc {join,leave,status}` slash + voice bridge
 
+**Promoted from backlog (operator-promoted 2026-05-15):**
+- [ ] **Phase 999.47: Homelab Inventory canonical source-of-truth** — version-controlled, agent-readable inventory at `/home/clawcode/homelab/` for hosts/VMs/containers/tunnels/services/DNS; hybrid auto-discovery + operator semantic fill-in; hourly croner refresh with DRIFT.md quarantine; RAG-indexed into agents' `memory_chunks`
+
 
 
 
@@ -238,6 +241,28 @@ All fields render genuine data; `Consolidated: never` is a truthful sentinel (no
   4. Agent's full tool/MCP/skill catalog intact during voice interaction.
 
 **Plans:** TBD (discuss-phase first). Large lift — may split into v3.0.1 dot-release if it overflows.
+
+---
+
+### Phase 999.47: Homelab Inventory canonical source-of-truth (PROMOTED 2026-05-15)
+
+**Goal:** Build a version-controlled, agent-readable inventory at `/home/clawcode/homelab/` on clawdy capturing every host / VM / container / Cloudflare tunnel / Tailscale node / service / DNS entry in the homelab. Markdown + git is the UI. Credentials are `op://` references only. Three canonical docs (INVENTORY / NETWORK / ACCESS) + DRIFT.md quarantine + RETIRED.md + `scripts/refresh.sh` + `scripts/verify.sh`. Hourly croner refresh; drift items quarantined to DRIFT.md for operator-promotion. RAG-indexed into agents' `memory_chunks` for pre-turn retrieval; one-line MEMORY.md pointer added to every agent.
+
+**Depends on:** Phase 49 RAG infrastructure (`memory_chunks` + `vec_memory_chunks` + `memory_chunks_fts`) + Phase 90 hybrid-RRF retrieval + `croner` scheduler (already in stack) + `op://` reference convention. Greenfield otherwise — no homelab repo exists today.
+
+**Requirements:** Per `.planning/phases/999.47-homelab-inventory-canonical-source-of-truth/BACKLOG.md` + `999.47-CONTEXT.md`. Operator request 2026-05-13; promoted to active 2026-05-15.
+
+**Success Criteria:**
+  1. Standalone git repo at `/home/clawcode/homelab/` on clawdy exists with INVENTORY.md / NETWORK.md / ACCESS.md / DRIFT.md / RETIRED.md / `scripts/refresh.sh` / `scripts/verify.sh` and committed initial state.
+  2. `refresh.sh` runs hourly via croner; discovers tailscale nodes + Unraid VMs + Unraid containers + 1Password vault items + Cloudflare tunnels; commits diffs with author `clawcode-refresh`.
+  3. Drift items (in discovery output but NOT in INVENTORY.md) land in DRIFT.md with timestamp + raw payload + source command; INVENTORY.md is never auto-modified.
+  4. INVENTORY / NETWORK / ACCESS chunks are queryable via every agent's existing `memory_lookup` / `search_documents` (Phase 49 infra), refreshed within one cycle of every commit.
+  5. Every agent's MEMORY.md has the pointer line `- [Homelab inventory](/home/clawcode/homelab/INVENTORY.md) — canonical source of truth for hosts, VMs, containers, access`.
+  6. Initial inventory populated with the known anchor entries from BACKLOG: clawdy / Unraid / OC server / Mac mini / VMs (WebServer, Windows11-Min, Moltbot-VM, HomeAssistant) / containers (novnc-auth, novnc-win11) / tunnels (vm.jjagpal.me, dashboard.finmentum.com, notify.earlscheibconcord.com) / DNS (`finmentum.cloudflareaccess.com`, IONOS holdings).
+  7. Operator-grep telemetry: `journalctl -u clawcode -g phase999.47-homelab-refresh` returns one structured line per refresh tick with `{hostCount, vmCount, containerCount, driftCount, commitsha}`.
+  8. `verify.sh` exits 0 against the populated inventory; exits non-zero if any inventoried item is unreachable.
+
+**Plans:** TBD (plan-phase next). Estimated 2-3 plans.
 
 ---
 
