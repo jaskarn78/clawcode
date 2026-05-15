@@ -16,6 +16,8 @@ import { registerStopAllCommand } from "./commands/stop-all.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerRoutesCommand } from "./commands/routes.js";
 import { registerHealthCommand } from "./commands/health.js";
+// Phase 999.47 Plan 02 — `clawcode homelab reindex` / `clawcode homelab refresh`.
+import { registerHomelabCommand } from "./commands/homelab.js";
 import { registerTierTickCommand } from "./commands/tier-tick.js";
 import { registerSchedulesCommand } from "./commands/schedules.js";
 import { registerSkillsCommand } from "./commands/skills.js";
@@ -179,6 +181,7 @@ registerStopAllCommand(program);
 registerStatusCommand(program);
 registerRoutesCommand(program);
 registerHealthCommand(program);
+registerHomelabCommand(program);
 registerTierTickCommand(program);
 registerSchedulesCommand(program);
 registerSkillsCommand(program);
