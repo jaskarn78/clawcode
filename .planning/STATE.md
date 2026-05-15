@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
-status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 SHIPPED local; Plan 02 ready for dispatch; Phase 136 ready for discuss-phase
-stopped_at: "Phase 127 Plan 01 SHIPPED local (6 commits `3db91d5`, `fd60504`, `351e572`, `94b48eb`, `f310de3`, `28576a4`). Stream-stall supervisor with single-chokepoint tracker module — schema cascade + loader resolver + production wiring in persistent-session-handle.ts iterateUntilResult + synthetic stream tests. Critical deviation: plan listed only session-adapter.ts but production routes through persistent-session-handle.ts; both call sites now share `src/manager/stream-stall-tracker.ts` per feedback_silent_path_bifurcation.md. Predicate extended to recognize input_json_delta.partial_json (tool-use streams no longer false-stall). Deploy-gated on Ramy-quiet window. Plan 02 wires daemon-side Discord notification + session-log row. See `.planning/phases/127-no-useful-tokens-stream-timeout/127-01-SUMMARY.md`. Predecessor stop point: Phase 127 CONTEXT + 3 PLANs drafted (commits `5414ad3` + `d8e5b00`)."
-last_updated: "2026-05-15T14:46:24Z"
-last_activity: 2026-05-15 -- Phase 127 Plan 01 SHIPPED local (35min, 5 tasks, 8 files modified, 2 created; 6/6 synthetic stream tests green; tsc clean). Plan 02 next.
+status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 + Plan 02 SHIPPED LOCAL (Ramy-active deploy hold on Plan 03); Phase 136 ready for discuss-phase
+stopped_at: "Phase 127 Plan 02 SHIPPED LOCAL 2026-05-15. Daemon-side `onStreamStall` callback wired: Discord webhook notification (verbatim BACKLOG.md line 19 text — em-dash U+2014 pinned via exported constant) + JSONL stall row to `{memoryDir}/events.jsonl` (Phase 124/125 compaction extractor surface). 4 commits: `615bb09` (T-01 sessionLog.recordStall), `43a2273` (T-02 makeStreamStallCallback factory + SessionConfigDeps wiring), `c7ca0bd` (T-03 STALL-04 integration test — 6→7 tests passing), plus this docs commit. Rule-3 deviation: wired at SessionManager.configDeps + buildSessionConfig instead of plan-prescribed daemon.ts (singleton SdkSessionAdapter has no per-agent context; same shape as Plan 01's deviation). Rule-1 bug: corrected `sendAsAgent` → `send` (former is A2A path with EmbedBuilder, wrong signature). Plan 03 (operator deploy + journalctl probe + Opus advisor false-positive check + 24h threshold tuning) HOLDS for Ramy-quiet window per feedback_ramy_active_no_deploy.md. See `.planning/phases/127-no-useful-tokens-stream-timeout/127-02-SUMMARY.md`."
+last_updated: "2026-05-15T15:09:23Z"
+last_activity: 2026-05-15 -- Phase 127 Plan 02 SHIPPED LOCAL (daemon-side stall callback + Discord + JSONL); next surface is Phase 136 discuss-phase or Phase 127 Plan 03 deploy-gated verification
 progress:
   total_phases: 82
   completed_phases: 25
-  total_plans: 152
-  completed_plans: 147
+  total_plans: 151
+  completed_plans: 148
   percent: 30
 ---
 
@@ -54,13 +54,17 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 **3 plans committed (`d8e5b00`):**
 
 - **Plan 01 (autonomous, wave 1) — SHIPPED LOCAL 2026-05-15:** schema + type cascade + loader resolver (phase127-resolver log) + stream-stall tracker module + production wiring in persistent-session-handle.ts iterateUntilResult + AbortController via existing fireInterruptOnce + 6 synthetic stream tests + RELOADABLE_FIELDS classifier. 6 commits `3db91d5`/`fd60504`/`351e572`/`94b48eb`/`f310de3`/`28576a4`. Summary: `.planning/phases/127-no-useful-tokens-stream-timeout/127-01-SUMMARY.md`. **Critical deviation:** plan listed only session-adapter.ts; production routes through persistent-session-handle.ts. Both call sites now share `src/manager/stream-stall-tracker.ts` per feedback_silent_path_bifurcation.md. Predicate extended to recognize input_json_delta.partial_json.
-- **Plan 02 (autonomous, wave 2):** sessionLog.recordStall API + daemon.ts onStreamStall callback wiring + Discord webhook fire-and-forget + integration test STALL-04.
+- **Plan 02 (autonomous, wave 2) — SHIPPED LOCAL 2026-05-15:** sessionLog.recordStall API (JSONL writer at `{memoryDir}/events.jsonl`) + daemon-side onStreamStall callback (Rule 3 deviation: wired at SessionManager.configDeps + buildSessionConfig, NOT daemon.ts) + Discord webhook fire-and-forget via verbatim BACKLOG.md constant + integration test STALL-04 (6→7 tests). 3 commits `615bb09`/`43a2273`/`c7ca0bd`. Summary: `.planning/phases/127-no-useful-tokens-stream-timeout/127-02-SUMMARY.md`. Deviations: (1) wiring location shifted from daemon.ts to SessionManager (singleton adapter has no per-agent identity); (2) `sendAsAgent` corrected to `send` (former is A2A path with EmbedBuilder); (3) payload enrichment inside factory closure (boundary type stays narrow per Plan 01 D-03); (4) sub-test count trimmed to match prompt's 6→7 target.
 - **Plan 03 (autonomous: false, deploy-gated):** operator deploy + journalctl resolver-log grep + synthetic stall probe + Opus advisor false-positive check (D-07) + 24h threshold tuning (D-09).
 
 **Resume command:** `/gsd-execute-phase 127 --no-transition` (kicks off Plan 02; halts before Plan 03 per autonomous:false frontmatter).
 
 ## Recent commits (2026-05-15)
 
+- `c7ca0bd` test(127-02-T03): STALL-04 integration test — Discord + sessionLog both receive trip payload
+- `43a2273` feat(127-02-T02): daemon wires onStreamStall callback — Discord + session-log
+- `615bb09` feat(127-02-T01): sessionLog.recordStall API for stall telemetry
+- `bb4b459` docs(127-01): complete no-useful-tokens-stream-timeout plan — STATE update
 - `28576a4` docs(127-01): summary — schema + tracker + synthetic stream tests complete
 - `f310de3` test(127-01-T04): synthetic stream-stall fixture — STALL-01..03 + cleanup
 - `94b48eb` feat(127-01-T03): stream-stall tracker + AbortController trip behavior
@@ -76,8 +80,8 @@ See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2
 - `74dc984` docs(roadmap): promote v3.0 backlog to Phases 126-135 + v3.1 to Phases 136-142
 - `3eb80f3` docs(v2.9,v3.0,v3.1): close v2.9 closeouts + draft v3.0/v3.1 roadmaps
 
-Status: v3.0 + v3.1 BOTH OPEN; Phase 127 planned, ready for execution; Phase 136 ready for discuss-phase
-Last activity: 2026-05-15 -- Phase 127 CONTEXT + 3 PLANs drafted via autonomous workflow; next conversation executes Plan 127-01 + 127-02
+Status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 + Plan 02 SHIPPED LOCAL (Ramy-active deploy hold on Plan 03); Phase 136 ready for discuss-phase
+Last activity: 2026-05-15 -- Phase 127 Plan 02 SHIPPED LOCAL (daemon-side stall callback + Discord + JSONL); next surface is Phase 136 discuss-phase or Phase 127 Plan 03 deploy-gated verification
 
 ## v2.9 Status (deploy_pending — superseded by v3.0)
 
