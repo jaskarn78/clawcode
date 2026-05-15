@@ -769,7 +769,8 @@ describe("HeartbeatRunner", () => {
       expect(log.info).toHaveBeenCalledWith(
         expect.objectContaining({
           // Phase 108 — added mcp-broker (POOL-07) brought the count to 12.
-          checkCount: 12,
+          // Phase 99-C — added summarize-pending (drains crashed-session summary backlog) → 13.
+          checkCount: 13,
           checks: expect.arrayContaining([
             "tier-maintenance",
             "auto-linker",
@@ -779,6 +780,7 @@ describe("HeartbeatRunner", () => {
             "fs-probe",
             "mcp-broker",
             "mcp-reconnect",
+            "summarize-pending",
             "task-retention",
             "thread-idle",
             "trace-retention",
