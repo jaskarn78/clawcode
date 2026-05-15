@@ -3,7 +3,13 @@ import { mkdtemp, rm, readFile, lstat, access } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createWorkspace, createWorkspaces } from "../workspace.js";
-import { DEFAULT_SOUL, DEFAULT_IDENTITY_TEMPLATE, renderIdentity } from "../../config/defaults.js";
+import {
+  DEFAULT_SOUL,
+  DEFAULT_IDENTITY_TEMPLATE,
+  DEFAULT_MEMORY_TEMPLATE,
+  HOMELAB_POINTER_LINE,
+  renderIdentity,
+} from "../../config/defaults.js";
 import type { ResolvedAgentConfig } from "../../shared/types.js";
 
 const tempDirs: string[] = [];
@@ -217,6 +223,118 @@ describe("createWorkspace", () => {
     expect(content).toBe(userContent);
   });
 
+  // ── Phase 999.47 Plan 04 Task 1 — SC-5 forward path ──────────────────────
+  // Every new agent created via `clawcode agent-create` must ship with the
+  // verbatim homelab pointer line baked into its MEMORY.md. These tests pin
+  // the contract end-to-end so a future refactor cannot silently drop the
+  // pointer.
+
+  it("writes MEMORY.md containing the verbatim homelab pointer line (Phase 999.47 SC-5)", async () => {
+    const tmp = await makeTempDir();
+    const wsPath = join(tmp, "my-agent");
+    const agent = makeAgent({ workspace: wsPath });
+
+    await createWorkspace(agent);
+
+    const content = await readFile(join(wsPath, "MEMORY.md"), "utf-8");
+    expect(content).toContain(
+      "- [Homelab inventory](/home/clawcode/homelab/INVENTORY.md) — canonical source of truth for hosts, VMs, containers, access",
+    );
+  });
+
+  it("writes MEMORY.md matching DEFAULT_MEMORY_TEMPLATE on first-run (regression guard for default template content)", async () => {
+    const tmp = await makeTempDir();
+    const wsPath = join(tmp, "my-agent");
+    const agent = makeAgent({ workspace: wsPath });
+
+    await createWorkspace(agent);
+
+    const content = await readFile(join(wsPath, "MEMORY.md"), "utf-8");
+    // Regression guard: the default template (header + pointer) must land
+    // intact — pointer is ADDED to the template, not replacing it.
+    expect(content).toBe(DEFAULT_MEMORY_TEMPLATE);
+    expect(content).toContain("# Memory");
+    expect(content).toContain(HOMELAB_POINTER_LINE);
+  });
+
+  it("MEMORY.md pointer line is a markdown list item with leading dash + space", async () => {
+    const tmp = await makeTempDir();
+    const wsPath = join(tmp, "my-agent");
+    const agent = makeAgent({ workspace: wsPath });
+
+    await createWorkspace(agent);
+
+    const content = await readFile(join(wsPath, "MEMORY.md"), "utf-8");
+    // The exact format: "- [Homelab inventory]..." — leading dash, single
+    // space, then markdown link. Pin the prefix so a future formatter doesn't
+    // rewrite the bullet as `*` or `+` and silently break the seeder's
+    // grep -Fxq idempotency check.
+    expect(content).toMatch(/^- \[Homelab inventory\]\(/m);
+  });
+
+  it("does NOT overwrite existing MEMORY.md when pointer already present (idempotency)", async () => {
+    const tmp = await makeTempDir();
+    const wsPath = join(tmp, "my-agent");
+    const agent = makeAgent({ workspace: wsPath });
+
+    // First run — creates default MEMORY.md
+    await createWorkspace(agent);
+
+    // Simulate operator edit that PRESERVES the pointer line
+    const { writeFile } = await import("node:fs/promises");
+    const operatorContent = `# Memory\n\nSome operator-authored notes here.\n\n${HOMELAB_POINTER_LINE}\n\nMore notes after.\n`;
+    await writeFile(join(wsPath, "MEMORY.md"), operatorContent);
+
+    // Second run — pointer is already present, file must remain byte-identical
+    await createWorkspace(agent);
+
+    const content = await readFile(join(wsPath, "MEMORY.md"), "utf-8");
+    expect(content).toBe(operatorContent);
+  });
+
+  it("appends pointer to existing MEMORY.md that lacks it (idempotent backfill in-process)", async () => {
+    const tmp = await makeTempDir();
+    const wsPath = join(tmp, "my-agent");
+    const agent = makeAgent({ workspace: wsPath });
+
+    // Pre-seed a workspace whose MEMORY.md predates Phase 999.47 — no pointer.
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(wsPath, { recursive: true });
+    const legacyContent = "# Memory\n\nLegacy notes from before Phase 999.47.\n";
+    await writeFile(join(wsPath, "MEMORY.md"), legacyContent);
+
+    await createWorkspace(agent);
+
+    const content = await readFile(join(wsPath, "MEMORY.md"), "utf-8");
+    // Original content preserved
+    expect(content).toContain("Legacy notes from before Phase 999.47.");
+    // Pointer appended
+    expect(content).toContain(HOMELAB_POINTER_LINE);
+    // File ends with newline
+    expect(content.endsWith("\n")).toBe(true);
+  });
+
+  it("re-run on legacy workspace is idempotent — does NOT duplicate the pointer line", async () => {
+    const tmp = await makeTempDir();
+    const wsPath = join(tmp, "my-agent");
+    const agent = makeAgent({ workspace: wsPath });
+
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(wsPath, { recursive: true });
+    await writeFile(join(wsPath, "MEMORY.md"), "# Memory\n\nLegacy.\n");
+
+    // First run — appends pointer
+    await createWorkspace(agent);
+    // Second run — must NOT append a second copy
+    await createWorkspace(agent);
+
+    const content = await readFile(join(wsPath, "MEMORY.md"), "utf-8");
+    const matches = content.match(
+      /- \[Homelab inventory\]\(\/home\/clawcode\/homelab\/INVENTORY\.md\)/g,
+    );
+    expect(matches).toHaveLength(1);
+  });
+
   it("returns WorkspaceResult with correct fields", async () => {
     const tmp = await makeTempDir();
     const wsPath = join(tmp, "my-agent");
@@ -240,6 +358,7 @@ describe("createWorkspace", () => {
     const filesToCheck = [
       join(wsPath, "SOUL.md"),
       join(wsPath, "IDENTITY.md"),
+      join(wsPath, "MEMORY.md"),
     ];
 
     for (const filePath of filesToCheck) {
