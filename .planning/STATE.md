@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.9
-milestone_name: Reliability & Routing
-status: executing
-stopped_at: "Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md."
-last_updated: "2026-05-14T22:35:48.557Z"
-last_activity: 2026-05-14 -- Phase 999.54 execution started
+milestone: v3.0
+milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
+status: opened
+stopped_at: "v2.9 closeout complete (code-side); milestone `deploy_pending` per v2.9-MILESTONE-AUDIT.md. v3.0 opened 2026-05-15 with Phases 126-135 from operator's scope screenshot. v3.1 (multi-LLM runtime) sketched for post-v3.0 with hard-deadline track before 2026-06-15 Anthropic Agent SDK credit cutover. Current position: ready to begin Phase 126 (subagent context isolation closeout — 999.57 Plans 02/03 already written). v2.9 phase summaries: 119-PHASE-SUMMARY.md, 120-FINAL-SUMMARY.md, 121/122/124/125-PHASE-SUMMARY.md, 123-VERIFICATION.md, 999.54-PHASE-SUMMARY.md. Reference: .planning/milestones/v2.9-MILESTONE-AUDIT.md (status: deploy_pending), .planning/milestones/v3.0-ROADMAP.md, .planning/milestones/v3.1-ROADMAP.md."
+last_updated: "2026-05-15T00:00:00.000Z"
+last_activity: 2026-05-15 -- v3.0 opened; ready for Phase 126 (999.57 Plans 02/03)
 progress:
-  total_phases: 72
-  completed_phases: 25
-  total_plans: 145
-  completed_plans: 139
+  total_phases: 82
+  completed_phases: 32
+  total_plans: 160
+  completed_plans: 154
   percent: 96
 ---
 
@@ -18,18 +18,47 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-13 — v2.9 Reliability & Routing milestone opened)
+See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2.9 deploy_pending)
 
 **Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
 
-**Current focus:** Phase 999.54 — allowed-tools-sdk-passthrough
+**Current focus:** Phase 126 — Subagent Context Isolation closeout (999.57 Plans 02/03 — pre-written, executable)
 
 ## Current Position
 
-Phase: 999.54 (allowed-tools-sdk-passthrough) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 999.54
-Last activity: 2026-05-14 -- Phase 999.54 execution started
+Phase: 126 (Subagent Context Isolation closeout — 999.57) — READY TO START
+Plan: 2 of 3 (Plan 01 shipped; Plan 02 ready; Plan 03 deploy-gated)
+Status: v3.0 OPENED; Wave 1 ready to execute
+Last activity: 2026-05-15 -- v3.0 milestone opened with Phases 126-135; v2.9 closeout commit `3eb80f3`; ROADMAP promotion `74dc984`
+
+## v2.9 Status (deploy_pending — superseded by v3.0)
+
+All 7 v2.9 phases (119-125) code-complete locally per `.planning/milestones/v2.9-MILESTONE-AUDIT.md`. Production visual/soak verification gated on next Ramy-quiet deploy window:
+
+- 119 SC-3 + SC-4 — screenshot + 24h HEARTBEAT_OK=0 soak
+- 121 SC-3 — 24h `seamGapBytes:0` soak
+- 122 SC-2 — 4-channel screenshots
+- 124 — auto-trigger sentinel + dashboard sparkline
+- 125 SC-5 + SC-6 — A/B agreement + first-token < 8 s latency win
+- 999.54 Plan 05 — D-05a journalctl grep + D-06 turn-1 advisor-footer
+
+## v3.0 Phase Map (Wave order per `.planning/milestones/v3.0-ROADMAP.md`)
+
+**Wave 1 — operator-pain hotfix-to-architecture closeouts + small lifts:**
+- **Phase 126: Subagent Context Isolation closeout (999.57)** — Plans 02 + 03 (Plan 03 deploy-gated). Renumber DEL-15..DEL-19 collision with existing DEL-15..DEL-18 (from 999.58/999.61) → DEL-20..DEL-24.
+- **Phase 127: No-useful-tokens stream timeout (999.61)** — discuss-phase first; SDK supervisor extension
+- **Phase 128: clawcode usage accuracy fixes (999.4)** — EMPTY DIR; discuss-phase first
+- **Phase 129: clawcode status finish-up fallbacks (999.5)** — EMPTY DIR; discuss-phase first
+
+**Wave 2:** Phase 130 (plugin SDK), Phase 131 (tmux skill)
+**Wave 3:** Phase 132 (autonomous skill creation), Phase 133 (clawcode-as-MCP-server)
+**Wave 4:** Phase 134 (MCP broker hot-reload — DEFERRED), Phase 135 (Discord voice)
+
+## v3.1 Phase Map (PROPOSED — `.planning/milestones/v3.1-ROADMAP.md`)
+
+Hard-deadline track before 2026-06-15 Anthropic policy cutover: Phases 136 / 137 / 138.
+Probe-gated: Phases 139 (probe) / 140 (Claude Code interactive backend).
+Strategic: Phases 141 (Codex) / 142 (OpenRouter).
 
 **v2.9 phase map (build order — Waves 1/3/4/5/6/7):**
 
