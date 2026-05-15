@@ -1109,6 +1109,15 @@ export async function buildSessionConfig(
     // flag when systemPrompt is a string (custom prompt), but our preset
     // shape ({type:"preset",preset:"claude_code",append:...}) honors it.
     excludeDynamicSections: config.excludeDynamicSections,
+    // Phase 127 — propagate stream-stall supervisor threshold from
+    // ResolvedAgentConfig (loader cascade: agent → modelOverrides →
+    // defaults → 180_000 baseline) into AgentSessionConfig so the SDK
+    // adapter threads it into per-handle baseOptions. Spread-conditional
+    // OMIT when undefined preserves byte-stable equality with legacy
+    // builders. Consumers default to 180_000ms.
+    ...(typeof config.streamStallTimeoutMs === "number"
+      ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+      : {}),
     // Phase 117 Plan 04 T05 — advisor model passthrough.
     //
     // Spread-conditional pattern (RESEARCH §6 Pitfall 3): the field is

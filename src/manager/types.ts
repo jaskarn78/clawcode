@@ -198,6 +198,44 @@ export type AgentSessionConfig = {
    * Both conditions must pass per RESEARCH §6 Pitfall 4 + §13.5.
    */
   readonly advisorModel?: string;
+  /**
+   * Phase 127 — stream-stall supervisor threshold (ms). When set, the SDK
+   * adapter (session-adapter.ts createSession/resumeSession) threads it
+   * into the per-handle baseOptions as an adapter-only field; the
+   * persistent-session-handle iteration loop constructs one
+   * `createStreamStallTracker` per turn that aborts the in-flight query
+   * when `Date.now() - lastUsefulTokenAt > streamStallTimeoutMs`.
+   *
+   * UNDEFINED for legacy call sites; consumers default to 180_000ms
+   * (matches `defaults.streamStallTimeoutMs`). Populated by
+   * `session-config.ts:buildSessionConfig` from
+   * `ResolvedAgentConfig.streamStallTimeoutMs` (loader cascade).
+   *
+   * Optional at this boundary mirrors the
+   * `memoryRetrievalTokenBudget?: number` precedent — back-compat with
+   * existing AgentSessionConfig builders (the bootstrap path has a
+   * different return shape).
+   */
+  readonly streamStallTimeoutMs?: number;
+  /**
+   * Phase 127 — operator-injected callback fired on stall trip. Receives
+   * the structured payload (lastUsefulTokenAgeMs, thresholdMs) that the
+   * production wiring also emits via `phase127-stream-stall` log. The
+   * daemon-side wiring (Plan 02) hangs Discord notification + session-log
+   * persistence on this hook; Plan 01 keeps the field type-level only so
+   * the chokepoint is testable in isolation.
+   *
+   * UNDEFINED in this plan — Plan 02 wires the daemon-side
+   * implementation. Production code MUST handle undefined gracefully:
+   * the tracker still emits `phase127-stream-stall` to console.info AND
+   * still aborts the SDK query via the per-handle AbortController, so
+   * the protective behavior works in Plan 01 even before Plan 02 lands
+   * the side-effect surface.
+   */
+  readonly onStreamStall?: (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void;
 };
 
 /**

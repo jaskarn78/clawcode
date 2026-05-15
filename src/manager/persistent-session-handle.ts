@@ -39,7 +39,17 @@ import type {
   PrefixHashProvider,
   SkillTrackingConfig,
   AdvisorObserverConfig,
+  AdapterBaseOptions,
 } from "./session-adapter.js";
+// Phase 127 — stream-stall supervisor module. Single chokepoint for the
+// no-useful-tokens timeout (per feedback_silent_path_bifurcation.md): the
+// production iteration loop AND the test-only wrapSdkQuery path both
+// import this factory so the trip logic is testable in isolation.
+import {
+  createStreamStallTracker,
+  type StreamStallTracker,
+  type StreamStallPayload,
+} from "./stream-stall-tracker.js";
 // Phase 117 Plan 04 T03 — typed advisor event payloads. The observer
 // emits the two events via `advisorObserver.advisorEvents.emit(name, payload)`
 // where payload conforms to these shapes. RESEARCH §13.10 — emitter
@@ -179,7 +189,7 @@ const INTERRUPT_DEADLINE_MS = 2000;
  */
 export function createPersistentSessionHandle(
   sdk: SdkModule,
-  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+  baseOptions: AdapterBaseOptions,
   initialSessionId: string,
   usageCallback?: UsageCallback,
   prefixHashProvider?: PrefixHashProvider,
@@ -208,7 +218,21 @@ export function createPersistentSessionHandle(
 
   // Strip adapter-only fields; enable streaming input mode via AsyncIterable
   // prompt + includePartialMessages for token-level streaming.
-  const { mutableSuffix, ...sdkOptions } = baseOptions;
+  // Phase 127 — also strip the stream-stall supervisor knobs
+  // (`streamStallTimeoutMs` + `onStreamStall`). They are consumed by the
+  // iteration loop below via closure, never by `sdk.query`.
+  const {
+    mutableSuffix,
+    streamStallTimeoutMs: streamStallTimeoutMsOption,
+    onStreamStall: onStreamStallOption,
+    ...sdkOptions
+  } = baseOptions;
+  // Phase 127 — default threshold matches the loader cascade fallback.
+  // When the adapter omitted the field (legacy call site, test path that
+  // didn't thread it through), we still construct the tracker so the
+  // protection is on by default. Operators can disable by setting a
+  // huge value in clawcode.yaml (the schema enforces max 1_800_000ms).
+  const streamStallTimeoutMs = streamStallTimeoutMsOption ?? 180_000;
 
   // FIND-123-A.next T-02 — per-handle mutable PID sink. Populated by
   // `makeDetachedSpawn` on every (re-)spawn the SDK performs for this
@@ -478,6 +502,83 @@ export function createPersistentSessionHandle(
     const blockTextParts: string[] = [];
     let streamedText = "";
     let interruptCalled = false;
+    // Phase 127 — per-turn stream-stall tracker. Constructed at iteration
+    // entry so the threshold + onStall handler are captured fresh each
+    // turn (a yaml hot-reload between turns picks up the new threshold via
+    // the closure-captured baseOptions reference — the tracker re-reads
+    // `streamStallTimeoutMs` from the outer closure at construction time;
+    // mid-turn yaml edits land on the NEXT turn's tracker).
+    //
+    // On trip:
+    //   1. Emit structured `phase127-stream-stall` log line (operator
+    //      grep target: `journalctl -u clawcode | grep phase127-stream-stall`).
+    //   2. Invoke `fireInterruptOnce()` which calls `q.interrupt()` + arms
+    //      the abort-deadline race. The existing INTERRUPT_DEADLINE_MS
+    //      guarantee (2s) ensures the in-flight turn terminates within
+    //      bounded time even if `q.interrupt()` hangs.
+    //   3. Forward payload to `onStreamStallOption` if the operator wired
+    //      one (Plan 02 attaches Discord notification + session-log row).
+    //
+    // The tracker is created BEFORE the for-await loop so a stall
+    // detected before the first message lands still trips. Cleanup
+    // happens in BOTH success (`return`) AND catch paths via
+    // `streamStallTracker.stop()` calls below — T-127-04 mitigation
+    // prevents leaked setIntervals on abort.
+    let streamStallTracker: StreamStallTracker | null = null;
+    try {
+      streamStallTracker = createStreamStallTracker({
+        thresholdMs: streamStallTimeoutMs,
+        onStall: (payload: StreamStallPayload) => {
+          // Single structured log line — operator-visible without
+          // requiring Discord wiring (Plan 02). Mirrors Phase 115
+          // quickwin + Phase 999.54 precedent.
+          try {
+            console.info(
+              "phase127-stream-stall",
+              JSON.stringify({
+                lastUsefulTokenAgeMs: payload.lastUsefulTokenAgeMs,
+                thresholdMs: payload.thresholdMs,
+                sessionId,
+              }),
+            );
+          } catch {
+            // Observational path — never break the trip behavior.
+          }
+          // Hand to the optional operator-injected callback. Plan 02
+          // wires Discord notification + session-log row here.
+          try {
+            onStreamStallOption?.(payload);
+          } catch {
+            // Operator callback failures must not prevent the abort.
+          }
+          // Abort the in-flight turn via the existing interrupt path —
+          // re-uses the 2s deadline race so a misbehaving SDK can't
+          // hang the turn even on trip.
+          fireInterruptOnce();
+        },
+      });
+    } catch (err) {
+      // Tracker construction can throw only for invalid threshold
+      // (defensive guard). Log and continue without the tracker rather
+      // than crashing the turn — protective behavior is missing but
+      // observability is preserved.
+      try {
+        console.error(
+          "phase127-tracker-construction-failed",
+          err instanceof Error ? err.message : String(err),
+        );
+      } catch {
+        // Observational path — never break.
+      }
+    }
+    const stopStreamStallTracker = (): void => {
+      try {
+        streamStallTracker?.stop();
+      } catch {
+        // Idempotent stop, but guard against pathological clearInterval errors.
+      }
+      streamStallTracker = null;
+    };
     /**
      * Phase 115 Plan 08 T01 — per-batch roundtrip timer for sub-scope 17(a).
      * Ported from session-adapter.ts:iterateWithTracing (the test-only path).
@@ -855,23 +956,58 @@ export function createPersistentSessionHandle(
           }
 
           // -- token-level streaming via SDKPartialAssistantMessage --
-          if ((msg as { type?: string }).type === "stream_event" && onChunk !== null) {
+          // Phase 127 — useful-token tracker reset. The SAME predicate that
+          // drives `streamedText` (text_delta) AND a broader predicate
+          // covering tool-use streams (input_json_delta.partial_json) both
+          // mark the tracker so the stall countdown restarts on any visible
+          // forward progress (D-02 anti-pattern definition).
+          if ((msg as { type?: string }).type === "stream_event") {
             const parentToolUseId =
               (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? null;
             if (parentToolUseId === null) {
-              const event = (msg as { event?: { type?: string; delta?: { type?: string; text?: string } } }).event;
-              if (
-                event?.type === "content_block_delta" &&
-                event.delta?.type === "text_delta" &&
-                typeof event.delta.text === "string" &&
-                event.delta.text.length > 0
-              ) {
-                if (!firstTokenEnded) {
-                  firstToken?.end();
-                  firstTokenEnded = true;
+              // Local cast: pick up both delta shapes (text_delta + input_json_delta).
+              // The SDK's real union is wider; we only inspect the two fields the
+              // useful-token predicate cares about.
+              const event = (msg as {
+                event?: {
+                  type?: string;
+                  delta?: {
+                    type?: string;
+                    text?: string;
+                    partial_json?: string;
+                  };
+                };
+              }).event;
+              if (event?.type === "content_block_delta") {
+                const isTextDelta =
+                  event.delta?.type === "text_delta" &&
+                  typeof event.delta.text === "string" &&
+                  event.delta.text.length > 0;
+                const isPartialJson =
+                  event.delta?.type === "input_json_delta" &&
+                  typeof event.delta.partial_json === "string" &&
+                  event.delta.partial_json.length > 0;
+
+                // Phase 127 — mark the tracker on EITHER useful-token type.
+                // This is the production single-chokepoint per
+                // feedback_silent_path_bifurcation.md — the synthetic-stream
+                // tests in __tests__/session-adapter-stream-stall.test.ts
+                // exercise the SAME predicate via the tracker module.
+                if (isTextDelta || isPartialJson) {
+                  streamStallTracker?.markUsefulToken();
                 }
-                streamedText += event.delta.text;
-                onChunk(streamedText);
+
+                // Existing editor pipeline — only text_delta lands in
+                // streamedText; tool-use partial_json never reached the
+                // editor stream pre-127 either.
+                if (onChunk !== null && isTextDelta && event.delta) {
+                  if (!firstTokenEnded) {
+                    firstToken?.end();
+                    firstTokenEnded = true;
+                  }
+                  streamedText += event.delta.text ?? "";
+                  onChunk(streamedText);
+                }
               }
             }
           }
@@ -1015,6 +1151,9 @@ export function createPersistentSessionHandle(
             }
 
             closeAllSpans();
+            // Phase 127 — stop tracker on success exit. Idempotent;
+            // safe to pair with the catch-path stop below (T-127-04).
+            stopStreamStallTracker();
 
             if (typeof resMsg.result === "string" && resMsg.result.length > 0) {
               return resMsg.result;
@@ -1030,9 +1169,17 @@ export function createPersistentSessionHandle(
         // Quick task 260419-nic — clear handle-level interrupt slot on every
         // exit path (success and error). Post-turn handle.interrupt() is a no-op.
         currentInterruptFn = null;
+        // Phase 127 — defense-in-depth: also stop the tracker on any
+        // finally exit so a code path that returns without hitting the
+        // success branch above (e.g. break-out paths added in future
+        // patches) still cleans up the interval (T-127-04).
+        stopStreamStallTracker();
       }
     } catch (err) {
       closeAllSpans();
+      // Phase 127 — stop the tracker on catch path. Defense-in-depth
+      // against AbortError + generator-dead exits (T-127-04 mitigation).
+      stopStreamStallTracker();
       // Quick task 260419-nic — also clear on error path (defense in depth;
       // the try/finally above already clears, but pair this with closeAllSpans).
       currentInterruptFn = null;

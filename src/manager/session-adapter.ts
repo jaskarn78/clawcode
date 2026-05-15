@@ -35,6 +35,35 @@ import { homedir } from "node:os";
 import { join as pathJoin } from "node:path";
 
 /**
+ * Phase 127 — adapter-only fields carried alongside SdkQueryOptions on
+ * the per-handle baseOptions bag. `stripHandleOnlyFields` removes these
+ * before forwarding to `sdk.query` so the SDK never sees unknown keys.
+ *
+ * `mutableSuffix` predates Phase 127 (Phase 52 Plan 02) but is captured
+ * here as a single source of truth for the bag's full shape.
+ *   - mutableSuffix: per-turn prompt-prepend string carried OUTSIDE the
+ *     cached stable prefix (Phase 52 cache hygiene).
+ *   - streamStallTimeoutMs: stream-stall supervisor threshold (Phase
+ *     127). Read by persistent-session-handle.ts + wrapSdkQuery to
+ *     construct a `StreamStallTracker` per turn. Optional — when
+ *     undefined, the tracker defaults to 180_000ms (matches the
+ *     loader cascade default).
+ *   - onStreamStall: callback invoked on stall trip. Plan 02 wires the
+ *     Discord notification + session-log row here; Plan 01 keeps it
+ *     undefined and the production wiring still emits the structured
+ *     `phase127-stream-stall` log line + aborts the SDK query so the
+ *     protective behavior works even without the side-effect surface.
+ */
+export type AdapterBaseOptions = SdkQueryOptions & {
+  readonly mutableSuffix?: string;
+  readonly streamStallTimeoutMs?: number;
+  readonly onStreamStall?: (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void;
+};
+
+/**
  * Phase 115 sub-scope 14 — secret redaction helper for diagnostic dumps.
  *
  * Walks a value structurally; for any object key matching the secret-key
@@ -123,7 +152,7 @@ function redactSecrets<T>(value: T): T {
 async function debugDumpBaseOptions(
   flow: "create" | "resume",
   agentName: string,
-  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+  baseOptions: AdapterBaseOptions,
   dumpEnabled: boolean,
 ): Promise<void> {
   // T03 final state — flag is the SOLE gate. The hardcoded agent-name set
@@ -1084,7 +1113,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     //     settingSources) keeps the ["project"] default.
     // Symmetric edit pattern: resumeSession (below) MUST receive identical
     // treatment — Rule 3 (RESEARCH.md Pitfall ordering pin).
-    const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
+    const baseOptions: AdapterBaseOptions = {
       model: resolveModelId(config.model),
       // Phase 83 EFFORT-04 — narrow v2.2 EffortLevel ("xhigh"/"auto"/"off")
       // to the SDK's start-option subset before assignment. Runtime control
@@ -1104,6 +1133,20 @@ export class SdkSessionAdapter implements SessionAdapter {
       settingSources: config.settingSources ?? ["project"],
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
+      // Phase 127 — propagate stream-stall supervisor knobs from
+      // AgentSessionConfig into baseOptions as adapter-only fields.
+      // `stripHandleOnlyFields` removes them before the bag reaches
+      // sdk.query. The persistent-session-handle iteration loop reads
+      // them via closure to construct one `StreamStallTracker` per turn.
+      // Spread-conditional OMIT when undefined preserves byte-stable
+      // equality with legacy AgentSessionConfig builders. Symmetric
+      // edit: resumeSession (below) MUST mirror — Rule 3.
+      ...(typeof config.streamStallTimeoutMs === "number"
+        ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+        : {}),
+      ...(typeof config.onStreamStall === "function"
+        ? { onStreamStall: config.onStreamStall }
+        : {}),
       ...(mcpServers ? { mcpServers } : {}),
       // Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set
       // (subagent recursion guard injects this in
@@ -1212,7 +1255,7 @@ export class SdkSessionAdapter implements SessionAdapter {
     // from config.gsd?.projectDir and settingSources from config.settingSources
     // ensures a resumed session uses the SAME values the original was created
     // with — no drift on resume. Rule 3 symmetric-edits enforced.
-    const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
+    const baseOptions: AdapterBaseOptions = {
       model: resolveModelId(config.model),
       // Phase 83 EFFORT-04 — narrow same as createSession path. Symmetric
       // edits enforced by RESEARCH.md Pitfall ordering pin.
@@ -1231,6 +1274,17 @@ export class SdkSessionAdapter implements SessionAdapter {
       resume: sessionId,
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
+      // Phase 127 — symmetric mirror of createSession's stream-stall
+      // supervisor wiring above (Rule 3 symmetric-edits). A resumed
+      // session MUST carry the same stall threshold + onStall hook as
+      // the original create call so a daemon restart cannot lose the
+      // protection on a previously-protected session.
+      ...(typeof config.streamStallTimeoutMs === "number"
+        ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+        : {}),
+      ...(typeof config.onStreamStall === "function"
+        ? { onStreamStall: config.onStreamStall }
+        : {}),
       ...(mcpServers ? { mcpServers } : {}),
       // Phase 99 sub-scope N (2026-04-26) — symmetric mirror of createSession's
       // disallowedTools wiring above. A resumed session MUST carry the same
@@ -1301,11 +1355,18 @@ export class SdkSessionAdapter implements SessionAdapter {
  * options to `sdk.query` so the SDK doesn't complain about an unknown key.
  */
 function stripHandleOnlyFields(
-  opts: SdkQueryOptions & { readonly mutableSuffix?: string },
+  opts: AdapterBaseOptions,
 ): SdkQueryOptions {
-  const { mutableSuffix: _mutable, ...rest } = opts as SdkQueryOptions & {
-    mutableSuffix?: string;
-  };
+  // Phase 127 — also strip streamStallTimeoutMs + onStreamStall. The
+  // tracker reads them from the wrapper-level closure, not from the SDK
+  // option bag, so passing them to sdk.query would error with "unknown
+  // option".
+  const {
+    mutableSuffix: _mutable,
+    streamStallTimeoutMs: _stall,
+    onStreamStall: _onStall,
+    ...rest
+  } = opts as AdapterBaseOptions;
   return rest;
 }
 
@@ -1503,7 +1564,7 @@ function narrowEffortForSdkOption(
 function wrapSdkQuery(
   _initialQuery: SdkQuery | undefined,
   sdk: SdkModule,
-  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+  baseOptions: AdapterBaseOptions,
   initialSessionId: string,
   usageCallback?: UsageCallback,
   boundTurn?: Turn,
@@ -1555,7 +1616,7 @@ function wrapSdkQuery(
    */
   function turnOptions(signal?: AbortSignal): SdkQueryOptions {
     const sdkEffort = narrowEffortForSdkOption(currentEffort);
-    const opts: SdkQueryOptions & { readonly mutableSuffix?: string } = {
+    const opts: AdapterBaseOptions = {
       ...baseOptions,
       ...(sdkEffort !== undefined ? { effort: sdkEffort } : {}),
       resume: sessionId,
@@ -1913,7 +1974,24 @@ function wrapSdkQuery(
           const parentToolUseId =
             (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? null;
           if (parentToolUseId === null) {
-            const event = (msg as { event?: { type?: string; delta?: { type?: string; text?: string } } }).event;
+            // Phase 127 — mirror of the persistent-session-handle predicate.
+            // Test path (wrapSdkQuery) recognises BOTH text_delta and
+            // input_json_delta.partial_json so test fixtures that exercise
+            // the wrapSdkQuery code path see the same useful-token semantics
+            // as production. The tracker itself is not wired into this
+            // legacy test-only path because no production caller reaches
+            // wrapSdkQuery; the synthetic-stream tests exercise the tracker
+            // module directly.
+            const event = (msg as {
+              event?: {
+                type?: string;
+                delta?: {
+                  type?: string;
+                  text?: string;
+                  partial_json?: string;
+                };
+              };
+            }).event;
             if (
               event?.type === "content_block_delta" &&
               event.delta?.type === "text_delta" &&
@@ -2335,7 +2413,7 @@ function wrapSdkQuery(
  */
 export type TracedSessionHandleOptions = {
   readonly sdk: SdkModule;
-  readonly baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string };
+  readonly baseOptions: AdapterBaseOptions;
   readonly sessionId: string;
   readonly turn?: Turn;
   readonly usageCallback?: UsageCallback;
