@@ -257,14 +257,53 @@ export class SubagentThreadSpawner {
       // for subagent-spawned threads.
       const messages = Array.from(fetched.values()); // newest first per discord.js
       const subagentChunks: string[] = [];
+      // Phase 999.60 (2026-05-15) — also collect attachments from subagent
+      // bot messages. clawcode_share_file uploads as a Discord ATTACHMENT,
+      // which the pre-999.60 relay walked past silently (text-only). Result:
+      // admin-clawdy received "subagent done, see thread" with no content,
+      // and the operator had to manually ask for the file's contents.
+      //
+      // Auto-dump: collect attachment metadata here (URL, name, size, content-type),
+      // then below — BEFORE the admin-clawdy relay turn fires — fetch each
+      // text-like attachment's content from Discord's CDN and post it into
+      // the parent's main channel (chunked through the 2000-char cap).
+      // Binary or oversized attachments get a one-line announcement with URL.
+      const subagentAttachments: Array<{
+        url: string;
+        name: string;
+        size: number;
+        contentType: string | null;
+      }> = [];
       for (const m of messages) {
         if (!m.author.bot) break; // hit operator follow-up — stop walking
+        if (m.attachments && typeof m.attachments.values === "function") {
+          for (const a of m.attachments.values() as Iterable<{
+            url: string;
+            name?: string;
+            size?: number;
+            contentType?: string | null;
+          }>) {
+            subagentAttachments.push({
+              url: a.url,
+              name: a.name ?? "(unnamed)",
+              size: a.size ?? 0,
+              contentType: a.contentType ?? null,
+            });
+          }
+        }
         if (!m.content || m.content.trim().length === 0) continue; // skip empty/embed-only
         subagentChunks.push(m.content);
       }
-      if (subagentChunks.length === 0) {
-        this.log.info({ threadId, reason: "no-bot-messages" }, "subagent relay skipped");
+      // Reverse to oldest-first so the relay reads in chronological order.
+      subagentAttachments.reverse();
+      if (subagentChunks.length === 0 && subagentAttachments.length === 0) {
+        this.log.info({ threadId, reason: "no-bot-messages-or-attachments" }, "subagent relay skipped");
         return;
+      }
+      if (subagentChunks.length === 0) {
+        // Attachment-only relay — still proceed so the file content reaches the parent.
+        this.log.info({ threadId, attachmentCount: subagentAttachments.length }, "subagent relay: attachments-only path");
+        subagentChunks.push("(no text reply — see attached file(s) below)");
       }
       // Reverse to oldest-first so the relay reads in chronological order.
       const fullSubagentReply = subagentChunks.reverse().join("\n").trim();
@@ -342,6 +381,99 @@ export class SubagentThreadSpawner {
           "subagent relay skipped",
         );
         return;
+      }
+
+      // Phase 999.60 (2026-05-15) — auto-dump subagent attachments into the
+      // parent's main channel BEFORE the admin-clawdy relay turn fires.
+      // For text-like attachments under 100KB, fetch content from Discord
+      // CDN and post chunked (2000-char cap). For binary/oversized, post a
+      // one-line announcement with the URL. Failures here are non-fatal —
+      // the admin-clawdy relay summary still fires afterward.
+      //
+      // Why BEFORE the relay summary: the operator gets the actual content
+      // first, then admin-clawdy's contextual summary. Reverse order would
+      // mean the summary lands on a still-empty channel and the content
+      // arrives later as an apparent afterthought.
+      //
+      // Text-file detection: extension-based first (.md/.txt/.json/.csv/.yaml/
+      // .yml/.log/.sql) with contentType as a tiebreaker. Discord CDN URLs
+      // are public for the lifetime of the message; we don't need auth.
+      if (subagentAttachments.length > 0) {
+        const TEXT_EXT_RE = /\.(md|txt|json|csv|yaml|yml|log|sql|tsv|ini|conf|toml)$/i;
+        const MAX_INLINE_BYTES = 100_000;
+        for (const a of subagentAttachments) {
+          const isText =
+            TEXT_EXT_RE.test(a.name) ||
+            (a.contentType !== null && a.contentType.startsWith("text/"));
+          const tooBig = a.size > MAX_INLINE_BYTES;
+          if (!isText || tooBig) {
+            try {
+              await parentSendable.send(
+                `📎 **${a.name}** (${a.size.toLocaleString()} bytes) — subagent deliverable: ${a.url}`,
+              );
+            } catch (err) {
+              this.log.warn(
+                { threadId, attachmentName: a.name, error: (err as Error).message },
+                "auto-dump attachment announce failed (non-fatal)",
+              );
+            }
+            continue;
+          }
+          let content = "";
+          try {
+            const res = await fetch(a.url);
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status}`);
+            }
+            content = await res.text();
+          } catch (err) {
+            this.log.warn(
+              { threadId, attachmentName: a.name, error: (err as Error).message },
+              "auto-dump attachment fetch failed (non-fatal — falling back to URL announce)",
+            );
+            try {
+              await parentSendable.send(
+                `📎 **${a.name}** (fetch failed; download: ${a.url})`,
+              );
+            } catch { /* swallowed — parent unreachable, nothing to do */ }
+            continue;
+          }
+          const header = `📎 **${a.name}** — subagent deliverable (auto-dumped):\n\n`;
+          const fullText = header + content;
+          let cursor = 0;
+          let chunksSent = 0;
+          while (cursor < fullText.length) {
+            const chunk = fullText.slice(cursor, cursor + 2000);
+            try {
+              await parentSendable.send(chunk);
+              chunksSent++;
+            } catch (err) {
+              this.log.warn(
+                {
+                  threadId,
+                  attachmentName: a.name,
+                  chunkIndex: chunksSent,
+                  cursor,
+                  totalLength: fullText.length,
+                  error: (err as Error).message,
+                },
+                "auto-dump attachment chunk send failed (non-fatal — stopping this attachment)",
+              );
+              break;
+            }
+            cursor += 2000;
+          }
+          this.log.info(
+            {
+              threadId,
+              attachmentName: a.name,
+              attachmentSize: a.size,
+              chunksSent,
+              fullySent: cursor >= fullText.length,
+            },
+            "subagent attachment auto-dumped to parent channel",
+          );
+        }
       }
 
       // Quick task 260501-nfe — mirror bridge.ts:585-665 user-message path.

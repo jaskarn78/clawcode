@@ -1501,6 +1501,156 @@ describe("Phase 100 — relay prompt artifact-paths extension", () => {
       // No content was sent to the parent channel.
       expect(parentChannelSendSpy).not.toHaveBeenCalled();
     });
+
+    // Phase 999.60 (2026-05-15) — auto-dump subagent attachments into parent
+    // channel. Production: research subagent shared its capability-gap table
+    // via clawcode_share_file (Discord attachment); pre-999.60 relay walked
+    // text-only and admin-clawdy received "subagent done" without content.
+    // Operator had to manually ask for the file's contents.
+    it("AD20 (999.60) — text attachment from subagent is auto-fetched + chunked + posted to parent channel BEFORE admin-clawdy relay summary", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-ad20",
+            parentChannelId: "channel-ad20",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-ad20",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      // Subagent thread: one bot message with a .md attachment + brief text
+      const longContent = "# OpenClaw Capability Gaps\n\n| Gap | Severity |\n|---|---|\n" + "| /subagents | high |\n".repeat(50);
+      const subagentMessage = {
+        author: { bot: true },
+        webhookId: "webhook-123",
+        content: "See attached.",
+        attachments: {
+          values: () => [
+            {
+              url: "https://cdn.discordapp.com/attachments/x/y/openclaw-gaps.md",
+              name: "openclaw-gaps.md",
+              size: longContent.length,
+              contentType: "text/markdown",
+            },
+          ][Symbol.iterator](),
+          size: 1,
+        },
+      };
+      const fetched = new Map([["m1", subagentMessage]]);
+      const mockChannel = {
+        id: "thread-ad20",
+        name: "openclaw-agent-capability-gaps",
+        messages: {
+          fetch: vi.fn(async () => fetched),
+        },
+      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-ad20");
+
+      // Stub global fetch — relay calls fetch(a.url) to retrieve CDN content.
+      const origFetch = (globalThis as any).fetch;
+      (globalThis as any).fetch = vi.fn(async (_url: string) => ({
+        ok: true,
+        status: 200,
+        text: async () => longContent,
+      }));
+
+      try {
+        const spawner = new SubagentThreadSpawner({
+          sessionManager,
+          registryPath,
+          discordClient: discordClient as any,
+          turnDispatcher: turnDispatcher as any,
+        });
+
+        await spawner.relayCompletionToParent("thread-ad20");
+
+        // Auto-dump sent at least one parent.send() with the attachment header.
+        const sendCalls = parentChannelSendSpy.mock.calls.map((c) => c[0] as string);
+        const headerCall = sendCalls.find((s) => s.includes("openclaw-gaps.md") && s.includes("auto-dumped"));
+        expect(headerCall).toBeDefined();
+        // Total auto-dump volume covers the full content (header + content > 2 chunks).
+        const dumpedText = sendCalls
+          .filter((s) => s.includes("openclaw-gaps.md") || s.includes("/subagents"))
+          .join("");
+        expect(dumpedText.length).toBeGreaterThan(longContent.length / 2);
+        // admin-clawdy's summary turn also fired (the OK summary mock).
+        expect(turnDispatcher.dispatchStream).toHaveBeenCalled();
+      } finally {
+        (globalThis as any).fetch = origFetch;
+      }
+    });
+
+    it("AD21 (999.60) — binary/oversized attachment falls back to URL announcement (no inline fetch)", async () => {
+      const parentConfig = makeAgentConfig({});
+      sessionManager._setConfig("admin-clawdy", parentConfig);
+      await writeThreadRegistry(registryPath, {
+        bindings: [
+          {
+            threadId: "thread-ad21",
+            parentChannelId: "channel-ad21",
+            agentName: "admin-clawdy",
+            sessionName: "admin-clawdy-sub-ad21",
+            createdAt: Date.now(),
+            lastActivity: Date.now(),
+          },
+        ],
+        updatedAt: Date.now(),
+      });
+
+      const subagentMessage = {
+        author: { bot: true },
+        webhookId: "webhook-123",
+        content: "Generated chart.",
+        attachments: {
+          values: () => [
+            {
+              url: "https://cdn.discordapp.com/attachments/x/y/chart.png",
+              name: "chart.png",
+              size: 2_000_000, // 2MB, well over inline cap
+              contentType: "image/png",
+            },
+          ][Symbol.iterator](),
+          size: 1,
+        },
+      };
+      const fetched = new Map([["m1", subagentMessage]]);
+      const mockChannel = {
+        id: "thread-ad21",
+        name: "chart-gen",
+        messages: { fetch: vi.fn(async () => fetched) },
+      };
+      const discordClient = buildDiscordClient(mockChannel, "channel-ad21");
+
+      const origFetch = (globalThis as any).fetch;
+      const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, text: async () => "(should not be reached)" }));
+      (globalThis as any).fetch = fetchSpy;
+
+      try {
+        const spawner = new SubagentThreadSpawner({
+          sessionManager,
+          registryPath,
+          discordClient: discordClient as any,
+          turnDispatcher: turnDispatcher as any,
+        });
+
+        await spawner.relayCompletionToParent("thread-ad21");
+
+        // Did NOT fetch the binary content.
+        expect(fetchSpy).not.toHaveBeenCalled();
+        // DID announce the URL.
+        const sendCalls = parentChannelSendSpy.mock.calls.map((c) => c[0] as string);
+        const announce = sendCalls.find((s) => s.includes("chart.png") && s.includes("cdn.discordapp.com"));
+        expect(announce).toBeDefined();
+      } finally {
+        (globalThis as any).fetch = origFetch;
+      }
+    });
   });
 });
 
