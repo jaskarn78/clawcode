@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
 status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 + Plan 02 SHIPPED LOCAL (Ramy-active deploy hold on Plan 03); Phase 136 ready for discuss-phase
-stopped_at: "Phase 127 Plan 02 SHIPPED LOCAL 2026-05-15. Daemon-side `onStreamStall` callback wired: Discord webhook notification (verbatim BACKLOG.md line 19 text — em-dash U+2014 pinned via exported constant) + JSONL stall row to `{memoryDir}/events.jsonl` (Phase 124/125 compaction extractor surface). 4 commits: `615bb09` (T-01 sessionLog.recordStall), `43a2273` (T-02 makeStreamStallCallback factory + SessionConfigDeps wiring), `c7ca0bd` (T-03 STALL-04 integration test — 6→7 tests passing), plus this docs commit. Rule-3 deviation: wired at SessionManager.configDeps + buildSessionConfig instead of plan-prescribed daemon.ts (singleton SdkSessionAdapter has no per-agent context; same shape as Plan 01's deviation). Rule-1 bug: corrected `sendAsAgent` → `send` (former is A2A path with EmbedBuilder, wrong signature). Plan 03 (operator deploy + journalctl probe + Opus advisor false-positive check + 24h threshold tuning) HOLDS for Ramy-quiet window per feedback_ramy_active_no_deploy.md. See `.planning/phases/127-no-useful-tokens-stream-timeout/127-02-SUMMARY.md`."
-last_updated: "2026-05-15T15:09:23Z"
+stopped_at: Phase 999.47 context gathered
+last_updated: "2026-05-15T22:05:11.900Z"
 last_activity: 2026-05-15 -- Phase 127 Plan 02 SHIPPED LOCAL (daemon-side stall callback + Discord + JSONL); next surface is Phase 136 discuss-phase or Phase 127 Plan 03 deploy-gated verification
 progress:
   total_phases: 82
-  completed_phases: 25
-  total_plans: 151
-  completed_plans: 148
-  percent: 30
+  completed_phases: 26
+  total_plans: 155
+  completed_plans: 150
+  percent: 32
 ---
 
 # Project State
@@ -781,7 +781,7 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-05-13
-Stopped at: Phase 116 SHIPPED + Usage-page reframe (116-postdeploy). Operator complaint resolved: dashboard `/dashboard/v2/costs` → `/dashboard/v2/usage` with subscription utilisation (5h + 7d + Opus/Sonnet carve-outs) as the primary surface and theoretical API-equivalent USD demoted to a collapsible section. 4 commits: `01d633f` (backend `/api/usage` + `list-rate-limit-snapshots-fleet` IPC + hooks), `c7786b5` (Usage page redesign in-place), `ed729b0` (nav rename + `/costs` SPA alias), plus this docs commit. See `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-USAGE-REDESIGN.md`. Code-only — Ramy-active deploy hold continues. Predecessor stop point: Plan 116-06 closes the phase. 3 commits: `f863757` (T08 cutover flag), `d6510ff` (T01+T04+T07 backend), `7e6b531` (T01-T05+T07 frontend). F19 swim-lane DEFERRED out of phase per 116-DEFERRED.md.
+Stopped at: Phase 999.47 context gathered
 Resume: Phase 116 is code-complete at the source level. Awaiting operator decisions: (1) deploy clearance — Ramy-active deploy hold continues until operator explicit clearance; (2) cutover flag flip — `clawcode config set defaults.dashboardCutoverRedirect true` once operator has soaked /dashboard/v2/ for one or more sessions and reviewed `/dashboard/v2/audit` to confirm dashboard mutations are captured; (3) decommission follow-up — separate commit removing legacy `src/dashboard/static/*` files + the cutover-flag plumbing once the operator is confident the cutover is durable. See `116-VERIFICATION.md` for the operator handoff checklist + telemetry signals to watch + rollback procedure.
 
 **Open follow-ups (deferred from Phase 116):**
