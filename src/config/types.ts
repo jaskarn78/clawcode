@@ -175,6 +175,21 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // path as subagentReaper above. The daemon's quiescence sweep reads
   // `config.defaults.subagentCompletion` on each 60s tick.
   "defaults.subagentCompletion",
+  // Phase 127 — stream-stall supervisor threshold (no-useful-tokens
+  // timeout). The setInterval checker in persistent-session-handle.ts +
+  // wrapSdkQuery re-reads the live ResolvedAgentConfig.streamStallTimeoutMs
+  // on every tick (interval Math.min(threshold/4, 30_000)ms), so a yaml
+  // edit picked up by ConfigWatcher applies to the very next stall-check
+  // pass without daemon restart. Per-model overrides
+  // (defaults.modelOverrides.<haiku|sonnet|opus>.streamStallTimeoutMs)
+  // are read by the loader resolver at agent-start; live reload re-runs
+  // the resolver via ConfigReloader so per-model edits propagate the
+  // same tick. Mirrors the closure-re-read pattern from Phase 90 MEM-03
+  // (memoryRetrievalTopK) — see types.ts:78-83 above. Doc-of-intent +
+  // hot-reload boundary documented per Phase 999.54-03 precedent.
+  "agents.*.streamStallTimeoutMs",
+  "defaults.streamStallTimeoutMs",
+  "defaults.modelOverrides",
   // Phase 100 GSD-07 — settingSources + gsd.projectDir DELIBERATELY EXCLUDED
   // from RELOADABLE_FIELDS. See NON_RELOADABLE_FIELDS below + Plan 100-02
   // session-adapter wiring for rationale: both fields are SDK session-boot
