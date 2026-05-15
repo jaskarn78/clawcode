@@ -25,15 +25,56 @@
 
 ## Phases
 
-### v2.9 Reliability & Routing (Phases 119-125) - OPENED 2026-05-13
+### v2.9 Reliability & Routing (Phases 119-125) - CODE-COMPLETE 2026-05-14, deploy_pending
 
-- [ ] **Phase 119: A2A Delivery Reliability** — port bot-direct fallback into `post_to_agent` + webhook identity-cache invalidation + queue-state icon transitions + suppress `projects` agent HEARTBEAT_OK leak (covers A2A-01..04)
-- [ ] **Phase 120: Dashboard Observability Cleanup** — tool-rollup SQL guard + null-percentile neutral styling + empty-state message + split-latency producer regression + `tool-latency-audit` CLI verify (covers DASH-01..05)
-- [ ] **Phase 121: Subagent UX Completion + Chunk-Boundary** — premature-completion gate (stream-drained AND delivery-confirmed) + off-by-3 seam fix at editor/overflow boundary + `splitMessage` sibling audit (covers SUB-01..02)
-- [ ] **Phase 122: Discord Table Auto-Wrap Universalization** — wire `wrapMarkdownTablesInCodeFence` at the transport boundary so every outbound Discord send path inherits the wrap (covers DISC-01)
-- [ ] **Phase 123: MCP Lifecycle Verification Soak** — execution of pre-written plans 999.6-02 + 999.14-02 + 999.15-04 across cold restart / per-agent restart / forced respawn (covers MCP-01..03; soak window largely satisfied as of 2026-05-13)
-- [ ] **Phase 124: Operator-Triggered Session Compaction** — first-class `clawcode session compact <agent>` CLI + `/compact` Discord admin command + heartbeat-policy decoupling of reset vs compaction; promoted from 999.51 (operator-pain item 2026-05-13)
-- [ ] **Phase 125: Intelligent Auto-Compaction Strategy** — tiered retention algorithm (verbatim / structured / prose / drop) + active-state header + auto-compact-at threshold; depends on 124; promoted from 999.52 (operator-pain item 2026-05-13)
+All v2.9 phases code-complete locally; production visual/soak verification gated on next Ramy-quiet deploy window. Full audit at `.planning/milestones/v2.9-MILESTONE-AUDIT.md`. Per-phase summaries: `119-PHASE-SUMMARY.md` / `120-FINAL-SUMMARY.md` / `121-PHASE-SUMMARY.md` / `122-PHASE-SUMMARY.md` / `123-VERIFICATION.md` / `124-PHASE-SUMMARY.md` / `125-PHASE-SUMMARY.md`.
+
+- [x] **Phase 119: A2A Delivery Reliability** — code-complete; SC-1/SC-2/SC-5 verified; SC-3 (screenshot) + SC-4 (24h soak) deploy-gated
+- [x] **Phase 120: Dashboard Observability Cleanup** — complete-with-1-deferral-and-1-deploy-block
+- [x] **Phase 121: Subagent UX Completion + Chunk-Boundary** — code-complete; SC-3 (24h `seamGapBytes:0`) deploy-gated
+- [x] **Phase 122: Discord Table Auto-Wrap Universalization** — code-complete + sanctioned deviation; SC-2 (4-channel screenshots) deploy-gated
+- [x] **Phase 123: MCP Lifecycle Verification Soak** — partial; Variant-A transient orphans flagged as Pattern-C latent finding (follow-up)
+- [x] **Phase 124: Operator-Triggered Session Compaction** — code-complete; auto-trigger sentinel + dashboard sparkline deploy-gated
+- [x] **Phase 125: Intelligent Auto-Compaction Strategy** — code-complete; SC-5 (A/B agreement) + SC-6 (first-token < 8 s) deploy-gated
+
+### v3.0 Architectural Surface Expansion + Operator-Pain Backlog (Phases 126-135) - OPENED 2026-05-15
+
+Promoted from operator's 2026-05-15 v3.0 scope. Full milestone scope + bundle structure + execution order: `.planning/milestones/v3.0-ROADMAP.md`. Per-phase research/plan artifacts live in each `999.x-*` dir (preserved on disk for git-history continuity); phase numbers below are the v3.0-promoted IDs.
+
+**Wave 1 — operator-pain hotfix-to-architecture closeouts + small lifts:**
+- [ ] **Phase 126: Subagent Context Isolation closeout (999.57 Plans 02/03)** — close memory-retrieval inheritance leak + heartbeat-runner full ownership transition + verification across both 2026-05-15 failure modes; Plans 02/03 already written, executable immediately
+- [ ] **Phase 127: No-useful-tokens stream timeout (999.61)** — SDK-level "no useful content tokens for N seconds → fail turn" supervisor; closes 2026-05-14 fin-acq 16-min stall pattern
+- [ ] **Phase 128: clawcode usage accuracy fixes (999.4)** — usage CLI/dashboard `resetsAt` unit fix + utilization-derive consistency; needs discuss-phase to enumerate concrete bugs (EMPTY DIR)
+- [ ] **Phase 129: clawcode status finish-up fallbacks (999.5)** — honest "N/A" for missing-source data instead of misleading zero/empty/stale; needs discuss-phase (EMPTY DIR)
+
+**Wave 2 — plugin SDK + tmux skill:**
+- [ ] **Phase 130: Manifest-driven plugin SDK (999.58)** — lift OpenClaw's `plugin-sdk` manifest pattern; type-checked capability vocabulary + daemon-side validation at load time
+- [ ] **Phase 131: tmux remote-control skill (999.50)** — port from OpenClaw `skills/tmux/` as first-class manifest skill; `/tmux` Discord slash; prereq for v3.1 Phase 134 (drives interactive Claude Code CLI)
+
+**Wave 3 — architectural surface expansion:**
+- [ ] **Phase 132: Autonomous skill creation (999.59)** — Hermes-Agent learning-loop pattern; agent proposes skill drafts after long successful turns, staged for operator review
+- [ ] **Phase 133: ClawCode as MCP server (999.60)** — expose `delegate_task` / `ask_agent` / `task_status` over MCP; external Claude Code / Cursor / OpenClaw can route work to ClawCode agents without Discord
+
+**Wave 4 — feature lifts (deferral-conditional or large):**
+- [ ] **Phase 134: MCP broker hot-reload (999.53)** — DEFERRED pending Plan 94-08 / config-mutator infra; promote mid-milestone if 94-08 lands
+- [ ] **Phase 135: Discord voice channel support (999.56)** — port from OpenClaw `extensions/discord/src/voice/` (24 files); `/vc {join,leave,status}` slash + voice bridge
+
+### v3.1 Multi-LLM Runtime + Subscription-Pool Fallback (Phases 136-142) - PROPOSED 2026-05-15
+
+Triggered by Anthropic's 2026-05-14 Agent SDK credit policy (effective **2026-06-15**). Full scope: `.planning/milestones/v3.1-ROADMAP.md`. Anchor BACKLOG: `.planning/phases/999.62-llm-runtime-multi-backend-and-claude-code-fallback/BACKLOG.md`.
+
+**Hard-deadline track (must land before 2026-06-15):**
+- [ ] **Phase 136: LlmRuntimeService seam + AnthropicAgentSdk backend extraction** (Wave 1) — no behavior change; mirrors Phase 117 advisor-seam pattern
+- [ ] **Phase 137: AnthropicApiKey backend + per-agent `llmRuntime.backend` config** (Wave 2) — operator can flip any agent to direct API billing
+- [ ] **Phase 138: Credit telemetry + Discord 75/90/99% alerts + auto-failover at 95%** (Wave 3) — operational visibility before deeper engineering
+
+**Probe-gated track:**
+- [ ] **Phase 139: Concurrent-session probe + tmux optimization spike** (Wave 4.5) — LOAD-BEARING; gates Phase 140
+- [ ] **Phase 140: ClaudeCodeInteractive backend** (Wave 4) — drives real `claude` binary via `node-pty` + persistent REPL; conditional on Phase 139 probe pass
+
+**Strategic track:**
+- [ ] **Phase 141: OpenAiCodex backend + tool-use schema translator** (Wave 5) — decouple from Anthropic; tool-use parity is long pole
+- [ ] **Phase 142: OpenRouter passthrough backend** (Wave 6) — single gateway to Gemini, DeepSeek, MiniMax, etc.
 
 <details>
 <summary>v1.0 Core Multi-Agent System (Phases 1-5) - SHIPPED 2026-04-09</summary>
