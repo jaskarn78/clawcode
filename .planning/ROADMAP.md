@@ -263,8 +263,8 @@ All fields render genuine data; `Consolidated: never` is a truthful sentinel (no
   8. `verify.sh` exits 0 against the populated inventory; exits non-zero if any inventoried item is unreachable.
 
 **Plans:** 4 plans
-- [ ] 999.47-01-PLAN.md — Repo scaffold on clawdy + initial anchor inventory (SC-1, SC-6) — operator-gated
-- [ ] 999.47-02-PLAN.md — Daemon homelab-refresh heartbeat tick + .refresh-last.json schema + clawcode homelab reindex CLI (SC-2, SC-4, SC-7) — autonomous
+- [x] 999.47-01-PLAN.md — Repo scaffold on clawdy + initial anchor inventory (SC-1, SC-6) — operator-gated
+- [x] 999.47-02-PLAN.md — Daemon homelab-refresh heartbeat tick + .refresh-last.json schema + clawcode homelab reindex CLI (SC-2, SC-4, SC-7) — autonomous
 - [ ] 999.47-03-PLAN.md — refresh.sh + verify.sh + drift quarantine + lib/ pollers + deploy-to-clawdy.sh (SC-2, SC-3, SC-8) — operator-gated
 - [ ] 999.47-04-PLAN.md — workspace.ts pointer-line bake-in + seed-memory-pointer.sh fleet backfill (SC-5) — operator-gated
 

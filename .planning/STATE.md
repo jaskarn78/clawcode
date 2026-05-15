@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
 status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 + Plan 02 SHIPPED LOCAL (Ramy-active deploy hold on Plan 03); Phase 136 ready for discuss-phase
-stopped_at: Phase 999.47 context gathered
-last_updated: "2026-05-15T22:05:11.900Z"
-last_activity: 2026-05-15 -- Phase 127 Plan 02 SHIPPED LOCAL (daemon-side stall callback + Discord + JSONL); next surface is Phase 136 discuss-phase or Phase 127 Plan 03 deploy-gated verification
+stopped_at: Phase 999.47 Plan 02 SHIPPED LOCAL (homelab daemon refresh tick + reindex CLI + telemetry)
+last_updated: "2026-05-15T23:22:00.000Z"
+last_activity: 2026-05-15 -- Phase 999.47 Plan 02 SHIPPED LOCAL (5 commits 74c498a..00672fd; 36 new tests; CHECK_REGISTRY 13→14; defaults.homelab wired through ResolvedAgentConfig). Next: Plan 03 (refresh.sh body) or back to Phase 136 discuss-phase.
 progress:
-  total_phases: 82
+  total_phases: 83
   completed_phases: 26
-  total_plans: 155
-  completed_plans: 150
-  percent: 32
+  total_plans: 159
+  completed_plans: 152
+  percent: 31
 ---
 
 # Project State
