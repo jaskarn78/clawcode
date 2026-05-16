@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
-status: v3.0 + v3.1 BOTH OPEN; Phase 101 SHIPPED-WITH-CARRYOVERS on clawdy (RAG engine live, SC-8 PARTIAL pending operator real-truth Pon fixture); Phase 999.47 SHIPPED LIVE; Phase 136 ready for discuss-phase
-stopped_at: Phase 101 SHIPPED (Plans 01-05 closed; 2 deploy-script emergency fixes baked in; SC-1..7 + SC-10 MET; SC-8 PARTIAL synthetic fixture; 24h soak underway from 08:32 PDT)
-last_updated: "2026-05-16T15:57:00.000Z"
-last_activity: 2026-05-16 -- Phase 101 SHIPPED LIVE on clawdy via operator-authorized Plan 05. Overnight autonomous chain ran Plans 01-04 cleanly (26 commits). Plan 05 deploy uncovered 2 incidents both now hardened in scripts/deploy-clawdy.sh (f488778 npm-ci-on-lockfile-change, f22fabb musl-variant-disable). Daemon live at pid 3513500. 31 MCP tools advertised including ingest_document; SC-1..7 + SC-10 MET in code+live. SC-8 PARTIAL — tests/fixtures/pon-2024-truth.json carries _SYNTHETIC_PLACEHOLDER flag; operator swaps in real Pon 2024 values to close SC-8. 24h soak starts 2026-05-16 ~08:32 PDT.
+status: v3.0 + v3.1 BOTH OPEN; Phase 999.43 SHIPPED LIVE on clawdy (auto-ingest Discord attachments + two-axis priority — all 9 SC met, real Discord upload UAT'd); Phase 101 SHIPPED-WITH-CARRYOVERS (RAG engine live, SC-8 PARTIAL pending operator real-truth Pon fixture); Phase 999.47 SHIPPED LIVE; Phase 136 ready for discuss-phase
+stopped_at: Phase 999.43 SHIPPED (5 plans closed; SC-A..SC-I all MET; 32 MCP tools live including clawcode_rag_set_priority; documents-table populated by both real Discord upload + synthetic IPC UAT; 24h soak underway from 15:39 PDT)
+last_updated: "2026-05-16T22:50:00.000Z"
+last_activity: 2026-05-16 -- Phase 999.43 SHIPPED LIVE. Operator authorized deploy + chose Claude-driven UAT. Real Discord upload (image0.jpg by jjagpal at 15:36:45) auto-ingested through the full bridge → IPC → Phase 101 engine path — proves SC-I end-to-end on the deployed daemon. Synthetic IPC UAT at 15:39:25 confirms D-01 multipliers verbatim (agent_weight=1.5 from yaml HIGH, content_weight=0.5 from PDF<100KB LOW). Documents-table provenance row landed with all 8 D-04 fields. Two findings: (1) autoIngestAttachments hot-reload bug — workaround restart; Phase 999.43-fu candidate; (2) synthetic ASCII PDFs fail pdf-parse — use reportlab for fixtures. Daemon live at pid 3792248. Zero new npm/apt deps. Deploy-script Phase 101-fu hardenings verified active.
 progress:
   total_phases: 83
   completed_phases: 27

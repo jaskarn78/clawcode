@@ -2493,7 +2493,9 @@ Hermes supports progressive skill refinement (patch → edit → create). ClawCo
 
 **Priority:** Medium — architectural gaps, not feature requests. A is highest-value (retrieval quality directly affects agent performance).
 
-### Phase 999.43: Auto-ingest Discord file attachments into document store with two-axis priority (ACTIVE — promoted 2026-05-08, depends on Phase 101)
+### Phase 999.43: Auto-ingest Discord file attachments into document store with two-axis priority — SHIPPED 2026-05-16
+
+**Status:** SHIPPED LIVE on clawdy 2026-05-16 ~14:43 PDT (pid 3792248). 5 plans closed, ~14 atomic commits + 5 SUMMARYs, ~41 new tests passing. SC-A..SC-I all MET. Live UAT evidence: real Discord upload by operator (image0.jpg, 15:36:45 PDT) auto-ingested through full bridge → IPC → Phase 101 engine path; synthetic IPC test (15:39:25 PDT) confirms D-01 multipliers verbatim (agent_weight=1.5 from HIGH yaml, content_weight=0.5 from PDF<100KB LOW). Documents-table provenance rows populated with all 8 D-04 fields. Zero new npm/apt deps. Phase 101-fu deploy-script hardenings verified active. **Two carry-over followups** captured in 999.43-05-SUMMARY: (1) `autoIngestAttachments` hot-reload bug — required restart for yaml flip to propagate; (2) synthetic test PDFs need `reportlab` (ASCII-only fails pdf-parse). See `.planning/phases/999.43-auto-ingest-discord-attachments-two-axis-priority/999.43-05-SUMMARY.md` for full deploy timeline.
 
 **Source:** Operator request 2026-05-08, enriched 2026-05-08 with two-axis priority + content classification spec after operator clarified: *"in fin-acq uploads client interaction screenshots, or client pdfs or any type of files, they should have much higher priority weight than if he sends a screenshot of a webpage for a form he's trying to fill out or a random image that's less likely to be queried in the future."*
 
@@ -2605,7 +2607,12 @@ Result: ~6× signal-to-noise spread between high-signal client-doc-from-priority
 - Phase 49 RAG infrastructure (already shipped) — ingestion engine
 - Phase 90 per-agent isolation lock — chunks scoped per-agent
 
-**Plans:** TBD (run /gsd-plan-phase 999.43 after Phase 101 ships)
+**Plans:** 5 plans
+- [ ] 999.43-01-PLAN.md — Classifier + schema + documents provenance table (SC-B, SC-C)
+- [ ] 999.43-02-PLAN.md — Discord attachment auto-ingest dispatcher + D-04 provenance (SC-A, SC-H)
+- [ ] 999.43-03-PLAN.md — D-02 score formula in both query surfaces (SC-D)
+- [ ] 999.43-04-PLAN.md — Override surfaces: emoji + MCP + CLI (SC-E, SC-F, SC-G)
+- [ ] 999.43-05-PLAN.md — Deploy + UAT + phase-end push (SC-I, autonomous: false)
 
 **Status:** ACTIVE — promoted 2026-05-08 from BACKLOG with enriched two-axis priority spec. Estimated 15-25 executor hours across ~3-4 plans. **Promotion target: v2.8 milestone (Performance + Reliability)** — fits the milestone theme + unblocks fin-acquisition's daily client-doc workflow.
 
