@@ -11006,9 +11006,12 @@ async function routeMethod(
       }
 
       const embedder = manager.getEmbedder();
-      const embeddings: Float32Array[] = [];
+      // CF-2 (Phase 101 D-09): document write path uses embedV2 (bge-small int8).
+      // The vec_document_chunks vec0 table is int8[384] — Float32 embeddings
+      // would fail the MATCH operator's type check.
+      const embeddings: Int8Array[] = [];
       for (const chunk of chunks) {
-        embeddings.push(await embedder.embed(chunk.content));
+        embeddings.push(await embedder.embedV2(chunk.content));
       }
 
       const result = docStore.ingest(source, chunks, embeddings);
@@ -11027,7 +11030,12 @@ async function routeMethod(
       }
 
       const embedder = manager.getEmbedder();
-      const queryEmbedding = await embedder.embed(query);
+      // CF-2 (Phase 101 D-09): search-documents query embedding must match
+      // the int8[384] vec_document_chunks column the write path now produces.
+      // Rule 3 deviation: plan named only the write path at line 11011, but
+      // leaving search on Float32 .embed() would break every search call
+      // post-migration. Documented in 101-01-SUMMARY.md.
+      const queryEmbedding = await embedder.embedV2(query);
       const results = docStore.search(queryEmbedding, limit, source);
 
       return {
