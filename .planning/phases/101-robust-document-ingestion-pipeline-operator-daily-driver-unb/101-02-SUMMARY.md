@@ -207,6 +207,87 @@ None. The plan's `<threat_model>` enumerated T-101-05 through T-101-08; all are 
 
 No new threat surface introduced beyond what the model documented.
 
+## Post-Summary Addendum (2026-05-16 post-advisor review)
+
+After the summary commit, an advisor review caught one defect and one
+unrelated leak. Both addressed via follow-up commits — atomic-commit-per-
+task discipline preserved (no `--amend`).
+
+### Addendum 1 — Backend-threading fix (commit `a1b6495`)
+
+The daemon's ingest-document handler parsed `backend` from the MCP tool
+input and then wrote `void backend;` without ever threading it to the
+engine. `IngestOptions` in `src/document-ingest/types.ts` had no `backend`
+field, and `src/document-ingest/index.ts`'s `ocrPage` call only passed
+`taskHint`. Net effect: `backend: 'mistral'` from the MCP tool never
+reached `ocrPage` → the D-08 config gate never fired → the
+`'mistral-disabled'` alert path was unreachable in production. This was
+a violation of `must_haves.truths`: "Mistral OCR backend is selectable
+only when `defaults.documentIngest.allowMistralOcr === true`; otherwise
+throws 'not yet implemented'."
+
+The original test suite missed this because `mcp-tool.test.ts` only did
+static-source grep and `alerts.test.ts` called `recordIngestAlert`
+directly — no end-to-end dispatch coverage. Fix (3 source sites + 2
+new E2E tests):
+
+1. `src/document-ingest/types.ts`: `IngestOptions.backend?: OcrBackend`.
+2. `src/document-ingest/index.ts`: `ocrPage(buf, { taskHint, backend })`.
+3. `src/manager/daemon.ts`: `ingestDocumentEngine(buf, path, {taskHint, backend})`;
+   removed the stale `void backend;` line.
+4. `tests/document-ingest/extractor.test.ts`: new "T04 backend threading"
+   describe block with 2 cases that drive the engine end-to-end via the
+   `sample.png` fixture (image handler → ocrPage → Mistral gate) — proves
+   both the `allowMistralOcr=false` rejection and the `allowMistralOcr=true`
+   reaches-the-stub paths.
+
+Test count: 74 → 76. tsc clean. SC-7 coverage now genuinely complete.
+
+### Addendum 2 — Plan 03 CF-1 leak revert (commit `413a466`)
+
+The backend-threading fix commit (`a1b6495`) also contained two files
+that did NOT belong to Plan 02:
+- `src/memory/memory-chunks.ts` — modified to add a `document:` prefix
+  branch to `applyTimeWindowFilter`'s allow-list.
+- `tests/memory/applyTimeWindowFilter.test.ts` — new regression guard.
+
+This is Phase 101 Plan 03 CF-1 work (per D-03 / CF-1 — Phase 90 RRF must
+surface document-prefixed chunks past the 14-day session-note expiry).
+It must NOT live in a Plan 02 commit per the operator's atomic-commit-
+per-task hard rule.
+
+Reverted in commit `413a466`:
+- `src/memory/memory-chunks.ts` restored to the pre-`a1b6495` state.
+- `tests/memory/applyTimeWindowFilter.test.ts` deleted.
+
+Plan 03 re-adds the identical diff under its own task ID.
+
+**Open concern (source of the leak not identified):** `git status --short`
+immediately before the `a1b6495` commit showed only the unrelated
+`skills/new-reel/*` deletions; the memory-chunks.ts modification and the
+new test file appeared between the last test run and the commit. No
+Edit/Write tool call in this session covered those paths. Candidates:
+background agent run, pre-commit hook, external worktree write, or
+upstream process. Verification gate `git diff afeaa61 HEAD -- src/memory/
+tests/memory/` returns empty output after the revert — Plan 02 leaves
+the memory subtree untouched as intended.
+
+### Updated commit ledger for Plan 02
+
+| # | Hash       | Type    | Description |
+|---|------------|---------|-------------|
+| 1 | `edb0eb7`  | feat    | T02 — `ExtractedTaxReturn` schema + registry |
+| 2 | `a0eed0c`  | feat    | T03 — structured extraction + Mistral stub + config knob |
+| 3 | `f31e2b7`  | feat    | T04 — `ingest_document` MCP tool |
+| 4 | `699fcf1`  | feat    | T05 — fail-mode alerts to admin-clawdy |
+| 5 | `afeaa61`  | docs    | Plan 02 summary |
+| 6 | `a1b6495`  | fix     | backend-threading (advisor-caught) |
+| 7 | `413a466`  | revert  | Plan 03 CF-1 leak revert |
+| 8 | (this one) | docs    | summary addendum |
+
+T01-CHECKPOINT auto-resolved via the synthetic fixture at `55e590c`
+(committed before this plan executor ran). No separate T01 commit.
+
 ## Self-Check: PASSED
 
 - src/document-ingest/schemas/extracted-tax-return.ts: FOUND
@@ -223,4 +304,9 @@ No new threat surface introduced beyond what the model documented.
 - T03 commit a0eed0c: FOUND
 - T04 commit f31e2b7: FOUND
 - T05 commit 699fcf1: FOUND
-- All 74 vitest cases under tests/document-ingest/ pass; tsc clean.
+- Summary commit afeaa61: FOUND
+- Backend-threading fix a1b6495: FOUND
+- Plan 03 leak revert 413a466: FOUND
+- All 76 vitest cases under tests/document-ingest/ pass; tsc clean.
+- Plan 02 leaves the memory subtree untouched: `git diff afeaa61 HEAD --
+  src/memory/ tests/memory/` returns empty output.
