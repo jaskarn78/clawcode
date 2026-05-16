@@ -10,11 +10,13 @@
 #      rsync dist/dashboard/spa/ → clawdy:~/clawcode-staging-spa/   (when present)
 #      rsync .planning/ → clawdy:~/clawcode-staging-planning/        (when present)
 #      rsync per-agent prompt-corpus → clawdy:~/clawcode-staging-agents/<name>/  (Phase 999.55)
+#      rsync package.json + package-lock.json → clawdy:~/clawcode-staging-deps/  (Phase 101-fu, only when lockfile md5 changed)
 #   3. ssh + sudo -S         (password piped from ~/.clawcode-deploy-pw)
 #      - cp staging → /opt/clawcode/dist/cli/index.js
 #      - rsync --delete spa staging → /opt/clawcode/dist/dashboard/spa/  (when present)
 #      - chown -R clawcode:clawcode /opt/clawcode/dist/dashboard/spa
 #      - rsync (NO --delete) agent staging → /home/clawcode/.clawcode/agents/<name>/  (Phase 999.55)
+#      - cp package.json + package-lock.json + `sudo -u clawcode npm ci`  (Phase 101-fu, only when staged)
 #      - systemctl restart clawcode (skip with --no-restart)
 #   4. md5 verification (daemon bundle); ls check (SPA bundle); presence check (per-agent AGENTS.md)
 #
@@ -51,6 +53,13 @@ SPA_OWNER="${CLAWCODE_DEPLOY_SPA_OWNER:-clawcode:clawcode}"
 # .planning/quick/, and .planning/ROADMAP.md.
 PLANNING_DIR="$REPO_ROOT/.planning"
 PLANNING_STAGING="${CLAWCODE_DEPLOY_PLANNING_STAGING:-/home/jjagpal/clawcode-staging-planning}"
+# Phase 101-fu 2026-05-16 — also sync package.json + package-lock.json so that
+# new npm deps (added in any phase) are present on clawdy at restart time.
+# Before this, a deploy that introduced new runtime deps would crashloop with
+# ERR_MODULE_NOT_FOUND because /opt/clawcode/node_modules was untouched.
+DEPS_STAGING="${CLAWCODE_DEPLOY_DEPS_STAGING:-/home/jjagpal/clawcode-staging-deps}"
+DEPS_DEPLOY_ROOT="${CLAWCODE_DEPLOY_DEPS_TARGET:-/opt/clawcode}"
+DEPS_OWNER="${CLAWCODE_DEPLOY_DEPS_OWNER:-clawcode:clawcode}"
 PLANNING_DEPLOY="${CLAWCODE_DEPLOY_PLANNING_TARGET:-/opt/clawcode/.planning}"
 PLANNING_OWNER="${CLAWCODE_DEPLOY_PLANNING_OWNER:-clawcode:clawcode}"
 
@@ -131,6 +140,18 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "  ssh $HOST 'which tesseract'  # Phase 101 D-01 precheck"
   [ "$DO_BUILD" = 1 ]   && echo "  npm run build"
   echo "  rsync -avz $DIST_FILE $REMOTE_USER@$HOST:$STAGING_PATH"
+  # Phase 101-fu — lockfile md5 check; on mismatch stage + npm ci.
+  if [ -f "$REPO_ROOT/package.json" ] && [ -f "$REPO_ROOT/package-lock.json" ]; then
+    LOCAL_LOCK_MD5=$(md5sum "$REPO_ROOT/package-lock.json" | awk '{print $1}')
+    REMOTE_LOCK_MD5=$(ssh "$HOST" "md5sum '$DEPS_DEPLOY_ROOT/package-lock.json' 2>/dev/null | awk '{print \$1}'" 2>/dev/null || echo "MISSING")
+    [ -z "$REMOTE_LOCK_MD5" ] && REMOTE_LOCK_MD5="MISSING"
+    if [ "$LOCAL_LOCK_MD5" != "$REMOTE_LOCK_MD5" ]; then
+      echo "  rsync -avz $REPO_ROOT/{package.json,package-lock.json} $REMOTE_USER@$HOST:$DEPS_STAGING/"
+      echo "  ssh $HOST 'sudo -u clawcode bash -c \"cd $DEPS_DEPLOY_ROOT && npm ci --no-audit --no-fund\"'  # lockfile md5 ${REMOTE_LOCK_MD5:0:8} → ${LOCAL_LOCK_MD5:0:8}"
+    else
+      echo "  # deps skipped (lockfile unchanged, md5 ${LOCAL_LOCK_MD5:0:8})"
+    fi
+  fi
   if [ -d "$REPO_ROOT/dist/dashboard/spa" ]; then
     echo "  rsync -avz --delete $REPO_ROOT/dist/dashboard/spa/ $REMOTE_USER@$HOST:$SPA_STAGING/"
     echo "  ssh $HOST 'sudo -S sh -c \"cp $STAGING_PATH $DEPLOY_PATH && rsync -a --delete $SPA_STAGING/ $SPA_DEPLOY/ && chown -R $SPA_OWNER $SPA_DEPLOY\"'"
@@ -229,6 +250,27 @@ if [ -d "$PLANNING_DIR" ] && [ -f "$PLANNING_DIR/ROADMAP.md" ]; then
   echo "  ✓ planning staged ($PLANNING_FILES files)"
 fi
 
+# Phase 101-fu 2026-05-16 — Stage package.json + package-lock.json, but only
+# trigger remote `npm ci` when the lockfile actually changed. Compare md5s
+# locally; if mismatch (or remote is MISSING), stage + flag DEPLOY_DEPS=1.
+# This keeps the steady-state deploy fast (zero npm work when deps haven't
+# moved) while making lockfile-bumped deploys self-healing.
+DEPLOY_DEPS=0
+if [ -f "$REPO_ROOT/package.json" ] && [ -f "$REPO_ROOT/package-lock.json" ]; then
+  LOCAL_LOCK_MD5=$(md5sum "$REPO_ROOT/package-lock.json" | awk '{print $1}')
+  REMOTE_LOCK_MD5=$(ssh "$HOST" "md5sum '$DEPS_DEPLOY_ROOT/package-lock.json' 2>/dev/null | awk '{print \$1}'" 2>/dev/null || echo "MISSING")
+  [ -z "$REMOTE_LOCK_MD5" ] && REMOTE_LOCK_MD5="MISSING"
+  if [ "$LOCAL_LOCK_MD5" != "$REMOTE_LOCK_MD5" ]; then
+    DEPLOY_DEPS=1
+    echo "→ Staging package.json + package-lock.json (lockfile md5 ${REMOTE_LOCK_MD5:0:8} → ${LOCAL_LOCK_MD5:0:8})"
+    ssh "$HOST" "mkdir -p '$DEPS_STAGING'" >/dev/null
+    rsync -az "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$REMOTE_USER@$HOST:$DEPS_STAGING/"
+    echo "  ✓ deps staged"
+  else
+    echo "  ⊘ deps skipped (lockfile unchanged)"
+  fi
+fi
+
 # Phase 999.55 — Stage per-agent prompt-corpus. Loop over each dev-side
 # agent dir; for each one that (a) has AGENTS.md or SOUL.md and (b) has a
 # corresponding workspace dir on prod, rsync the allowlist to a per-agent
@@ -318,6 +360,12 @@ if [ "$DEPLOY_AGENTS" = 1 ]; then
     REMOTE_CMD="$REMOTE_CMD && rsync -a '$AGENTS_STAGING_ROOT/$agent_name/' '$AGENTS_REMOTE_ROOT/$agent_name/' && chown -R '$AGENTS_OWNER' '$AGENTS_REMOTE_ROOT/$agent_name/'"
   done
 fi
+if [ "$DEPLOY_DEPS" = 1 ]; then
+  # Phase 101-fu 2026-05-16 — copy lockfile + run `npm ci` as the daemon
+  # user. MUST execute BEFORE systemctl restart so the new binary boots
+  # against the updated node_modules. --no-audit --no-fund for speed.
+  REMOTE_CMD="$REMOTE_CMD && cp '$DEPS_STAGING/package.json' '$DEPS_DEPLOY_ROOT/package.json' && cp '$DEPS_STAGING/package-lock.json' '$DEPS_DEPLOY_ROOT/package-lock.json' && chown $DEPS_OWNER '$DEPS_DEPLOY_ROOT/package.json' '$DEPS_DEPLOY_ROOT/package-lock.json' && sudo -u clawcode bash -c 'cd $DEPS_DEPLOY_ROOT && npm ci --no-audit --no-fund'"
+fi
 if [ "$DO_RESTART" = 1 ]; then
   REMOTE_CMD="$REMOTE_CMD && systemctl restart $SERVICE_NAME"
 fi
@@ -326,6 +374,7 @@ echo "→ Deploying to $DEPLOY_PATH"
 [ "$DEPLOY_SPA" = 1 ] && echo "→ Deploying SPA to $SPA_DEPLOY"
 [ "$DEPLOY_PLANNING" = 1 ] && echo "→ Deploying .planning/ to $PLANNING_DEPLOY"
 [ "$DEPLOY_AGENTS" = 1 ] && echo "→ Deploying agent prompt-corpus to $AGENTS_REMOTE_ROOT/{${AGENTS_TO_DEPLOY[*]}}"
+[ "$DEPLOY_DEPS" = 1 ] && echo "→ Deploying package.json + npm ci to $DEPS_DEPLOY_ROOT"
 # -p prefix the prompt so sudo writes ONLY '' on the password line — keeps stdout clean.
 # The password is piped via stdin so it never appears on the SSH command line or in ps.
 printf '%s\n' "$PASSWORD" | ssh "$HOST" "sudo -S -p '' sh -c \"$REMOTE_CMD\"" 2>&1 | grep -v '^$' || true
