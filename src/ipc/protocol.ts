@@ -237,6 +237,29 @@ export const IPC_METHODS = [
   //   telemetry: IngestTelemetry;
   // }
   "ingest-document",
+  // Phase 999.43 Plan 02 T01 — Discord-attachment auto-ingest dispatcher.
+  // Fire-and-forget call site (bridge.ts) writes a `documents` row with
+  // full D-04 provenance after the Phase 101 engine + cross-ingest succeed.
+  // Distinct from `ingest-document` (manual / operator-driven) per
+  // feedback_silent_path_bifurcation.md — single auto-ingest entry point.
+  // Request shape:
+  //   {
+  //     agent: string;
+  //     file_path: string;
+  //     filename: string;
+  //     mime_type: string | null;
+  //     size: number;
+  //     vision_analysis: string | null;
+  //     channel_id: string;
+  //     message_id: string;
+  //     user_id: string;
+  //     user_name: string;
+  //   }
+  // Response (skip): { ok: true, skipped: true, reason: string }
+  // Response (ok):   { ok: true, skipped: false, source, chunks_created,
+  //                    content_class, agent_weight, content_weight }
+  // Response (err):  { ok: false, skipped: false, error: string }
+  "auto-ingest-attachment",
   "search-documents",
   "delete-document",
   "list-documents",
