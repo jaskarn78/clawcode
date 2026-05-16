@@ -160,10 +160,6 @@ export function scoreWeightForPath(absPath: string): number {
  * regardless of mtime (they're standing rules / runbooks, not dated session
  * notes).
  *
- * Additionally, paths beginning with `document:` are exempted (Phase 101 U6
- * cross-ingest — documents survive the standard expiry because they're
- * operator-curated artifacts, not session notes). CF-1 fix.
- *
  * `now` defaulted to Date.now() for production; tests pass a fixed epoch to
  * make assertions deterministic.
  */
@@ -174,7 +170,6 @@ export function applyTimeWindowFilter<
   return chunks.filter((c) => {
     if (c.path.includes("/memory/vault/")) return true;
     if (c.path.includes("/memory/procedures/")) return true;
-    if (c.path.startsWith("document:")) return true;
     return c.file_mtime_ms >= cutoff;
   });
 }
