@@ -109,6 +109,12 @@ type SearchRow = {
   readonly chunk_index: number;
   readonly content: string;
   readonly distance: number;
+  // Phase 999.43 Plan 03 — LEFT JOIN documents (null when chunk has no
+  // provenance row, e.g. pre-Plan-01-backfill orphan). Multipliers default
+  // to 1.0 when null (legacy chunks score neutrally).
+  readonly content_weight: number | null;
+  readonly ingested_at: string | null;
+  readonly source_kind: string | null;
 };
 
 /** Prepared statements for all store operations. */
@@ -214,7 +220,23 @@ export class DocumentStore {
   /**
    * Search for document chunks similar to the query embedding.
    *
-   * Returns up to `limit` results (clamped to 20) ranked by similarity.
+   * Returns up to `limit` results (clamped to 20).
+   *
+   * Phase 999.43 Plan 03 — D-02 score formula (LOCKED VERBATIM):
+   *   weightedScore = similarity × agentWeight × contentWeight × recencyBoost
+   *
+   * Multipliers:
+   *   - agentWeight  (D-01 axis 1, threaded from caller per-query):
+   *       high = 1.5, medium = 1.0, low = 0.7
+   *   - contentWeight (D-01 axis 2, read from documents.content_priority_weight):
+   *       high = 1.5, medium = 1.0, low = 0.5
+   *   - recencyBoost: 1.3× if documents.ingested_at within last 7 days,
+   *     else 1.0× (D-07: query-time computed, NOT stored).
+   *
+   * Backward compat: callers that omit `agentWeight` get the neutral 1.0
+   * multiplier; legacy `documents` row (or missing row from LEFT JOIN)
+   * scores at base similarity unchanged.
+   *
    * Each result includes content from adjacent chunks for context.
    * Optionally filters by source.
    */
@@ -222,8 +244,14 @@ export class DocumentStore {
     embedding: Int8Array | Float32Array,
     limit = 5,
     source?: string,
+    agentWeight: number = 1.0,
   ): readonly DocumentSearchResult[] {
     const clampedLimit = Math.min(Math.max(1, limit), MAX_SEARCH_LIMIT);
+    // Over-fetch by 3× so the post-fetch re-rank can promote a docs row
+    // whose weighted score beats a higher-raw-similarity row with lower
+    // multipliers. sqlite-vec's `MATCH k=?` must be a fixed integer at
+    // SQL time so we cannot ORDER BY weighted score in SQL.
+    const overFetchK = Math.min(clampedLimit * 3, MAX_SEARCH_LIMIT * 3);
 
     // Phase 101 D-09: convert Int8Array/Float32Array query embedding to a raw
     // Buffer so the vec_int8(?) cast in the prepared statement receives bytes.
@@ -241,12 +269,34 @@ export class DocumentStore {
           );
 
     const rows: readonly SearchRow[] = source
-      ? (this.stmts.searchBySource.all(queryBytes, clampedLimit, source) as SearchRow[])
-      : (this.stmts.searchAll.all(queryBytes, clampedLimit) as SearchRow[]);
+      ? (this.stmts.searchBySource.all(queryBytes, overFetchK, source) as SearchRow[])
+      : (this.stmts.searchAll.all(queryBytes, overFetchK) as SearchRow[]);
 
-    const results = rows.map((row) => {
+    // D-02 score formula constants. Centralized so the
+    // 7-day window literal is auditable. D-07: query-time only.
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const RECENCY_BOOST = 1.3;
+    const now = Date.now();
+
+    const ranked = rows.map((row) => {
       const similarity = 1 - row.distance;
+      // LEFT JOIN may return null when the chunk's `documents` provenance
+      // row is absent (pre-Plan-01-backfill orphan). Default to neutral.
+      const contentWeight = row.content_weight ?? 1.0;
+      const ingestedTs = row.ingested_at ? Date.parse(row.ingested_at) : 0;
+      const ageMs = ingestedTs > 0 ? now - ingestedTs : Number.POSITIVE_INFINITY;
+      const recencyBoostApplied = ageMs <= SEVEN_DAYS_MS;
+      const recencyBoost = recencyBoostApplied ? RECENCY_BOOST : 1.0;
+      const weightedScore =
+        similarity * agentWeight * contentWeight * recencyBoost;
+      return { row, similarity, weightedScore, recencyBoostApplied };
+    });
 
+    // DESC by weighted score, then slice to caller-requested limit.
+    ranked.sort((a, b) => b.weightedScore - a.weightedScore);
+    const sliced = ranked.slice(0, clampedLimit);
+
+    const results = sliced.map(({ row, similarity, weightedScore, recencyBoostApplied }) => {
       // Fetch adjacent chunks for context
       const before = this.stmts.getAdjacentChunk.get(
         row.source,
@@ -265,6 +315,8 @@ export class DocumentStore {
         similarity,
         contextBefore: before?.content ?? null,
         contextAfter: after?.content ?? null,
+        weightedScore,
+        recencyBoostApplied,
       } satisfies DocumentSearchResult);
     });
 
@@ -422,18 +474,32 @@ export class DocumentStore {
       ),
       // Query embedding bound as Buffer.from(int8Array.buffer); wrapped via
       // vec_int8(?) to match the int8[384] column type.
+      // Phase 999.43 Plan 03 — LEFT JOIN documents surfaces the
+      // per-document content_priority_weight + ingested_at + source_kind
+      // so the post-fetch ranking pass can apply D-02 multiplicative
+      // weighting + 7-day recency boost. LEFT JOIN (not INNER) so chunks
+      // without a provenance row (pre-Plan-01-backfill orphans) still
+      // appear — those score at the neutral 1.0 multiplier.
       searchAll: this.db.prepare(`
-        SELECT d.id, d.source, d.chunk_index, d.content, v.distance
+        SELECT d.id, d.source, d.chunk_index, d.content, v.distance,
+               docs.content_priority_weight AS content_weight,
+               docs.ingested_at AS ingested_at,
+               docs.source_kind AS source_kind
         FROM vec_document_chunks v
         INNER JOIN document_chunks d ON d.id = v.chunk_id
+        LEFT JOIN documents docs ON docs.source = d.source
         WHERE v.embedding MATCH vec_int8(?)
           AND k = ?
         ORDER BY v.distance
       `),
       searchBySource: this.db.prepare(`
-        SELECT d.id, d.source, d.chunk_index, d.content, v.distance
+        SELECT d.id, d.source, d.chunk_index, d.content, v.distance,
+               docs.content_priority_weight AS content_weight,
+               docs.ingested_at AS ingested_at,
+               docs.source_kind AS source_kind
         FROM vec_document_chunks v
         INNER JOIN document_chunks d ON d.id = v.chunk_id
+        LEFT JOIN documents docs ON docs.source = d.source
         WHERE v.embedding MATCH vec_int8(?)
           AND k = ?
           AND d.source = ?

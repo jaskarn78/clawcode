@@ -11500,7 +11500,32 @@ async function routeMethod(
       // leaving search on Float32 .embed() would break every search call
       // post-migration. Documented in 101-01-SUMMARY.md.
       const queryEmbedding = await embedder.embedV2(query);
-      const results = docStore.search(queryEmbedding, limit, source);
+
+      // Phase 999.43 Plan 03 — D-01 axis 1 (agent priority) LOCKED VERBATIM:
+      //   high: 1.5, medium: 1.0, low: 0.7
+      // Resolved LIVE from the agent's current `ingestionPriority` config
+      // value (not the snapshotted agent_priority_weight_at_ingest column)
+      // so `clawcode reload` takes effect immediately per Plan 01 SUMMARY
+      // hot-reload promise. The DocumentStore applies the D-02 score formula
+      // (similarity × agentWeight × contentWeight × recencyBoost) — see
+      // src/documents/store.ts `search` method.
+      const SEARCH_AGENT_PRIORITY_WEIGHTS = {
+        high: 1.5,
+        medium: 1.0,
+        low: 0.7,
+      } as const;
+      const searchAgentConfig = configs.find((c) => c.name === agentName);
+      const searchAgentPriority =
+        searchAgentConfig?.ingestionPriority ?? "medium";
+      const searchAgentWeight =
+        SEARCH_AGENT_PRIORITY_WEIGHTS[searchAgentPriority];
+
+      const results = docStore.search(
+        queryEmbedding,
+        limit,
+        source,
+        searchAgentWeight,
+      );
 
       return {
         results: results.map((r) => ({
@@ -11509,6 +11534,11 @@ async function routeMethod(
           chunk_index: r.chunkIndex,
           content: r.content,
           similarity: r.similarity,
+          // Phase 999.43 Plan 03 — additive payload fields (MCP consumer at
+          // server.ts:1220-1234 ignores unknown fields; legacy clients see
+          // identical `similarity` shape).
+          weighted_score: r.weightedScore,
+          recency_boost_applied: r.recencyBoostApplied,
           context_before: r.contextBefore,
           context_after: r.contextAfter,
         })),

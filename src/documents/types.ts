@@ -27,7 +27,25 @@ export type DocumentSearchResult = {
   readonly source: string;
   readonly chunkIndex: number;
   readonly content: string;
+  /**
+   * Base similarity (1 - distance). Preserved for backward compat with the
+   * search-documents MCP tool response shape at server.ts:1220-1234.
+   */
   readonly similarity: number;
   readonly contextBefore: string | null;
   readonly contextAfter: string | null;
+  /**
+   * Phase 999.43 Plan 03 — final score per D-02 LOCKED VERBATIM:
+   *   weightedScore = similarity × agentWeight × contentWeight × recencyBoost
+   * Equal to `similarity` for legacy callers that omit `agentWeight` AND for
+   * chunks whose `documents` row is missing (LEFT JOIN null → multipliers
+   * default to 1.0). Always present (additive field).
+   */
+  readonly weightedScore?: number;
+  /**
+   * Phase 999.43 Plan 03 — true iff the document was ingested within the
+   * last 7 days (D-02 recency cutoff). Query-time computed from
+   * documents.ingested_at vs now() per D-07 (NOT stored).
+   */
+  readonly recencyBoostApplied?: boolean;
 };
