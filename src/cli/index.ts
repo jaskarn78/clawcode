@@ -18,6 +18,8 @@ import { registerRoutesCommand } from "./commands/routes.js";
 import { registerHealthCommand } from "./commands/health.js";
 // Phase 999.47 Plan 02 — `clawcode homelab reindex` / `clawcode homelab refresh`.
 import { registerHomelabCommand } from "./commands/homelab.js";
+// Phase 999.43 Plan 04 T03 — `clawcode rag set-priority` / `clawcode rag reclassify`.
+import { registerRagCommand } from "./commands/rag.js";
 import { registerTierTickCommand } from "./commands/tier-tick.js";
 import { registerSchedulesCommand } from "./commands/schedules.js";
 import { registerSkillsCommand } from "./commands/skills.js";
@@ -182,6 +184,7 @@ registerStatusCommand(program);
 registerRoutesCommand(program);
 registerHealthCommand(program);
 registerHomelabCommand(program);
+registerRagCommand(program);
 registerTierTickCommand(program);
 registerSchedulesCommand(program);
 registerSkillsCommand(program);
