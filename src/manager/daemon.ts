@@ -184,11 +184,9 @@ import {
 import { SemanticSearch } from "../memory/search.js";
 import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.js";
 import { chunkText, chunkPdf } from "../documents/chunker.js";
-// Phase 999.43 Plan 02 T01 — auto-ingest classifier (pure-function heuristic).
-import {
-  classifyAttachment,
-  type ContentClass,
-} from "../documents/auto-ingest-classifier.js";
+// Phase 999.43 Plan 02 T03 — handler body lives in auto-ingest-handler.ts;
+// the daemon case dynamic-imports it on first dispatch (memory-lookup
+// handler precedent). No top-level classifier import needed here.
 // Phase 101 Plan 02 T04 — robust ingestion engine + structured extraction.
 // `ingest()` is the single entry point per `feedback_silent_path_bifurcation`.
 import {
@@ -11426,19 +11424,18 @@ async function routeMethod(
     }
 
     case "auto-ingest-attachment": {
-      // Phase 999.43 Plan 02 T01 — SINGLE auto-ingest entry point per
-      // feedback_silent_path_bifurcation.md. The manual `ingest-document`
-      // case above remains the explicit operator-driven path; this case
-      // exists for Discord-bridge fire-and-forget dispatch after Phase 113
-      // attachment download + vision pre-pass.
+      // Phase 999.43 Plan 02 T03 — handler body extracted to
+      // `src/manager/auto-ingest-handler.ts` for direct testability
+      // (memory-lookup-handler.ts precedent — Phase 68-02). This case
+      // becomes a thin DI wrapper: validate IPC params, then delegate
+      // to `handleAutoIngestAttachment(params, deps)`.
       //
-      // D-01 axis multipliers are LITERAL here (not imported) to satisfy
-      // the plan's static-grep acceptance gates AND to make the locked
-      // table operator-greppable in production logs / source review.
-      const AGENT_WEIGHTS: Readonly<Record<"high" | "medium" | "low", number>> =
-        Object.freeze({ high: 1.5, medium: 1.0, low: 0.7 });
-      const CONTENT_WEIGHTS: Readonly<Record<"high" | "medium" | "low", number>> =
-        Object.freeze({ high: 1.5, medium: 1.0, low: 0.5 });
+      // SINGLE auto-ingest entry point per feedback_silent_path_bifurcation.md.
+      // Manual `ingest-document` case above remains the operator-driven path.
+
+      const { handleAutoIngestAttachment } = await import(
+        "./auto-ingest-handler.js"
+      );
 
       const agentName = validateStringParam(params, "agent");
       const filePath = validateStringParam(params, "file_path");
@@ -11458,273 +11455,32 @@ async function routeMethod(
           ? params.vision_analysis
           : null;
 
-      // configs is the live ref (mutated in place by hot-reload — see
-      // line ~5583 `(resolvedAgents)[idx] = next`). Reading agentConfig
-      // here honors the Plan 01 SUMMARY's hot-reload semantics: live
-      // read at receive time, NOT cached at session boot.
-      const agentConfig = configs.find((c) => c.name === agentName);
-      if (!agentConfig) {
-        throw new ManagerError(
-          `Agent config not found for '${agentName}' (auto-ingest)`,
-        );
-      }
-
-      // D-09 default: agents WITHOUT the flag set preserve current behavior.
-      if (agentConfig.autoIngestAttachments !== true) {
-        logger.info(
-          {
-            tag: "phase999.43-autoingest",
-            agent: agentName,
-            channelId,
-            messageId,
-            userId,
-            userName,
-            filename,
-            mimeType,
-            size,
-            eligible: false,
-            reason: "autoIngestAttachments disabled for agent",
-          },
-          "phase999.43-autoingest skipped — agent flag off",
-        );
-        return {
-          ok: true,
-          skipped: true,
-          reason: "autoIngestAttachments disabled for agent",
-        };
-      }
-
-      // D-01 Axis 1 — agent base priority. Read LIVE; defaults to "medium"
-      // when unset (Plan 01 type is optional for back-compat).
-      const agentPriority = agentConfig.ingestionPriority ?? "medium";
-      const agentWeight = AGENT_WEIGHTS[agentPriority];
-
-      // D-01 Axis 2 + D-06 reject filter — pure-function classifier.
-      const classifierOutput = classifyAttachment({
-        filename,
-        mimeType,
-        size,
-        visionAnalysis: visionAnalysis ?? undefined,
-        clientNamePatterns: undefined,
-      });
-
-      if (classifierOutput.eligible === false) {
-        logger.info(
-          {
-            tag: "phase999.43-autoingest",
-            agent: agentName,
-            channelId,
-            messageId,
-            userId,
-            userName,
-            filename,
-            mimeType,
-            size,
-            eligible: false,
-            contentClass: classifierOutput.contentClass,
-            reason: classifierOutput.reason,
-          },
-          "phase999.43-autoingest skipped — classifier rejected",
-        );
-        return {
-          ok: true,
-          skipped: true,
-          reason: classifierOutput.reason,
-        };
-      }
-
-      const contentClass: ContentClass = classifierOutput.contentClass;
-      const contentWeight = CONTENT_WEIGHTS[contentClass];
-
-      // Resolve required runtime stores. We DO NOT throw to the bridge —
-      // auto-ingest is fire-and-forget; failures are logged + returned as
-      // { ok: false } so a missing store doesn't poison the agent's turn.
-      const docStore = manager.getDocumentStore(agentName);
-      if (!docStore) {
-        const msg = `DocumentStore not found for agent '${agentName}' (auto-ingest)`;
-        logger.warn(
-          {
-            tag: "phase999.43-autoingest",
-            agent: agentName,
-            messageId,
-            eligible: true,
-            contentClass,
-            error: msg,
-          },
-          "phase999.43-autoingest dispatch failed",
-        );
-        return { ok: false, skipped: false, error: msg };
-      }
-
-      // Source identifier — match the manual ingest path default (filePath).
-      const source = filePath;
-
-      try {
-        const fileBuffer = await readFile(filePath);
-
-        // Phase 101 engine — same call shape as the manual path. NO
-        // structured-extraction branch (auto-ingest is text-only at v1).
-        const ingestResult = await ingestDocumentEngine(fileBuffer, filePath, {
-          taskHint: undefined,
-          backend: undefined,
-        });
-
-        // Chunk + embed using the SAME cascade as the manual ingest path
-        // (chunkText preferred; chunkPdf fallback for .pdf with empty text;
-        // raw buffer text as final fallback).
-        const chunks =
-          ingestResult.text.length > 0
-            ? chunkText(ingestResult.text)
-            : filePath.endsWith(".pdf")
-              ? await chunkPdf(fileBuffer)
-              : chunkText(fileBuffer.toString("utf-8"));
-
-        if (chunks.length === 0) {
-          // Degenerate: nothing to embed. Do NOT write a documents row
-          // (no retrievable chunks → provenance row has nothing to point
-          // at). Log as a skip with reason; treat as success so the bridge
-          // sees a non-error result.
-          logger.info(
-            {
-              tag: "phase999.43-autoingest",
-              agent: agentName,
-              channelId,
-              messageId,
-              userId,
-              userName,
-              filename,
-              mimeType,
-              size,
-              eligible: true,
-              contentClass,
-              agentWeight,
-              contentWeight,
-              reason: "no chunks produced (empty text)",
-              chunksCreated: 0,
-              docSource: source,
-            },
-            "phase999.43-autoingest skipped — no chunks",
-          );
-          return {
-            ok: true,
-            skipped: true,
-            reason: "no chunks produced (empty text)",
-          };
-        }
-
-        const embedder = manager.getEmbedder();
-        const embeddings: Int8Array[] = [];
-        for (const chunk of chunks) {
-          embeddings.push(await embedder.embedV2(chunk.content));
-        }
-
-        const result = docStore.ingest(source, chunks, embeddings);
-
-        // Cross-ingest into memory_chunks. Failure here MUST NOT poison
-        // the auto-ingest — matches the manual path's best-effort posture
-        // (daemon.ts ~11379-11398).
-        try {
-          const memoryStore = manager.getMemoryStore(agentName);
-          if (memoryStore) {
-            await crossIngestToMemory({
-              agent: agentName,
-              docSlug: computeDocSlug(filePath),
-              chunks: chunks.map((c, i) => ({ index: i, content: c.content })),
-              embedderV1: embedder,
-              embedderV2: embedder,
-              memoryStore,
-              migrationPhaseStore: new MigrationPhaseStore(
-                memoryStore,
-                agentName,
-              ),
-            });
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.warn(
-            {
-              tag: "phase999.43-autoingest",
-              agent: agentName,
-              messageId,
-              docSource: source,
-              err: msg,
-            },
-            "phase999.43-autoingest cross-ingest failed (non-fatal)",
-          );
-        }
-
-        // D-04 provenance write — full field set verbatim from CONTEXT.md.
-        // source_kind: "discord_attachment" distinguishes this row from
-        // manual_ingest_document + manual_pre_999_43.
-        docStore.upsertDocumentRow({
-          source,
-          agentName,
-          channelId,
-          messageId,
-          userId,
-          ingestedAt: new Date().toISOString(),
-          sourceKind: "discord_attachment",
-          autoClassifiedClass: contentClass,
-          overrideClass: null,
-          contentWeight,
-          agentWeightAtIngest: agentWeight,
-        });
-
-        logger.info(
-          {
-            tag: "phase999.43-autoingest",
-            agent: agentName,
-            channelId,
-            messageId,
-            userId,
-            userName,
-            filename,
-            mimeType,
-            size,
-            eligible: true,
-            contentClass,
-            agentWeight,
-            contentWeight,
-            reason: classifierOutput.reason,
-            chunksCreated: result.chunksCreated,
-            docSource: source,
-          },
-          "phase999.43-autoingest dispatched",
-        );
-
-        return {
-          ok: true,
-          skipped: false,
-          source,
-          chunks_created: result.chunksCreated,
-          content_class: contentClass,
-          agent_weight: agentWeight,
-          content_weight: contentWeight,
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.warn(
-          {
-            tag: "phase999.43-autoingest",
-            agent: agentName,
-            channelId,
-            messageId,
-            userId,
-            userName,
-            filename,
-            mimeType,
-            size,
-            eligible: true,
-            contentClass,
-            agentWeight,
-            contentWeight,
-            error: msg,
-          },
-          "phase999.43-autoingest dispatch failed",
-        );
-        return { ok: false, skipped: false, error: msg };
-      }
+      // Delegate to the pure handler. configs.find honors hot-reload
+      // (live array reference mutated by setAllAgentConfigs at ~line 5583).
+      return await handleAutoIngestAttachment(
+        {
+          agent: agentName,
+          file_path: filePath,
+          filename,
+          mime_type: mimeType,
+          size,
+          vision_analysis: visionAnalysis,
+          channel_id: channelId,
+          message_id: messageId,
+          user_id: userId,
+          user_name: userName,
+        },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getMemoryStore: (a) => manager.getMemoryStore(a),
+          getEmbedder: () => manager.getEmbedder(),
+          getAgentConfig: (a) => configs.find((c) => c.name === a),
+          logger,
+          engine: ingestDocumentEngine,
+        },
+      );
     }
+
 
     case "search-documents": {
       const agentName = validateStringParam(params, "agent");
