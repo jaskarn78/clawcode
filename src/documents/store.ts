@@ -39,6 +39,69 @@ type ChunkRow = {
   readonly created_at: string;
 };
 
+export type ContentPriorityLevel = "high" | "medium" | "low";
+
+/**
+ * Phase 999.43 D-01 multipliers — per-document content_priority_weight values.
+ * Axis 2: high=1.5, medium=1.0, low=0.5. Apply to the final score formula
+ * (D-02) at retrieval time alongside the per-agent agent_priority_weight
+ * (Axis 1: high=1.5, medium=1.0, low=0.7) and the 7-day recency boost (1.3×).
+ */
+export const CONTENT_PRIORITY_WEIGHTS: Readonly<Record<ContentPriorityLevel, number>> = Object.freeze({
+  high: 1.5,
+  medium: 1.0,
+  low: 0.5,
+});
+
+/**
+ * Source-kind discriminator on documents.source_kind (D-04). Three values:
+ *   - "discord_attachment": auto-ingest path from Plan 02 dispatcher
+ *   - "manual_ingest_document": Phase 101 MCP tool surface (operator-driven)
+ *   - "manual_pre_999_43": auto-backfill placeholder for pre-999.43 docs
+ *     whose chunks predate the documents table (Test 5 in Plan 01 Task 2)
+ */
+export type DocumentSourceKind =
+  | "discord_attachment"
+  | "manual_ingest_document"
+  | "manual_pre_999_43";
+
+/**
+ * D-04 provenance row on the `documents` table. 1:1 with `document_chunks.source`.
+ * Provenance lives per-doc (NOT per-chunk) to avoid N× storage on the chunk
+ * fan-out. `content_priority_weight` is the EFFECTIVE weight (derived from
+ * override_class if set, else auto_classified_class via CONTENT_PRIORITY_WEIGHTS).
+ * `agent_priority_weight_at_ingest` is an informational snapshot — the LIVE
+ * agent weight is read at query time per D-01 hot-reload semantics.
+ */
+export type DocumentRow = {
+  readonly source: string;
+  readonly agent_name: string;
+  readonly channel_id: string | null;
+  readonly message_id: string | null;
+  readonly user_id: string | null;
+  readonly ingested_at: string;
+  readonly source_kind: DocumentSourceKind;
+  readonly auto_classified_class: ContentPriorityLevel;
+  readonly override_class: ContentPriorityLevel | null;
+  readonly content_priority_weight: number;
+  readonly agent_priority_weight_at_ingest: number;
+};
+
+/** Input shape for `upsertDocumentRow` — fields callers MUST provide. */
+export type DocumentRowInput = {
+  readonly source: string;
+  readonly agentName: string;
+  readonly channelId?: string | null;
+  readonly messageId?: string | null;
+  readonly userId?: string | null;
+  readonly ingestedAt: string;
+  readonly sourceKind: DocumentSourceKind;
+  readonly autoClassifiedClass: ContentPriorityLevel;
+  readonly overrideClass?: ContentPriorityLevel | null;
+  readonly contentWeight: number;
+  readonly agentWeightAtIngest: number;
+};
+
 /** Raw row from KNN search join. */
 type SearchRow = {
   readonly id: string;
@@ -60,6 +123,11 @@ type PreparedStatements = {
   readonly searchBySource: Statement;
   readonly listSources: Statement;
   readonly getChunkIdsBySource: Statement;
+  // Phase 999.43 Plan 01 Task 2 — documents (provenance) table CRUD.
+  readonly upsertDocumentRow: Statement;
+  readonly getDocumentRow: Statement;
+  readonly getDocumentRowByMessageId: Statement;
+  readonly setDocumentPriority: Statement;
 };
 
 export class DocumentStore {
@@ -259,7 +327,71 @@ export class DocumentStore {
         chunk_id TEXT PRIMARY KEY,
         embedding int8[384] distance_metric=cosine
       );
+
+      -- Phase 999.43 Plan 01 Task 2 — D-04 provenance per document.
+      -- 1:1 with document_chunks.source. content_priority_weight is the
+      -- EFFECTIVE weight (derived from override_class if set, else
+      -- auto_classified_class via the D-01 multipliers 1.5/1.0/0.5).
+      -- agent_priority_weight_at_ingest is informational; the LIVE agent
+      -- weight is read at query time per D-01 hot-reload semantics.
+      CREATE TABLE IF NOT EXISTS documents (
+        source TEXT PRIMARY KEY,
+        agent_name TEXT NOT NULL,
+        channel_id TEXT,
+        message_id TEXT,
+        user_id TEXT,
+        ingested_at TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        auto_classified_class TEXT NOT NULL,
+        override_class TEXT,
+        content_priority_weight REAL NOT NULL DEFAULT 1.0,
+        agent_priority_weight_at_ingest REAL NOT NULL DEFAULT 1.0
+      );
+      CREATE INDEX IF NOT EXISTS idx_documents_message_id
+        ON documents(message_id);
+      CREATE INDEX IF NOT EXISTS idx_documents_agent
+        ON documents(agent_name);
     `);
+
+    // Phase 999.43 Plan 01 Task 2 — backwards-compat backfill for pre-999.43
+    // production DBs (Phase 101 live on clawdy as of 2026-05-16). When the
+    // documents table is empty BUT document_chunks already has rows from
+    // prior manual ingests (Phase 101 MCP tool surface), insert placeholder
+    // provenance rows with source_kind="manual_pre_999_43" so query-side
+    // LEFT JOIN (Plan 03) doesn't drop these documents from search results.
+    // Idempotent — only fires when documents is empty (no-op on fresh DBs
+    // and on re-opens of already-backfilled DBs).
+    const docCount = (
+      this.db
+        .prepare("SELECT COUNT(*) as count FROM documents")
+        .get() as { count: number }
+    ).count;
+    if (docCount === 0) {
+      const chunkCount = (
+        this.db
+          .prepare("SELECT COUNT(*) as count FROM document_chunks")
+          .get() as { count: number }
+      ).count;
+      if (chunkCount > 0) {
+        this.db.exec(`
+          INSERT INTO documents (
+            source, agent_name, ingested_at, source_kind,
+            auto_classified_class, content_priority_weight,
+            agent_priority_weight_at_ingest
+          )
+          SELECT
+            source,
+            '_unknown' AS agent_name,
+            COALESCE(MIN(created_at), datetime('now')) AS ingested_at,
+            'manual_pre_999_43' AS source_kind,
+            'medium' AS auto_classified_class,
+            1.0 AS content_priority_weight,
+            1.0 AS agent_priority_weight_at_ingest
+          FROM document_chunks
+          GROUP BY source;
+        `);
+      }
+    }
   }
 
   private prepareStatements(): PreparedStatements {
@@ -313,7 +445,115 @@ export class DocumentStore {
       getChunkIdsBySource: this.db.prepare(
         "SELECT id FROM document_chunks WHERE source = ?",
       ),
+      // Phase 999.43 Plan 01 Task 2 — documents table CRUD.
+      // ON CONFLICT(source) DO UPDATE — idempotent upsert. agent_name +
+      // ingested_at + source_kind + auto_classified_class are immutable
+      // post-ingest; only the provenance metadata + weight values flip
+      // when the row is re-asserted (Plan 04 emoji override + MCP-tool path).
+      upsertDocumentRow: this.db.prepare(`
+        INSERT INTO documents (
+          source, agent_name, channel_id, message_id, user_id,
+          ingested_at, source_kind, auto_classified_class, override_class,
+          content_priority_weight, agent_priority_weight_at_ingest
+        ) VALUES (
+          @source, @agent_name, @channel_id, @message_id, @user_id,
+          @ingested_at, @source_kind, @auto_classified_class, @override_class,
+          @content_priority_weight, @agent_priority_weight_at_ingest
+        )
+        ON CONFLICT(source) DO UPDATE SET
+          agent_name = excluded.agent_name,
+          channel_id = excluded.channel_id,
+          message_id = excluded.message_id,
+          user_id = excluded.user_id,
+          ingested_at = excluded.ingested_at,
+          source_kind = excluded.source_kind,
+          auto_classified_class = excluded.auto_classified_class,
+          override_class = excluded.override_class,
+          content_priority_weight = excluded.content_priority_weight,
+          agent_priority_weight_at_ingest = excluded.agent_priority_weight_at_ingest
+      `),
+      getDocumentRow: this.db.prepare(
+        "SELECT * FROM documents WHERE source = ?",
+      ),
+      getDocumentRowByMessageId: this.db.prepare(
+        "SELECT * FROM documents WHERE message_id = ?",
+      ),
+      // setDocumentPriority — sets override_class + recomputes
+      // content_priority_weight per D-01 multipliers (1.5/1.0/0.5).
+      // auto_classified_class is intentionally NOT touched (D-04 immutable
+      // post-ingest). D-08 sandbox is enforced at the IPC layer in Plan 04,
+      // NOT here — this method is the low-level write.
+      setDocumentPriority: this.db.prepare(`
+        UPDATE documents
+        SET override_class = @level,
+            content_priority_weight = @weight
+        WHERE source = @source
+      `),
     };
+  }
+
+  /**
+   * Phase 999.43 Plan 01 Task 2 — upsert a per-document provenance row.
+   * Idempotent: calling twice with the same `source` updates the row, not
+   * duplicates it (ON CONFLICT(source) DO UPDATE). `contentWeight` MUST be
+   * derived from CONTENT_PRIORITY_WEIGHTS by callers — this method does
+   * NOT recompute weight from class to keep ingest-time flexibility (Plan 02
+   * dispatcher snapshots the weight at classification time).
+   */
+  upsertDocumentRow(row: DocumentRowInput): void {
+    this.stmts.upsertDocumentRow.run({
+      source: row.source,
+      agent_name: row.agentName,
+      channel_id: row.channelId ?? null,
+      message_id: row.messageId ?? null,
+      user_id: row.userId ?? null,
+      ingested_at: row.ingestedAt,
+      source_kind: row.sourceKind,
+      auto_classified_class: row.autoClassifiedClass,
+      override_class: row.overrideClass ?? null,
+      content_priority_weight: row.contentWeight,
+      agent_priority_weight_at_ingest: row.agentWeightAtIngest,
+    });
+  }
+
+  /** Fetch a documents row by `source`. Returns null when not present. */
+  getDocumentRow(source: string): DocumentRow | null {
+    const row = this.stmts.getDocumentRow.get(source) as DocumentRow | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Fetch a documents row by `message_id` — used by Plan 04 emoji-reaction
+   * handler (operator drops 🔴/🟡/🟢 on the source Discord message; lookup
+   * resolves the message id to the ingested document).
+   */
+  getDocumentRowByMessageId(messageId: string): DocumentRow | null {
+    const row = this.stmts.getDocumentRowByMessageId.get(messageId) as
+      | DocumentRow
+      | undefined;
+    return row ?? null;
+  }
+
+  /**
+   * Phase 999.43 D-03 / D-08 — set an operator/agent priority override on
+   * a document. Recomputes `content_priority_weight` from D-01 multipliers
+   * (high=1.5, medium=1.0, low=0.5). `auto_classified_class` is intentionally
+   * preserved (D-04 immutable post-ingest); the audit trail keeps both values
+   * so misclassifications can be traced.
+   *
+   * The `who` parameter is currently informational — D-08 sandbox enforcement
+   * (agent cannot escalate own doc beyond MEDIUM) lives at the IPC layer in
+   * Plan 04, NOT here. This method is the low-level write surface used by
+   * the emoji handler, MCP tool, and CLI override.
+   */
+  setDocumentPriority(
+    source: string,
+    level: ContentPriorityLevel,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    who: "operator" | "agent",
+  ): void {
+    const weight = CONTENT_PRIORITY_WEIGHTS[level];
+    this.stmts.setDocumentPriority.run({ source, level, weight });
   }
 }
 
