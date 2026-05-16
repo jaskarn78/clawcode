@@ -21,6 +21,7 @@
 
 import type { MemoryStore } from "./store.js";
 import { applyTimeWindowFilter } from "./memory-chunks.js";
+import { rerankTop, type RerankFn, type RerankerLogger } from "./reranker.js";
 
 export type EmbedFn = (text: string) => Promise<Float32Array>;
 
@@ -135,6 +136,35 @@ export type RetrieveArgs = Readonly<{
   agent?: string;
   /** Test hook: override Date.now() for deterministic time-window gating. */
   now?: number;
+  /**
+   * Phase 101 Plan 04 (D-04, U9, SC-10) — optional local cross-encoder
+   * reranker over the post-time-window candidate set. When provided AND
+   * `enabled` is true, takes `topNToRerank` candidates (default 20) from
+   * the fused+filtered+sorted result, re-scores them with
+   * `Xenova/bge-reranker-base` via `rerankTop()`, and returns the top
+   * `finalTopK` (default 5) in rerank-order BEFORE the token-budget
+   * truncation step. On timeout / runtime error the rerank step falls
+   * back to the original RRF order (graceful degradation per T-101-12).
+   *
+   * Caller (`SessionManager.getMemoryRetrieverForAgent`) reads
+   * `defaults.documentIngest.reranker` from `clawcode.yaml` and curries
+   * this object in. When omitted entirely (tests, daemon paths that
+   * don't wire the resolver, off-switch via `enabled: false`), the
+   * legacy non-reranked path runs unchanged — token-budget + topK
+   * truncation in fused/RRF order.
+   *
+   * `rerankFn` is a DI hook for unit tests so they can pass a synthetic
+   * scorer without monkey-patching `@huggingface/transformers`. Production
+   * callers omit it and the reranker uses the lazy-loaded HF pipeline.
+   */
+  reranker?: Readonly<{
+    enabled: boolean;
+    topNToRerank: number;
+    finalTopK: number;
+    timeoutMs: number;
+    rerankFn?: RerankFn;
+    logger?: RerankerLogger;
+  }>;
 }>;
 
 /**
@@ -295,6 +325,33 @@ export async function retrieveMemoryChunks(
   const windowed = [...applyTimeWindowFilter(hydrated, windowDays, now)];
   windowed.sort((a: Hydrated, b: Hydrated) => b.fusedScore - a.fusedScore);
 
+  // Phase 101 Plan 04 (D-04, U9, SC-10) — optional bge-reranker-base
+  // cross-encoder pass applied to the post-time-window, RRF-sorted set
+  // BEFORE the token-budget loop. Takes `reranker.topNToRerank` candidates,
+  // re-scores via `(query, passage)` pairs, returns the top
+  // `reranker.finalTopK` in rerank-order. The downstream token-budget +
+  // topK cap then runs over this reordered list — so a more-relevant
+  // candidate that was rank 6 under raw RRF can surface into the kept
+  // set when rerank elevates it to top-5.
+  //
+  // Graceful degradation: `rerankTop` handles its own timeout + error
+  // fallback (returns the original-order slice) so this code path never
+  // throws even if the ONNX runtime crashes. The off-switch path
+  // (`reranker.enabled === false` or `reranker` omitted) preserves the
+  // pre-101-04 behavior exactly.
+  let postRerank: Hydrated[] = windowed;
+  if (args.reranker && args.reranker.enabled && windowed.length > 0) {
+    const candidates = windowed.slice(0, args.reranker.topNToRerank);
+    const reranked = await rerankTop<Hydrated>(args.query, candidates, {
+      topK: Math.min(args.reranker.finalTopK, candidates.length),
+      timeoutMs: args.reranker.timeoutMs,
+      logger: args.reranker.logger,
+      rerankFn: args.reranker.rerankFn,
+      getText: (h) => h.body,
+    });
+    postRerank = [...reranked];
+  }
+
   // Token budget truncation. ~4 chars/token — stop accumulating when the
   // next chunk would push cumulative body chars past budget*4. Always emit
   // at least the first chunk (don't leave the caller with an empty block
@@ -302,7 +359,7 @@ export async function retrieveMemoryChunks(
   // memories) so a flood of large memories can't blow the prompt budget.
   const out: MemoryRetrievalResult[] = [];
   let acc = 0;
-  const limited = windowed.slice(0, topK);
+  const limited = postRerank.slice(0, topK);
   for (const h of limited) {
     const len = h.body.length;
     if (out.length > 0 && acc + len > tokenBudget * 4) break;

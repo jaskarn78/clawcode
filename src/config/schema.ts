@@ -2307,6 +2307,25 @@ export const defaultsSchema = z.object({
       dimensionMaxPx: z.number().int().min(512).max(4096).default(2000),
       visionModelDefault: z.string().default("claude-haiku-4-5"),
       visionModelHighPrecision: z.string().default("claude-sonnet-4-5"),
+      // Phase 101 Plan 04 (D-04, U9, SC-10) — local cross-encoder reranker
+      // applied over Phase 90 RRF top-N. Hardcoded model id (T-101-13 — no
+      // config-driven model selection); only the orchestration knobs are
+      // exposed here. All four fields reloadable: `memory-retrieval.ts`
+      // reads via a closure DI'd at daemon boot (mirrors the Phase 101
+      // Plan 02 `setAllowMistralOcr` getter pattern).
+      reranker: z
+        .object({
+          enabled: z.boolean().default(true),
+          topNToRerank: z.number().int().min(1).max(100).default(20),
+          finalTopK: z.number().int().min(1).max(20).default(5),
+          timeoutMs: z.number().int().min(50).max(5000).default(500),
+        })
+        .default({
+          enabled: true,
+          topNToRerank: 20,
+          finalTopK: 5,
+          timeoutMs: 500,
+        }),
     })
     .default({
       allowMistralOcr: false,
@@ -2315,6 +2334,12 @@ export const defaultsSchema = z.object({
       dimensionMaxPx: 2000,
       visionModelDefault: "claude-haiku-4-5",
       visionModelHighPrecision: "claude-sonnet-4-5",
+      reranker: {
+        enabled: true,
+        topNToRerank: 20,
+        finalTopK: 5,
+        timeoutMs: 500,
+      },
     })
     // `.optional()` after `.default(...)` mirrors the Phase 999.6
     // preDeploySnapshotMaxAgeHours / Phase 999.12 heartbeatInboxTimeoutMs
@@ -2583,6 +2608,14 @@ export const configSchema = z.object({
       dimensionMaxPx: 2000,
       visionModelDefault: "claude-haiku-4-5",
       visionModelHighPrecision: "claude-sonnet-4-5",
+      // Phase 101 Plan 04 — reranker defaults mirror for the `defaults:`-omitted
+      // fallback. Operator override via per-agent or fleet-wide config.
+      reranker: {
+        enabled: true,
+        topNToRerank: 20,
+        finalTopK: 5,
+        timeoutMs: 500,
+      },
     },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),

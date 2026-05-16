@@ -731,7 +731,13 @@ export class SessionManager {
       config?.memoryRetrievalExcludeTags ??
       (["session-summary", "mid-session", "raw-fallback"] as const);
     const embedder = this.memory.embedder;
+    // Phase 101 Plan 04 — pull the reranker config via the resolver closure
+    // wired by daemon.ts at boot (mirrors `setAllowMistralOcr` pattern). When
+    // the resolver is unset (tests, bootstrap) the rerank step is skipped
+    // (back-compat with pre-101-04 retrieval).
+    const rerankerResolver = this.rerankerConfigResolver;
     return async (query: string) => {
+      const rerankerCfg = rerankerResolver?.();
       return retrieveMemoryChunks({
         query,
         store,
@@ -741,8 +747,41 @@ export class SessionManager {
         tokenBudget,
         excludeTags,
         agent: agentName,
+        reranker: rerankerCfg,
       });
     };
+  }
+
+  /**
+   * Phase 101 Plan 04 (D-04, U9, SC-10) — daemon-boot DI of the reranker
+   * config getter. Mirrors the `setAllowMistralOcr` resolver pattern: the
+   * daemon hands SessionManager a closure that reads
+   * `config.defaults.documentIngest.reranker` at CALL time so a `clawcode
+   * reload` mutation propagates without re-wiring. Unset in tests +
+   * bootstrap paths; `getMemoryRetrieverForAgent` then runs the legacy
+   * non-reranked retrieval (back-compat).
+   *
+   * The resolver may return `undefined` (config block absent) — that
+   * signal is treated the same as "disabled" by `retrieveMemoryChunks`.
+   */
+  private rerankerConfigResolver:
+    | (() => Readonly<{
+        enabled: boolean;
+        topNToRerank: number;
+        finalTopK: number;
+        timeoutMs: number;
+      }> | undefined)
+    | undefined = undefined;
+
+  setRerankerConfigResolver(
+    resolver: () => Readonly<{
+      enabled: boolean;
+      topNToRerank: number;
+      finalTopK: number;
+      timeoutMs: number;
+    }> | undefined,
+  ): void {
+    this.rerankerConfigResolver = resolver;
   }
 
   /**

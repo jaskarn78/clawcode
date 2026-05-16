@@ -195,6 +195,7 @@ import { extractStructured, IngestError as DocIngestError } from "../document-in
 import type { ExtractionSchemaName } from "../document-ingest/schemas/index.js";
 import type { OcrBackend, TaskHint } from "../document-ingest/types.js";
 import { setAllowMistralOcr } from "../document-ingest/ocr/index.js";
+import { warmupReranker } from "../memory/reranker.js";
 // Phase 101 Plan 02 T05 — fail-mode alerts to admin-clawdy (U7, SC-7).
 import {
   setIngestAlertDeps,
@@ -3812,6 +3813,32 @@ export async function startDaemon(
   setAllowMistralOcr(
     () => config.defaults.documentIngest?.allowMistralOcr ?? false,
   );
+
+  // Phase 101 Plan 04 (D-04, U9, SC-10) — wire the bge-reranker-base
+  // config from `defaults.documentIngest.reranker`. Same call-time
+  // closure pattern as `setAllowMistralOcr` above so a `clawcode reload`
+  // takes effect on the next retrieval turn without a daemon bounce.
+  // Resolver returns `undefined` when the block is absent (back-compat
+  // for pre-101-04 configs); `retrieveMemoryChunks` treats that as
+  // "rerank disabled".
+  manager.setRerankerConfigResolver(
+    () => config.defaults.documentIngest?.reranker,
+  );
+
+  // Phase 101 Plan 04 — warm the Xenova/bge-reranker-base ONNX session
+  // on daemon boot so the first operator turn doesn't pay the cold-load
+  // cost (~3-5s on warm cache, up to ~30s on first-ever download). Fire-
+  // and-forget per the plan's "non-blocking warmup" directive — a failed
+  // warm logs a warn and the retrieval path falls back lazily on the
+  // first turn (covered by the 500ms timeout fallback).
+  if (config.defaults.documentIngest?.reranker?.enabled !== false) {
+    void warmupReranker().catch((err) => {
+      logger.warn(
+        { err, phase: "phase101-ingest", event: "reranker-warmup-failed" },
+        "phase101 reranker warmup failed — retrieval will load lazily on first turn",
+      );
+    });
+  }
 
   // Phase 101 Plan 02 T05 — wire the U7 ingest-alerts surface. Logger
   // is the shared daemon logger. `postToAdminClawdy` uses the existing
