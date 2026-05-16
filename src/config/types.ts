@@ -209,6 +209,18 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // operators changing the inventory repo location should run
   // `clawcode restart` for the new path to take effect cleanly.
   "defaults.homelab",
+  // Phase 999.43 — auto-ingest Discord attachments + per-agent
+  // ingestion priority. Both are read LAZILY on each
+  // `attachmentReceived` event (Plan 02 dispatcher reads via
+  // SessionManager.getAgentConfig at receive time — no cached
+  // session-boot capture). A clawcode.yaml edit takes effect on the
+  // NEXT attachment Discord delivers. Mirrors the Phase 90 MEM-03
+  // closure-re-read pattern (types.ts:78-83). 12th application of
+  // the additive-optional reloadable blueprint.
+  "agents.*.autoIngestAttachments",
+  "defaults.autoIngestAttachments",
+  "agents.*.ingestionPriority",
+  "defaults.ingestionPriority",
 ]);
 
 /**

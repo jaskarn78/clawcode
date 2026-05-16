@@ -56,6 +56,8 @@ const baseConfig: ResolvedAgentConfig = {
   memoryScannerEnabled: false,
   memoryFlushIntervalMs: 60_000,
   memoryCueEmoji: "✅",
+  autoIngestAttachments: false, // Phase 999.43 D-09
+  ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
   excludeDynamicSections: false,
   cacheBreakpointPlacement: "after-skills",
   autoStart: false,

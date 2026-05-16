@@ -724,6 +724,23 @@ export function resolveAgentConfig(
     // Phase 90 MEM-05 — per-agent cue emoji beats defaults.memoryCueEmoji
     // (zod-populated default "✅").
     memoryCueEmoji: agent.memoryCueEmoji ?? defaults.memoryCueEmoji,
+    // Phase 999.43 D-09 — per-agent autoIngestAttachments beats defaults.
+    // Use explicit `!== undefined` check (NOT `??`) because operator can
+    // set `agent.autoIngestAttachments: false` and that MUST beat
+    // `defaults.autoIngestAttachments: true`. Mirrors the memoryAutoLoad
+    // / memoryScannerEnabled / autoStart precedent above.
+    autoIngestAttachments:
+      agent.autoIngestAttachments !== undefined
+        ? agent.autoIngestAttachments
+        : defaults.autoIngestAttachments,
+    // Phase 999.43 D-01 Axis 1 — per-agent ingestionPriority beats defaults.
+    // Both sides are zod enum literals; explicit `!== undefined` for
+    // symmetry with autoIngestAttachments above (a bare `??` would also
+    // be safe but the explicit form reads more clearly).
+    ingestionPriority:
+      agent.ingestionPriority !== undefined
+        ? agent.ingestionPriority
+        : defaults.ingestionPriority,
     // Phase 100 follow-up — autoStart precedence:
     //   explicit agent.autoStart (true|false) wins over defaults.autoStart;
     //   defaults.autoStart is zod-defaulted to true, so the resolved value

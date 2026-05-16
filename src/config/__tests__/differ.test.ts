@@ -28,6 +28,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
       // Phase 94 TOOL-10 — defaults carry the fleet-wide directives.
       systemPromptDirectives: {
         "file-sharing": {

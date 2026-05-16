@@ -265,6 +265,37 @@ export type ResolvedAgentConfig = {
    */
   readonly memoryCueEmoji: string;
   /**
+   * Phase 999.43 D-09 — populated by loader.ts from
+   * agent.autoIngestAttachments ?? defaults.autoIngestAttachments (both
+   * default-bearing in zod, so the resolved value is always a concrete
+   * boolean at runtime). Read LAZILY by the Phase 999.43 Plan 02 dispatcher
+   * on each `attachmentReceived` event — a YAML edit takes effect on the
+   * NEXT attachment Discord delivers (RELOADABLE_FIELDS in src/config/
+   * types.ts). Mirrors the memoryAutoLoad / autoStart blueprint.
+   *
+   * Optional at the type level for back-compat with the ~30 existing
+   * ResolvedAgentConfig test factories (same precedent as
+   * `memoryRetrievalTokenBudget?: boolean` / `excludeDynamicSections?:
+   * boolean` above). Production loader.ts always populates it; consumers
+   * default to false when undefined.
+   */
+  readonly autoIngestAttachments?: boolean;
+  /**
+   * Phase 999.43 D-01 Axis 1 — populated by loader.ts from
+   * agent.ingestionPriority ?? defaults.ingestionPriority (default
+   * "medium"). Three-level enum; the score-formula multipliers per D-01
+   * are: high=1.5, medium=1.0, low=0.7. Consumed at retrieval time by
+   * Plan 03's score-weighting in `search_documents`. Reloadable — same
+   * closure-re-read path as autoIngestAttachments above.
+   *
+   * Optional at the type level for back-compat with the ~30 existing
+   * ResolvedAgentConfig test factories (same precedent as
+   * `streamStallTimeoutMs?: number` / `excludeDynamicSections?: boolean`
+   * above). Production loader.ts always populates it; consumers default to
+   * "medium" when undefined.
+   */
+  readonly ingestionPriority?: "low" | "medium" | "high";
+  /**
    * Phase 100 follow-up — ALWAYS populated by loader.ts from
    * agent.autoStart ?? defaults.autoStart (both default-bearing in zod, so
    * the resolved value is always a concrete boolean). Consumed by the

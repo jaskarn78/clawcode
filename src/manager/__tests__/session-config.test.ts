@@ -56,6 +56,8 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
     skills: [],
@@ -1268,6 +1270,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
       mcpServers: [
@@ -1310,6 +1314,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
     });
@@ -1358,6 +1364,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
       memoryAutoLoadPath: "/override/fixture-memory.md",
@@ -1387,6 +1395,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
     });
@@ -1410,6 +1420,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
     });
@@ -1430,6 +1442,8 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     settingSources: ["project"], // Phase 100 GSD-02
     autoStart: true, // Phase 100 follow-up
       channels: ["channel-xyz"], // forces a mutableSuffix to exist

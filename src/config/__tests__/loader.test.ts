@@ -42,6 +42,8 @@ describe("resolveAgentConfig", () => {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
@@ -731,6 +733,8 @@ describe("resolveAgentConfig - mcpServers", () => {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
@@ -1711,6 +1715,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
@@ -2124,6 +2130,8 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
@@ -2276,6 +2284,8 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
@@ -2535,6 +2545,8 @@ describe("Phase 100 — settingSources + gsd resolution", () => {
       memoryScannerEnabled: true,
       memoryFlushIntervalMs: 900_000,
       memoryCueEmoji: "✅",
+      autoIngestAttachments: false, // Phase 999.43 D-09
+      ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
       systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
       clawhubCacheTtlMs: 600_000,

@@ -54,6 +54,8 @@ function makeMinimalConfig(name: string): ResolvedAgentConfig {
     memoryScannerEnabled: false,
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     autoStart: false,
     skills: [],
     soul: undefined,

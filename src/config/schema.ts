@@ -1355,6 +1355,29 @@ export const agentSchema = z.object({
   // glyph or short custom emoji name fits). Fallback via
   // defaults.memoryCueEmoji.
   memoryCueEmoji: z.string().min(1).max(8).optional(),
+  // Phase 999.43 D-09 — per-agent gate for auto-ingest of Discord
+  // attachments. DEFAULT FALSE FLEET-WIDE per D-09 — existing agents
+  // without the flag preserve current behavior (manual `ingest_document`
+  // MCP tool only). Operator opts in per-agent via `clawcode.yaml` edit
+  // + `clawcode reload`. Additive + optional; resolver falls back to
+  // defaults.autoIngestAttachments (zod default false). Reloadable —
+  // read LAZILY on each `attachmentReceived` event (Plan 02 dispatcher
+  // reads via SessionManager.getAgentConfig at receive time — no cached
+  // session-boot capture). Mirrors the Phase 90 MEM-03 closure-re-read
+  // pattern (types.ts:78-83). 12th application of the additive-optional
+  // reloadable blueprint (Phase 83/86/89/90/94/95/96/110/115/117/127).
+  autoIngestAttachments: z.boolean().optional(),
+  // Phase 999.43 D-01 Axis 1 — per-agent base priority multiplier for
+  // auto-ingested documents. Three-level enum:
+  //   - high   → 1.5× score multiplier at retrieval time
+  //   - medium → 1.0× (no-op)
+  //   - low    → 0.7×
+  // Multiplies into the final score per D-02:
+  //   score = base × agent_priority_weight × content_priority_weight × recency_boost
+  // Optional + back-compat: when omitted, loader resolver falls back to
+  // defaults.ingestionPriority (zod default "medium"). Reloadable —
+  // same closure-re-read path as autoIngestAttachments above.
+  ingestionPriority: z.enum(["low", "medium", "high"]).optional(),
   /**
    * Phase 100 follow-up — when true, the agent boots automatically on
    * daemon start-all. When false, the agent's config is loaded but the SDK
@@ -1791,6 +1814,18 @@ export const defaultsSchema = z.object({
   // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
   // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
   memoryCueEmoji: z.string().min(1).max(8).default("✅"),
+  // Phase 999.43 D-09 — fleet-wide default for the per-agent
+  // autoIngestAttachments flag. DEFAULT FALSE per D-09: existing
+  // (pre-999.43) configs see no behavior change. Operators opt agents
+  // in individually OR flip this to true to opt the whole fleet in.
+  // Reloadable — see RELOADABLE_FIELDS in types.ts.
+  autoIngestAttachments: z.boolean().default(false),
+  // Phase 999.43 D-01 Axis 1 — fleet-wide default ingestion priority.
+  // Multipliers per D-01: high=1.5, medium=1.0, low=0.7 (applied at
+  // retrieval time per D-02 score formula). Default "medium" → 1.0×
+  // (no-op) so back-compat is preserved when an operator flips
+  // autoIngestAttachments true but hasn't tuned per-agent priorities yet.
+  ingestionPriority: z.enum(["low", "medium", "high"]).default("medium"),
   // Phase 100 follow-up — fleet-wide default for the per-agent autoStart
   // flag. Default true preserves existing behavior (every configured agent
   // boots on daemon start-all). Operators can flip the polarity to false
@@ -2496,6 +2531,11 @@ export const configSchema = z.object({
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
+    // Phase 999.43 D-09 — fleet-wide defaults mirror defaultsSchema above.
+    // Default false preserves back-compat: existing v2.x configs (no
+    // `defaults:` block at all) see auto-ingest OFF for every agent.
+    autoIngestAttachments: false,
+    ingestionPriority: "medium" as const,
     // Phase 100 follow-up — fleet-wide autoStart default mirrors the
     // zod-populated value in defaultsSchema above. Default true preserves
     // back-compat: every configured agent boots on daemon start-all unless
