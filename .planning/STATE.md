@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
-status: v3.0 + v3.1 BOTH OPEN; Phase 999.47 SHIPPED LIVE on clawdy (full homelab inventory loop live); Phase 136 ready for discuss-phase
-stopped_at: Phase 999.47 SHIPPED (Plans 01+02+03 full, 04 partial-by-operator-scope; daemon deploy live; first refresh tick committed under clawcode-refresh identity)
-last_updated: "2026-05-15T23:55:00.000Z"
-last_activity: 2026-05-15 -- Phase 999.47 SHIPPED LIVE on clawdy. Plan 03 SUMMARY landed (3 task commits 7a058e6..54e0242 + operator-deploy 48d8337 + first machine-refresh 130c8d8); Plan 02 daemon live (checkCount 14, homelab-refresh registered); verify.sh exit 0 (SC-8); 32 drift items quarantined + 9 stale-marked on first live tick. Next: Phase 136 discuss-phase or operator triage of DRIFT.md.
+status: v3.0 + v3.1 BOTH OPEN; Phase 101 SHIPPED-WITH-CARRYOVERS on clawdy (RAG engine live, SC-8 PARTIAL pending operator real-truth Pon fixture); Phase 999.47 SHIPPED LIVE; Phase 136 ready for discuss-phase
+stopped_at: Phase 101 SHIPPED (Plans 01-05 closed; 2 deploy-script emergency fixes baked in; SC-1..7 + SC-10 MET; SC-8 PARTIAL synthetic fixture; 24h soak underway from 08:32 PDT)
+last_updated: "2026-05-16T15:57:00.000Z"
+last_activity: 2026-05-16 -- Phase 101 SHIPPED LIVE on clawdy via operator-authorized Plan 05. Overnight autonomous chain ran Plans 01-04 cleanly (26 commits). Plan 05 deploy uncovered 2 incidents both now hardened in scripts/deploy-clawdy.sh (f488778 npm-ci-on-lockfile-change, f22fabb musl-variant-disable). Daemon live at pid 3513500. 31 MCP tools advertised including ingest_document; SC-1..7 + SC-10 MET in code+live. SC-8 PARTIAL — tests/fixtures/pon-2024-truth.json carries _SYNTHETIC_PLACEHOLDER flag; operator swaps in real Pon 2024 values to close SC-8. 24h soak starts 2026-05-16 ~08:32 PDT.
 progress:
   total_phases: 83
   completed_phases: 27

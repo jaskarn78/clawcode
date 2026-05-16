@@ -830,7 +830,9 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 
 **Status:** Plans drafted 2026-04-26 — ready to execute. Zero new npm deps planned (reuses Claude Agent SDK 0.2.97 settingSources field + Phase 99-M relayCompletionToParent + node:fs/promises symlink primitives + Phase 22 config-watcher). Production deploy to clawdy host is operator-driven per 100-08 SMOKE-TEST.md runbook (autonomous=false on Plan 08).
 
-### Phase 101: Robust document-ingestion pipeline (operator-daily-driver unblock)
+### Phase 101: Robust document-ingestion pipeline (operator-daily-driver unblock) — SHIPPED-WITH-CARRYOVERS 2026-05-16
+
+**Status:** SHIPPED LIVE on clawdy 2026-05-16 ~08:32 PDT (pid 3513500). 5 plans closed; ~3,500 LOC; ~300 tests passing; 31 MCP tools live including `ingest_document`. SC-1/2/3/4/5/6/7/10 MET in code+live; **SC-8 PARTIAL** pending operator real-truth Pon fixture swap (synthetic placeholder shipped at `tests/fixtures/pon-2024-truth.json` with `_SYNTHETIC_PLACEHOLDER: true` flag). 24h soak underway. Two emergency deploy-script fixes baked in for any future phase that adds npm deps: `f488778` (npm-ci-on-lockfile-change) and `f22fabb` (musl-variant-disable). See `.planning/phases/101-.../101-05-SUMMARY.md` for full deploy timeline + incident analysis.
 
 **Goal:** Make agents reliable at processing PDFs, scanned documents, financial statements, and other structured documents that operator workflows depend on. Eliminate the failure modes seen during the 2026-04-28 Pon tax return debug — where a scanned PDF without a text layer caused "image dimension limit for many-image requests" errors, the subagent fell back to manual PyMuPDF page-by-page rendering, claimed to save analysis to a file that was never written, and the relay back to the parent agent was built on a Discord-truncated subagent reply (only 2000 chars made it through).
 
