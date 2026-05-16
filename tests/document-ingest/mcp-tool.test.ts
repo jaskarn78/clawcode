@@ -78,6 +78,18 @@ describe("T04 ingest_document MCP tool surface", () => {
     expect(src).toMatch(/force\s*!==\s*true|!\s*force/);
   });
 
+  it("daemon.ts ingest-document handler invokes crossIngestToMemory (Phase 101 Plan 03 T03 wiring, U6)", () => {
+    // Plan 03 T03 — after docStore.ingest succeeds, the handler also mirrors
+    // chunks into memory_chunks via crossIngestToMemory so Phase 90 hybrid-RRF
+    // surfaces them on subsequent operator turns. Also asserts the new
+    // telemetry fields (memoryChunksWritten, migrationPhaseAfter) so a future
+    // refactor that drops the wiring trips this guard.
+    const src = readFileSync(join(REPO_ROOT, "src/manager/daemon.ts"), "utf-8");
+    expect(src).toMatch(/crossIngestToMemory\(/);
+    expect(src).toContain("memoryChunksWritten");
+    expect(src).toContain("migrationPhaseAfter");
+  });
+
   it("ingest_document tool description identifies it as the single entry point", () => {
     const src = readFileSync(join(REPO_ROOT, "src/mcp/server.ts"), "utf-8");
     expect(src).toMatch(/[Ss]ingle entry point/);

@@ -186,7 +186,11 @@ import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.
 import { chunkText, chunkPdf } from "../documents/chunker.js";
 // Phase 101 Plan 02 T04 — robust ingestion engine + structured extraction.
 // `ingest()` is the single entry point per `feedback_silent_path_bifurcation`.
-import { ingest as ingestDocumentEngine, logIngest } from "../document-ingest/index.js";
+import {
+  ingest as ingestDocumentEngine,
+  logIngest,
+  computeDocSlug,
+} from "../document-ingest/index.js";
 import { extractStructured, IngestError as DocIngestError } from "../document-ingest/extractor.js";
 import type { ExtractionSchemaName } from "../document-ingest/schemas/index.js";
 import type { OcrBackend, TaskHint } from "../document-ingest/types.js";
@@ -196,6 +200,12 @@ import {
   setIngestAlertDeps,
   recordIngestAlert,
 } from "../document-ingest/alerts.js";
+// Phase 101 Plan 03 T03 — U6 cross-ingest into memory_chunks so Phase 90
+// hybrid-RRF surfaces document content on subsequent agent turns.
+import {
+  crossIngestToMemory,
+  MigrationPhaseStore,
+} from "../document-ingest/cross-ingest.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
 // Phase 115 sub-scope 7 — lazy-load memory tools (T01).
@@ -11105,12 +11115,10 @@ async function routeMethod(
       }
 
       // Compute docSlug + atomic-write target paths (Phase 96 pattern).
-      const baseFilename = path.basename(filePath).replace(/\.[^.]+$/, "");
-      const docSlug = baseFilename
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        || "document";
+      // Phase 101 Plan 03 T03 — slug logic centralized in
+      // `src/document-ingest/index.ts::computeDocSlug` so the daemon + the
+      // cross-ingest seam derive identical slugs from the same filePath.
+      const docSlug = computeDocSlug(filePath);
       const dateStr = new Date().toISOString().slice(0, 10);
       const docsDir = workspaceRoot
         ? path.join(workspaceRoot, "documents")
@@ -11299,9 +11307,62 @@ async function routeMethod(
       }
 
       const result = docStore.ingest(source, chunks, embeddings);
+
+      // Phase 101 Plan 03 T03 (U6) — cross-ingest the document chunks into
+      // the agent's memory_chunks pipeline so Phase 90 hybrid-RRF surfaces
+      // them on subsequent operator turns. Failure here MUST NOT poison the
+      // parent ingest (docStore.ingest already succeeded — the document IS
+      // ingested; the memory mirror is a best-effort retrieval enhancement).
+      let memoryChunksWritten = 0;
+      let migrationPhaseAfter:
+        | "v1-only"
+        | "dual-write"
+        | "v2-only"
+        | undefined;
+      try {
+        const memoryStore = manager.getMemoryStore(agentName);
+        if (!memoryStore) {
+          throw new Error(
+            `MemoryStore not found for agent '${agentName}' — skipping cross-ingest`,
+          );
+        }
+        const crossResult = await crossIngestToMemory({
+          agent: agentName,
+          docSlug,
+          chunks: chunks.map((c, i) => ({ index: i, content: c.content })),
+          embedderV1: embedder,
+          embedderV2: embedder,
+          memoryStore,
+          migrationPhaseStore: new MigrationPhaseStore(memoryStore, agentName),
+        });
+        memoryChunksWritten = crossResult.chunksWritten;
+        migrationPhaseAfter = crossResult.migrationPhaseAfter;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { docSlug, agent: agentName, err: msg },
+          "phase101-ingest cross-ingest-failed",
+        );
+        // T05 — record as embedder-failure (closest available reason; the
+        // cross-ingest path's actual failure modes are an embedV1/embedV2
+        // throw or a SQLite write throw, both of which the embedder-failure
+        // category covers semantically). Alerts never poison the ingest.
+        await recordIngestAlert({
+          docSlug,
+          type: ingestResult.telemetry.type,
+          reason: "embedder-failure",
+          severity: "error",
+          agent: agentName,
+        }).catch(() => {
+          /* alerts never poison the ingest path */
+        });
+      }
+
       const telemetryFull = {
         ...ingestResult.telemetry,
         chunksCreated: result.chunksCreated,
+        memoryChunksWritten,
+        ...(migrationPhaseAfter !== undefined ? { migrationPhaseAfter } : {}),
       };
       logIngest(telemetryFull, logger);
       return {

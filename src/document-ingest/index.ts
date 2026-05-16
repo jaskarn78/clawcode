@@ -51,6 +51,34 @@ export type {
   IngestResult,
 } from "./types.js";
 
+/**
+ * Phase 101 Plan 03 T03 — shared helper for computing the canonical
+ * `docSlug` from an input file path. Used by both the daemon's
+ * `ingest-document` handler (to build the workspace `documents/` paths +
+ * the cross-ingest `path: "document:<slug>"` key) and the engine's
+ * telemetry. Kept in this module (the engine's public entrypoint) so
+ * there is exactly one definition.
+ *
+ * Algorithm:
+ *   1. `basename(filePath)` → strip the extension.
+ *   2. Lowercase.
+ *   3. Collapse any run of non `[a-z0-9-]` characters into a single `-`.
+ *   4. Trim leading + trailing `-`.
+ *   5. Fall back to `"document"` if the result is empty.
+ *
+ * This grammar is compatible with the `DOC_SLUG_RE` regex in
+ * `cross-ingest.ts` (`/^[a-z0-9-]+$/`) so the cross-ingest validator
+ * never rejects a slug we just produced here.
+ */
+export function computeDocSlug(filePath: string): string {
+  const baseFilename = basename(filePath).replace(/\.[^.]+$/, "");
+  const slug = baseFilename
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.length > 0 ? slug : "document";
+}
+
 /** Compute p50 / p95 from per-page wall-clock samples (integer ms). */
 function percentile(samples: readonly number[], p: number): number {
   if (samples.length === 0) return 0;
