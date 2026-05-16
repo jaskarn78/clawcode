@@ -52,6 +52,12 @@ import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js
 import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
 import { runVisionPrePass } from "./vision-pre-pass.js";
 import type { VerboseState } from "../usage/verbose-state.js";
+// Phase 999.43 Plan 02 T02 — fire-and-forget IPC dispatch into daemon's
+// `auto-ingest-attachment` case after Phase 113 attachment download +
+// vision pre-pass complete. Single auto-ingest entry point per
+// feedback_silent_path_bifurcation.md.
+import { sendIpcRequest } from "../ipc/client.js";
+import { SOCKET_PATH } from "../manager/daemon.js";
 
 /**
  * Configuration for the Discord bridge.
@@ -593,6 +599,55 @@ export class DiscordBridge {
   }
 
   /**
+   * Phase 999.43 Plan 02 T02 — fire-and-forget auto-ingest dispatch.
+   *
+   * Dispatches every downloaded attachment to the daemon's
+   * `auto-ingest-attachment` IPC handler (Plan 02 T01). The agent's turn
+   * does NOT wait on this call — it runs in parallel with the SDK request
+   * and may complete after the assistant has already replied. This matches
+   * the Phase 101 daemon-tick reindex precedent (best-effort enrichment).
+   *
+   * Single auto-ingest dispatch site per feedback_silent_path_bifurcation.md.
+   * Daemon-side handler decides eligibility (agent flag, classifier reject)
+   * and writes the D-04 provenance row.
+   */
+  private dispatchAutoIngestAttachments(
+    agentName: string,
+    downloadResults: readonly DownloadResult[],
+    visionAnalyses: Map<string, string>,
+    message: Message,
+  ): void {
+    for (const result of downloadResults) {
+      if (!result.success || !result.path) continue;
+      const info = result.attachmentInfo;
+      const visionAnalysis = visionAnalyses.get(info.name) ?? null;
+      sendIpcRequest(SOCKET_PATH, "auto-ingest-attachment", {
+        agent: agentName,
+        file_path: result.path,
+        filename: info.name,
+        mime_type: info.contentType,
+        size: info.size,
+        vision_analysis: visionAnalysis,
+        channel_id: message.channelId,
+        message_id: message.id,
+        user_id: message.author.id,
+        user_name: message.author.username,
+      }).catch((err: unknown) => {
+        this.log.warn(
+          {
+            tag: "phase999.43-autoingest",
+            err: err instanceof Error ? err.message : String(err),
+            agent: agentName,
+            messageId: message.id,
+            filename: info.name,
+          },
+          "phase999.43-autoingest dispatch failed",
+        );
+      });
+    }
+  }
+
+  /**
    * Handle an incoming Discord message.
    * Routes to the correct agent based on channel binding.
    */
@@ -668,6 +723,18 @@ export class DiscordBridge {
               this.log,
             );
           }
+        }
+
+        // Phase 999.43 Plan 02 T02 — fire-and-forget auto-ingest dispatch.
+        // Runs in parallel with the SDK request below; daemon decides
+        // eligibility based on agent flag + classifier.
+        if (downloadResults) {
+          this.dispatchAutoIngestAttachments(
+            sessionName,
+            downloadResults,
+            visionAnalyses,
+            message,
+          );
         }
 
         // Fetch the referenced message if this is a reply, so the agent sees
@@ -776,6 +843,18 @@ export class DiscordBridge {
           this.log,
         );
       }
+    }
+
+    // Phase 999.43 Plan 02 T02 — fire-and-forget auto-ingest dispatch.
+    // Runs in parallel with the SDK request below; daemon decides
+    // eligibility based on agent flag + classifier.
+    if (downloadResults) {
+      this.dispatchAutoIngestAttachments(
+        agentName,
+        downloadResults,
+        visionAnalyses,
+        message,
+      );
     }
 
     // Fetch the referenced message if this is a reply, so the agent sees
