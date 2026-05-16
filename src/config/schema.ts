@@ -2279,6 +2279,49 @@ export const defaultsSchema = z.object({
    * time.
    */
   homelab: homelabConfigSchema.optional(),
+  /**
+   * Phase 101 Plan 02 T03 — document-ingestion pipeline knobs.
+   *
+   * All fields are reload-safe (NOT in NON_RELOADABLE_FIELDS). Defaults
+   * mirror the values hard-coded in `src/document-ingest/` so existing
+   * configs see no behaviour change at parse time.
+   *
+   * - `allowMistralOcr` (D-08) — off-by-default escape hatch. When `true`,
+   *   `ingest_document --backend mistral` becomes selectable; otherwise
+   *   the OCR dispatcher throws "Mistral OCR backend disabled in config".
+   * - `tesseractConfidenceThreshold` (D-01) — minimum normalized confidence
+   *   (0-1) for the Tesseract tier to short-circuit before falling through
+   *   to Claude vision. Default 0.70 matches the locked plan value.
+   * - `pageBatchSize` (U3) — greedy bin-packer page-count cap per batch.
+   *   Matches `DEFAULT_BATCH_SIZE = 5` in `src/document-ingest/page-batch.ts`.
+   * - `dimensionMaxPx` (T-101-04) — long-side resize ceiling for any image
+   *   sent to Claude vision. Matches `DIMENSION_MAX_PX = 2000`.
+   * - `visionModelDefault` / `visionModelHighPrecision` (D-02) — Claude
+   *   vision model ids. Defaults match `claude-vision.ts`.
+   */
+  documentIngest: z
+    .object({
+      allowMistralOcr: z.boolean().default(false),
+      tesseractConfidenceThreshold: z.number().min(0).max(1).default(0.7),
+      pageBatchSize: z.number().int().min(1).max(20).default(5),
+      dimensionMaxPx: z.number().int().min(512).max(4096).default(2000),
+      visionModelDefault: z.string().default("claude-haiku-4-5"),
+      visionModelHighPrecision: z.string().default("claude-sonnet-4-5"),
+    })
+    .default({
+      allowMistralOcr: false,
+      tesseractConfidenceThreshold: 0.7,
+      pageBatchSize: 5,
+      dimensionMaxPx: 2000,
+      visionModelDefault: "claude-haiku-4-5",
+      visionModelHighPrecision: "claude-sonnet-4-5",
+    })
+    // `.optional()` after `.default(...)` mirrors the Phase 999.6
+    // preDeploySnapshotMaxAgeHours / Phase 999.12 heartbeatInboxTimeoutMs
+    // pattern — at the type level the field becomes optional so existing
+    // DefaultsConfig test factories continue to compile without an explicit
+    // entry; loader consumption uses `?? {...}` to materialize the baseline.
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -2530,6 +2573,17 @@ export const configSchema = z.object({
     // Phase 124 Plan 02 D-06 — fleet-wide auto-compaction trigger ratio
     // mirror for the configSchema-default-when-`defaults`-omitted fallback.
     "auto-compact-at": 0.7,
+    // Phase 101 Plan 02 T03 — fleet-wide document-ingestion defaults mirror
+    // for the configSchema-default-when-`defaults`-omitted fallback.
+    // Defaults mirror the values hard-coded in `src/document-ingest/`.
+    documentIngest: {
+      allowMistralOcr: false,
+      tesseractConfidenceThreshold: 0.7,
+      pageBatchSize: 5,
+      dimensionMaxPx: 2000,
+      visionModelDefault: "claude-haiku-4-5",
+      visionModelHighPrecision: "claude-sonnet-4-5",
+    },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   triggers: triggersConfigSchema,
