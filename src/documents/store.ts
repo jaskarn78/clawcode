@@ -21,6 +21,7 @@ import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { nanoid } from "nanoid";
 import type { IngestResult, DocumentSearchResult } from "./types.js";
 import type { ChunkInput } from "./chunker.js";
+import { computeDocSlug } from "../document-ingest/index.js";
 
 /** Maximum search limit to prevent excessive queries. */
 const MAX_SEARCH_LIMIT = 20;
@@ -134,6 +135,9 @@ type PreparedStatements = {
   readonly getDocumentRow: Statement;
   readonly getDocumentRowByMessageId: Statement;
   readonly setDocumentPriority: Statement;
+  // Phase 999.43 Plan 03 Task 2 — bridge memory_chunks `document:<slug>`
+  // path values to the documents table keyed by full filepath.
+  readonly listAllDocumentsSources: Statement;
 };
 
 export class DocumentStore {
@@ -555,6 +559,11 @@ export class DocumentStore {
             content_priority_weight = @weight
         WHERE source = @source
       `),
+      // Phase 999.43 Plan 03 Task 2 — sources-only projection used by
+      // getDocumentRowBySlug to walk the table and match by computed slug.
+      listAllDocumentsSources: this.db.prepare(
+        "SELECT source FROM documents",
+      ),
     };
   }
 
@@ -586,6 +595,31 @@ export class DocumentStore {
   getDocumentRow(source: string): DocumentRow | null {
     const row = this.stmts.getDocumentRow.get(source) as DocumentRow | undefined;
     return row ?? null;
+  }
+
+  /**
+   * Phase 999.43 Plan 03 Task 2 — fetch a documents row whose `source`
+   * filepath computes to the given docSlug (`computeDocSlug(source) === slug`).
+   * Used by memory-retrieval's score-weighting pass: `memory_chunks.path`
+   * carries the document-prefix value `document:<slug>` (per
+   * `src/document-ingest/cross-ingest.ts`), but the `documents` table is
+   * keyed by full filepath. This method bridges the asymmetry.
+   *
+   * Linear scan — documents are bounded per agent (low hundreds). Returns
+   * the first match (slug collisions across different file paths are
+   * possible but unusual; first match keeps behavior deterministic).
+   * Returns null when no row matches.
+   */
+  getDocumentRowBySlug(slug: string): DocumentRow | null {
+    const allSources = this.stmts.listAllDocumentsSources.all() as ReadonlyArray<{
+      source: string;
+    }>;
+    for (const { source } of allSources) {
+      if (computeDocSlug(source) === slug) {
+        return this.getDocumentRow(source);
+      }
+    }
+    return null;
   }
 
   /**

@@ -736,8 +736,42 @@ export class SessionManager {
     // the resolver is unset (tests, bootstrap) the rerank step is skipped
     // (back-compat with pre-101-04 retrieval).
     const rerankerResolver = this.rerankerConfigResolver;
+    // Phase 999.43 Plan 03 Task 2 — capture `this` so the inner closure can
+    // re-resolve the agent's documentStore + LIVE ingestionPriority on every
+    // call. Both reads run AT TURN TIME (not at retriever construction time)
+    // so a `clawcode reload` flip of ingestionPriority takes effect on the
+    // next turn without re-wiring the retriever.
+    const self = this;
+    // Phase 999.43 D-01 axis 1 multipliers (LOCKED VERBATIM):
+    //   high: 1.5, medium: 1.0, low: 0.7
+    const DOC_PRIORITY_AGENT_WEIGHTS = {
+      high: 1.5,
+      medium: 1.0,
+      low: 0.7,
+    } as const;
     return async (query: string) => {
       const rerankerCfg = rerankerResolver?.();
+      // Re-resolve at call time for hot-reload semantics. When the agent
+      // has no DocumentStore (e.g. fresh agent before any ingest) the
+      // documentPriority arg is omitted and retrieveMemoryChunks runs
+      // the legacy pipeline (back-compat).
+      const docStore = self.getDocumentStore(agentName);
+      const liveConfig = self.configs.get(agentName);
+      const livePriority = liveConfig?.ingestionPriority ?? "medium";
+      const liveAgentWeight = DOC_PRIORITY_AGENT_WEIGHTS[livePriority];
+      const documentPriority = docStore
+        ? {
+            getDocumentRow: (docSlug: string) => {
+              const row = docStore.getDocumentRowBySlug(docSlug);
+              if (!row) return null;
+              return {
+                content_priority_weight: row.content_priority_weight,
+                ingested_at: row.ingested_at,
+              };
+            },
+            agentWeight: liveAgentWeight,
+          }
+        : undefined;
       return retrieveMemoryChunks({
         query,
         store,
@@ -748,6 +782,7 @@ export class SessionManager {
         excludeTags,
         agent: agentName,
         reranker: rerankerCfg,
+        documentPriority,
       });
     };
   }

@@ -55,6 +55,108 @@ export type MemoryRetrievalResult = Readonly<{
 export const RRF_K = 60;
 
 /**
+ * Phase 999.43 Plan 03 Task 2 — D-02 score formula applied to memory
+ * chunks whose `path` starts with `document:` (cross-ingested via
+ * `src/document-ingest/cross-ingest.ts` per Phase 101 Plan 03 CF-1).
+ *
+ * The post-RRF rank pass calls this helper BEFORE the reranker gate so
+ * priority-weighted document chunks influence pre-rerank ordering per
+ * Phase 999.43 SC-D. Non-document candidates pass through unchanged.
+ *
+ * Multipliers (LOCKED VERBATIM):
+ *   agentWeight  (D-01 axis 1): 1.5 / 1.0 / 0.7 — caller resolves from
+ *     the agent's LIVE `ingestionPriority` config (hot-reload honored).
+ *   contentWeight (D-01 axis 2): 1.5 / 1.0 / 0.5 — from
+ *     `documents.content_priority_weight`.
+ *   recencyBoost (D-07, query-time): 1.3× if `documents.ingested_at` is
+ *     within last 7 days, else 1.0×.
+ *
+ * Missing documents row (e.g. pre-Phase-101 leftover, or a slug that no
+ * longer maps to a row) → multipliers all default to 1.0; the candidate
+ * is counted in `skippedCount` for telemetry but is NOT dropped.
+ *
+ * The candidate `T` type is loose so both `Hydrated` (memory-retrieval's
+ * internal shape with `path` + `fusedScore`) and other consumers can
+ * call this helper without coupling. Output adds a `weightedFused` field
+ * to each candidate.
+ */
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const RECENCY_BOOST = 1.3;
+const DOCUMENT_PATH_PREFIX = "document:";
+
+export function applyDocumentPriorityWeight<
+  T extends { path?: string | null; fusedScore?: number },
+>(
+  candidates: readonly T[],
+  deps: {
+    /**
+     * Resolve a documents row from the doc slug embedded in
+     * `path = "document:<slug>"`. Return null when no row is found —
+     * the multipliers will fall back to neutral 1.0 each.
+     */
+    readonly getDocumentRow: (
+      docSlug: string,
+    ) =>
+      | { readonly content_priority_weight: number; readonly ingested_at: string }
+      | null;
+    /** LIVE per-agent multiplier resolved by caller from config. */
+    readonly agentWeight: number;
+    /** Test hook: override `Date.now()` for deterministic recency math. */
+    readonly now?: number;
+    /** Optional log sink for the per-call structured diagnostic. */
+    readonly logger?: {
+      debug?: (obj: Record<string, unknown>, msg?: string) => void;
+    };
+  },
+): readonly (T & { weightedFused: number })[] {
+  const now = deps.now ?? Date.now();
+  let appliedCount = 0;
+  let skippedCount = 0;
+
+  const out = candidates.map((c) => {
+    const fused = c.fusedScore ?? 0;
+    const path = c.path ?? "";
+    if (!path.startsWith(DOCUMENT_PATH_PREFIX)) {
+      // Non-document candidate — pass through unchanged.
+      return { ...c, weightedFused: fused };
+    }
+    const slug = path.slice(DOCUMENT_PATH_PREFIX.length);
+    const row = deps.getDocumentRow(slug);
+    if (!row) {
+      // Missing provenance row → neutral multipliers. Still flagged
+      // skipped for diagnostic visibility (filter inactive vs. data race).
+      skippedCount += 1;
+      return { ...c, weightedFused: fused * deps.agentWeight };
+    }
+    const contentWeight = row.content_priority_weight ?? 1.0;
+    const ingestedTs = row.ingested_at ? Date.parse(row.ingested_at) : 0;
+    const ageMs =
+      ingestedTs > 0 ? now - ingestedTs : Number.POSITIVE_INFINITY;
+    const recencyBoost = ageMs <= SEVEN_DAYS_MS ? RECENCY_BOOST : 1.0;
+    appliedCount += 1;
+    return {
+      ...c,
+      weightedFused: fused * deps.agentWeight * contentWeight * recencyBoost,
+    };
+  });
+
+  if (appliedCount > 0) {
+    const payload = {
+      tag: "phase999.43-weight",
+      appliedCount,
+      skippedCount,
+      agentWeight: deps.agentWeight,
+    };
+    deps.logger?.debug?.(payload, "phase999.43-weight applied");
+    // Also fire to stdout (daemon captures via systemd) — mirrors the
+    // Phase 115 phase115-tag-filter pattern.
+    console.info("phase999.43-weight", JSON.stringify(payload));
+  }
+
+  return out;
+}
+
+/**
  * Fuse two ranked lists into a single score-sorted result set.
  *
  * RRF formula: score(doc) = sum over rankers of 1/(k + rank(doc)).
@@ -164,6 +266,29 @@ export type RetrieveArgs = Readonly<{
     timeoutMs: number;
     rerankFn?: RerankFn;
     logger?: RerankerLogger;
+  }>;
+  /**
+   * Phase 999.43 Plan 03 Task 2 — optional document-priority weighting
+   * applied BEFORE the optional reranker gate. When provided, candidates
+   * whose `path` starts with `document:` are scaled by the D-02 formula
+   * (agentWeight × contentWeight × recencyBoost) and re-sorted; non-doc
+   * candidates pass through unchanged. When omitted, the legacy
+   * Phase-90-RRF / Phase-101-reranker pipeline runs untouched —
+   * back-compat preserved for all callers that don't pass this.
+   */
+  documentPriority?: Readonly<{
+    /**
+     * Resolve a documents row from the doc slug embedded in
+     * `memory_chunks.path = "document:<slug>"`. Return null when
+     * the docs row is absent (e.g. pre-Phase-101 leftover chunk).
+     */
+    readonly getDocumentRow: (
+      docSlug: string,
+    ) =>
+      | { readonly content_priority_weight: number; readonly ingested_at: string }
+      | null;
+    /** LIVE per-agent multiplier resolved at call time from agent config. */
+    readonly agentWeight: number;
   }>;
 }>;
 
@@ -325,6 +450,31 @@ export async function retrieveMemoryChunks(
   const windowed = [...applyTimeWindowFilter(hydrated, windowDays, now)];
   windowed.sort((a: Hydrated, b: Hydrated) => b.fusedScore - a.fusedScore);
 
+  // Phase 999.43 Plan 03 Task 2 — D-02 priority weighting for
+  // `document:` prefix candidates BEFORE the optional reranker gate.
+  // When `documentPriority` is omitted (legacy callers, tests) the
+  // pipeline runs unchanged. When present, document candidates are
+  // scaled by agentWeight × contentWeight × recencyBoost and re-sorted
+  // so pre-rerank rank reflects priority. The reranker (next step) then
+  // operates on the priority-weighted ordering — reranker logic itself
+  // is unchanged (Phase 101 Plan 04 invariant honored).
+  let prioritized: Hydrated[] = windowed;
+  if (args.documentPriority) {
+    const weighted = applyDocumentPriorityWeight<Hydrated>(windowed, {
+      getDocumentRow: args.documentPriority.getDocumentRow,
+      agentWeight: args.documentPriority.agentWeight,
+      now,
+    });
+    // The weighted entries carry an extra `weightedFused` field; sort by
+    // it DESC then strip it back to plain Hydrated for the downstream
+    // pipeline (Hydrated.fusedScore stays at its RRF value so the
+    // returned MemoryRetrievalResult.fusedScore semantics don't shift).
+    const sorted = [...weighted].sort(
+      (a, b) => (b.weightedFused ?? 0) - (a.weightedFused ?? 0),
+    );
+    prioritized = sorted.map(({ weightedFused: _drop, ...rest }) => rest);
+  }
+
   // Phase 101 Plan 04 (D-04, U9, SC-10) — optional bge-reranker-base
   // cross-encoder pass applied to the post-time-window, RRF-sorted set
   // BEFORE the token-budget loop. Takes `reranker.topNToRerank` candidates,
@@ -339,9 +489,9 @@ export async function retrieveMemoryChunks(
   // throws even if the ONNX runtime crashes. The off-switch path
   // (`reranker.enabled === false` or `reranker` omitted) preserves the
   // pre-101-04 behavior exactly.
-  let postRerank: Hydrated[] = windowed;
-  if (args.reranker && args.reranker.enabled && windowed.length > 0) {
-    const candidates = windowed.slice(0, args.reranker.topNToRerank);
+  let postRerank: Hydrated[] = prioritized;
+  if (args.reranker && args.reranker.enabled && prioritized.length > 0) {
+    const candidates = prioritized.slice(0, args.reranker.topNToRerank);
     const reranked = await rerankTop<Hydrated>(args.query, candidates, {
       topK: Math.min(args.reranker.finalTopK, candidates.length),
       timeoutMs: args.reranker.timeoutMs,
