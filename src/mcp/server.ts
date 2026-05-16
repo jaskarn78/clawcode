@@ -1075,22 +1075,117 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
   );
 
   // Tool: ingest_document
+  //
+  // Phase 101 Plan 02 T04 — SINGLE ingestion entry point per
+  // `feedback_silent_path_bifurcation`. Handles PDFs (text + scanned),
+  // docx, xlsx, images, and plain text via the three-tier OCR fallback
+  // (Tesseract CLI → WASM → Claude vision). Optional structured
+  // extraction (`extract: 'structured' | 'both'`) drives Anthropic
+  // tool-use against the matching zod schema in EXTRACTION_SCHEMAS
+  // (`taxReturn` shipped; brokerage/401k/ADV deferred per D-06).
+  //
+  // Inputs:
+  //   - file_path:  required absolute path; daemon validates containment
+  //                 within the agent workspace (T-101-08).
+  //   - agent:      defaults to the channel-bound agent (validated at the
+  //                 IPC layer; pre-Phase-101 contract retained).
+  //   - taskHint:   'standard' (Haiku) | 'high-precision' (Sonnet).
+  //   - extract:    'text' (no structured pass) | 'structured' | 'both'.
+  //   - schemaName: which extraction schema to apply (default 'taxReturn').
+  //   - backend:    explicit OCR tier override (D-08 'mistral' gated by
+  //                 defaults.documentIngest.allowMistralOcr).
+  //   - force:      D-07 — bypass the `<doc-slug>-<date>.json` cache hit.
   server.tool(
     "ingest_document",
-    "Ingest a document from your workspace for RAG search (supports .txt, .md, .pdf)",
+    "Robustly ingest a PDF/docx/xlsx/image into the agent's document store + memory. " +
+      "Single entry point for document handling — handles type detection, OCR fallback " +
+      "(Tesseract → Claude vision), and structured extraction via zod schemas " +
+      "(taskHint='high-precision' uses Sonnet, default Haiku). Pass " +
+      "extract='structured'|'both' + schemaName to also produce a validated JSON " +
+      "output (ExtractedTaxReturn shipped today). Use force=true to bypass the " +
+      "<doc-slug>-<date>.json cache (D-07 schema-version re-extract).",
     {
       agent: z.string().describe("Your agent name"),
       file_path: z.string().describe("Absolute path to the document file"),
       source: z.string().optional().describe("Custom source identifier (defaults to file path)"),
+      taskHint: z
+        .enum(["standard", "high-precision"])
+        .optional()
+        .describe(
+          "Quality dial. 'standard' (default) → Haiku for OCR/extraction (~$0.005/page); " +
+            "'high-precision' → Sonnet (~$0.015/page). Use 'high-precision' for tax returns and other dense tabular financial documents.",
+        ),
+      extract: z
+        .enum(["text", "structured", "both"])
+        .optional()
+        .describe(
+          "What to extract. 'text' (default) — only chunked text for RAG. " +
+            "'structured' — also run zod-schema-validated extraction via Anthropic tool-use. " +
+            "'both' — text chunks + structured JSON. Structured outputs land at " +
+            "<workspace>/documents/<doc-slug>-<date>.json.",
+        ),
+      schemaName: z
+        .enum(["taxReturn"])
+        .optional()
+        .describe(
+          "Which extraction schema to apply when extract != 'text'. " +
+            "'taxReturn' (default) maps to ExtractedTaxReturn (D-06).",
+        ),
+      backend: z
+        .enum([
+          "tesseract-cli",
+          "tesseract-wasm",
+          "claude-haiku",
+          "claude-sonnet",
+          "mistral",
+          "none",
+        ])
+        .optional()
+        .describe(
+          "Override the OCR three-tier auto-chain. 'mistral' (D-08) requires " +
+            "defaults.documentIngest.allowMistralOcr=true; the stub then throws " +
+            "'not yet implemented' until the operator wires the API client.",
+        ),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "D-07 schema-version opt-in re-extract. Default false: when " +
+            "<doc-slug>-<date>.json exists with matching extractionSchemaVersion, " +
+            "the cached result is returned. Set true to re-run extraction.",
+        ),
     },
-    async ({ agent, file_path, source }) => {
+    async ({ agent, file_path, source, taskHint, extract, schemaName, backend, force }) => {
       try {
         const result = await sendIpcRequest(SOCKET_PATH, "ingest-document", {
-          agent, file_path, source,
+          agent,
+          file_path,
+          source,
+          taskHint,
+          extract,
+          schemaName,
+          backend,
+          force,
         });
-        const r = result as { ok: boolean; source: string; chunks_created: number; total_chars: number };
+        const r = result as {
+          ok: boolean;
+          source: string;
+          chunks_created: number;
+          total_chars: number;
+          structured?: unknown;
+          paths?: { textMd?: string; structuredJson?: string };
+          telemetry?: unknown;
+        };
+        const lines = [
+          `Ingested "${r.source}": ${r.chunks_created} chunks (${r.total_chars} chars)`,
+        ];
+        if (r.paths?.textMd) lines.push(`text: ${r.paths.textMd}`);
+        if (r.paths?.structuredJson) lines.push(`structured: ${r.paths.structuredJson}`);
+        if (r.structured !== undefined) {
+          lines.push(`structured fields extracted: ${JSON.stringify(r.structured).length} chars`);
+        }
         return {
-          content: [{ type: "text" as const, text: `Ingested "${r.source}": ${r.chunks_created} chunks (${r.total_chars} chars)` }],
+          content: [{ type: "text" as const, text: lines.join("\n") }],
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

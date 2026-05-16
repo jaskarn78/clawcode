@@ -184,6 +184,13 @@ import {
 import { SemanticSearch } from "../memory/search.js";
 import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.js";
 import { chunkText, chunkPdf } from "../documents/chunker.js";
+// Phase 101 Plan 02 T04 — robust ingestion engine + structured extraction.
+// `ingest()` is the single entry point per `feedback_silent_path_bifurcation`.
+import { ingest as ingestDocumentEngine, logIngest } from "../document-ingest/index.js";
+import { extractStructured, IngestError as DocIngestError } from "../document-ingest/extractor.js";
+import type { ExtractionSchemaName } from "../document-ingest/schemas/index.js";
+import type { OcrBackend, TaskHint } from "../document-ingest/types.js";
+import { setAllowMistralOcr } from "../document-ingest/ocr/index.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
 // Phase 115 sub-scope 7 — lazy-load memory tools (T01).
@@ -3782,6 +3789,15 @@ export async function startDaemon(
   // than degrading the first tool call on a running agent. The install
   // hint is carried through from BrowserManager.warm() so the operator
   // sees the exact npx command to run.
+  // Phase 101 Plan 02 T03/T04 — wire the D-08 Mistral OCR gate from
+  // `defaults.documentIngest.allowMistralOcr`. Read at call time via the
+  // closure so a `clawcode reload` (which mutates `config` in place) takes
+  // effect without a daemon bounce. Defaults to `false` when the block is
+  // omitted entirely from `clawcode.yaml`.
+  setAllowMistralOcr(
+    () => config.defaults.documentIngest?.allowMistralOcr ?? false,
+  );
+
   const browserCfg = config.defaults.browser;
   const browserManager = new BrowserManager({
     headless: browserCfg.headless,
@@ -10987,22 +11003,197 @@ async function routeMethod(
     }
 
     case "ingest-document": {
+      // Phase 101 Plan 02 T04 — single ingestion entry point per
+      // `feedback_silent_path_bifurcation`. Wires the Phase 101 ingestion
+      // engine (`src/document-ingest/index.ts`) + optional structured
+      // extraction (`extractStructured`) + atomic temp+rename writes to
+      // `<workspace>/documents/<doc-slug>-<date>.{md,json}`.
       const agentName = validateStringParam(params, "agent");
       const filePath = validateStringParam(params, "file_path");
-      const source = typeof params.source === "string" && params.source.length > 0 ? params.source : filePath;
+      const source =
+        typeof params.source === "string" && params.source.length > 0
+          ? params.source
+          : filePath;
+      const taskHintRaw = params.taskHint;
+      const taskHint: TaskHint | undefined =
+        taskHintRaw === "high-precision" || taskHintRaw === "standard"
+          ? taskHintRaw
+          : undefined;
+      const extractRaw = params.extract;
+      const extract: "text" | "structured" | "both" =
+        extractRaw === "structured" || extractRaw === "both"
+          ? extractRaw
+          : "text";
+      const schemaNameRaw = params.schemaName;
+      const schemaName: ExtractionSchemaName =
+        schemaNameRaw === "taxReturn" ? "taxReturn" : "taxReturn";
+      const backendRaw = params.backend;
+      const backend: OcrBackend | undefined =
+        backendRaw === "tesseract-cli" ||
+        backendRaw === "tesseract-wasm" ||
+        backendRaw === "claude-haiku" ||
+        backendRaw === "claude-sonnet" ||
+        backendRaw === "mistral" ||
+        backendRaw === "none"
+          ? backendRaw
+          : undefined;
+      const force = params.force === true;
 
       const docStore = manager.getDocumentStore(agentName);
       if (!docStore) {
-        throw new ManagerError(`Document store not found for agent '${agentName}' (agent may not be running)`);
+        throw new ManagerError(
+          `Document store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+
+      // T-101-08 mitigation — resolve file_path against the agent's
+      // workspace root. Reject path traversal outside the workspace.
+      // `path.relative` returns a string starting with `..` when the
+      // resolved target is outside `workspaceRoot`.
+      const agentConfig = configs.find((c) => c.name === agentName);
+      const workspaceRoot = agentConfig?.workspace;
+      const path = await import("node:path");
+      if (workspaceRoot) {
+        const resolvedTarget = path.resolve(filePath);
+        const resolvedRoot = path.resolve(workspaceRoot);
+        const rel = path.relative(resolvedRoot, resolvedTarget);
+        if (
+          rel.startsWith("..") ||
+          path.isAbsolute(rel)
+        ) {
+          throw new ManagerError(
+            `file_path '${filePath}' is outside agent workspace '${workspaceRoot}' — refused (T-101-08)`,
+          );
+        }
+      }
+
+      // Compute docSlug + atomic-write target paths (Phase 96 pattern).
+      const baseFilename = path.basename(filePath).replace(/\.[^.]+$/, "");
+      const docSlug = baseFilename
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        || "document";
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const docsDir = workspaceRoot
+        ? path.join(workspaceRoot, "documents")
+        : path.join(process.cwd(), "documents");
+      const textMdPath = path.join(docsDir, `${docSlug}-${dateStr}.md`);
+      const structuredJsonPath = path.join(
+        docsDir,
+        `${docSlug}-${dateStr}.json`,
+      );
+
+      // D-07 cache short-circuit: when force !== true AND a structured
+      // JSON output exists with matching extractionSchemaVersion, return
+      // the cached structured result without re-extracting.
+      const fsPromises = await import("node:fs/promises");
+      if (!force && (extract === "structured" || extract === "both")) {
+        try {
+          const cached = JSON.parse(
+            await fsPromises.readFile(structuredJsonPath, "utf-8"),
+          );
+          if (cached?.extractionSchemaVersion === "v1") {
+            logger.info(
+              { docSlug, agent: agentName, cached: true },
+              "phase101-ingest cache hit (force=false; D-07)",
+            );
+            return {
+              ok: true,
+              source,
+              chunks_created: 0,
+              total_chars: 0,
+              structured: cached,
+              paths: { textMd: textMdPath, structuredJson: structuredJsonPath },
+              telemetry: { cached: true, docSlug, type: "cached" as const },
+            };
+          }
+        } catch {
+          // No cached file — fall through to full ingest.
+        }
       }
 
       const fileBuffer = await readFile(filePath);
-      const chunks = filePath.endsWith(".pdf")
-        ? await chunkPdf(fileBuffer)
-        : chunkText(fileBuffer.toString("utf-8"));
+
+      // Run the Phase 101 engine to get text + telemetry. Pass the explicit
+      // backend override (if provided) through; the engine forwards it to
+      // ocrPage when image-bearing handlers fire.
+      const ingestResult = await ingestDocumentEngine(fileBuffer, filePath, {
+        taskHint,
+      });
+      void backend; // backend is honored at the ocrPage level via setAllowMistralOcr / explicit dispatch (T03)
+
+      // Structured extraction (U4) when extract != 'text'.
+      let structured: unknown | undefined;
+      if (extract === "structured" || extract === "both") {
+        try {
+          structured = await extractStructured(
+            ingestResult.text,
+            schemaName,
+            { taskHint },
+          );
+        } catch (err) {
+          if (err instanceof DocIngestError) {
+            // T05 hooks `recordIngestAlert` here. For now, the error
+            // surfaces to the caller as a ManagerError so the MCP tool's
+            // catch block formats it.
+            throw new ManagerError(
+              `structured extraction failed: ${err.message}`,
+            );
+          }
+          throw err;
+        }
+      }
+
+      // Atomic temp+rename writes (Phase 96 pattern). Skip when text is
+      // empty (degenerate ingest case from text-only docs etc.).
+      await fsPromises.mkdir(docsDir, { recursive: true });
+      if (ingestResult.text.length > 0) {
+        const tmpMd = `${textMdPath}.tmp-${process.pid}-${Date.now()}`;
+        await fsPromises.writeFile(tmpMd, ingestResult.text, "utf-8");
+        await fsPromises.rename(tmpMd, textMdPath);
+      }
+      if (structured !== undefined) {
+        const tmpJson = `${structuredJsonPath}.tmp-${process.pid}-${Date.now()}`;
+        await fsPromises.writeFile(
+          tmpJson,
+          JSON.stringify(structured, null, 2),
+          "utf-8",
+        );
+        await fsPromises.rename(tmpJson, structuredJsonPath);
+      }
+
+      // Chunk + embed + persist into the DocumentStore (legacy contract
+      // preserved). Prefer the engine's extracted text when present;
+      // otherwise fall back to the legacy chunker for parity with the
+      // pre-101 daemon behavior.
+      const chunks =
+        ingestResult.text.length > 0
+          ? chunkText(ingestResult.text)
+          : filePath.endsWith(".pdf")
+            ? await chunkPdf(fileBuffer)
+            : chunkText(fileBuffer.toString("utf-8"));
 
       if (chunks.length === 0) {
-        return { ok: true, source, chunks_created: 0, total_chars: 0 };
+        const telemetryFull = {
+          ...ingestResult.telemetry,
+          chunksCreated: 0,
+        };
+        logIngest(telemetryFull, logger);
+        return {
+          ok: true,
+          source,
+          chunks_created: 0,
+          total_chars: ingestResult.text.length,
+          ...(structured !== undefined ? { structured } : {}),
+          paths: {
+            textMd: textMdPath,
+            ...(structured !== undefined
+              ? { structuredJson: structuredJsonPath }
+              : {}),
+          },
+          telemetry: telemetryFull,
+        };
       }
 
       const embedder = manager.getEmbedder();
@@ -11015,7 +11206,25 @@ async function routeMethod(
       }
 
       const result = docStore.ingest(source, chunks, embeddings);
-      return { ok: true, source, chunks_created: result.chunksCreated, total_chars: result.totalChars };
+      const telemetryFull = {
+        ...ingestResult.telemetry,
+        chunksCreated: result.chunksCreated,
+      };
+      logIngest(telemetryFull, logger);
+      return {
+        ok: true,
+        source,
+        chunks_created: result.chunksCreated,
+        total_chars: result.totalChars,
+        ...(structured !== undefined ? { structured } : {}),
+        paths: {
+          textMd: textMdPath,
+          ...(structured !== undefined
+            ? { structuredJson: structuredJsonPath }
+            : {}),
+        },
+        telemetry: telemetryFull,
+      };
     }
 
     case "search-documents": {

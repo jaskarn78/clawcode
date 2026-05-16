@@ -212,6 +212,30 @@ export const IPC_METHODS = [
   "set-effort",
   "get-effort",
   // Document RAG (Phase 49)
+  //
+  // Phase 101 Plan 02 T04 — `ingest-document` request shape extended
+  // (params are passed loose `Record<string, unknown>` over the wire,
+  // so this lives as documentation rather than a runtime guard):
+  //   {
+  //     agent: string;
+  //     file_path: string;
+  //     source?: string;
+  //     taskHint?: 'standard' | 'high-precision';
+  //     extract?: 'text' | 'structured' | 'both';
+  //     schemaName?: 'taxReturn';
+  //     backend?: 'tesseract-cli' | 'tesseract-wasm' | 'claude-haiku' |
+  //              'claude-sonnet' | 'mistral' | 'none';
+  //     force?: boolean;
+  //   }
+  // Response: {
+  //   ok: true;
+  //   source: string;
+  //   chunks_created: number;
+  //   total_chars: number;
+  //   structured?: unknown;   // when extract !== 'text'
+  //   paths: { textMd: string; structuredJson?: string };
+  //   telemetry: IngestTelemetry;
+  // }
   "ingest-document",
   "search-documents",
   "delete-document",
