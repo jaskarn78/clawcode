@@ -195,7 +195,7 @@ import { extractStructured, IngestError as DocIngestError } from "../document-in
 import type { ExtractionSchemaName } from "../document-ingest/schemas/index.js";
 import type { OcrBackend, TaskHint } from "../document-ingest/types.js";
 import { setAllowMistralOcr } from "../document-ingest/ocr/index.js";
-import { warmupReranker } from "../memory/reranker.js";
+import { warmupReranker, applyRerankerEnvOverride } from "../memory/reranker.js";
 // Phase 101 Plan 02 T05 — fail-mode alerts to admin-clawdy (U7, SC-7).
 import {
   setIngestAlertDeps,
@@ -3821,8 +3821,17 @@ export async function startDaemon(
   // Resolver returns `undefined` when the block is absent (back-compat
   // for pre-101-04 configs); `retrieveMemoryChunks` treats that as
   // "rerank disabled".
-  manager.setRerankerConfigResolver(
-    () => config.defaults.documentIngest?.reranker,
+  //
+  // Emergency env override: `CLAWCODE_RERANKER_ENABLED=false` short-circuits
+  // the YAML setting to force-disable on the next turn. This is the
+  // emergency knob — unlike the `clawcode reload` YAML path it doesn't
+  // require daemon-liveness, so an operator can disable mid-incident via
+  // systemd env without a config edit. Mirrors operator preference for
+  // flippable rollback paths (Phase 110 shimRuntime, Phase 117 advisor
+  // backend). Read at call-time so a systemd-reload-env takes effect on
+  // the next retrieval turn.
+  manager.setRerankerConfigResolver(() =>
+    applyRerankerEnvOverride(config.defaults.documentIngest?.reranker),
   );
 
   // Phase 101 Plan 04 — warm the Xenova/bge-reranker-base ONNX session
@@ -3831,7 +3840,10 @@ export async function startDaemon(
   // and-forget per the plan's "non-blocking warmup" directive — a failed
   // warm logs a warn and the retrieval path falls back lazily on the
   // first turn (covered by the 500ms timeout fallback).
-  if (config.defaults.documentIngest?.reranker?.enabled !== false) {
+  if (
+    process.env.CLAWCODE_RERANKER_ENABLED !== "false" &&
+    config.defaults.documentIngest?.reranker?.enabled !== false
+  ) {
     void warmupReranker().catch((err) => {
       logger.warn(
         { err, phase: "phase101-ingest", event: "reranker-warmup-failed" },

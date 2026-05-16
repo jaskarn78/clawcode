@@ -85,6 +85,45 @@ export function _resetRerankerForTests(): void {
 }
 
 /**
+ * Phase 101 Plan 04 (T02 follow-up) — env-override applicator. Wraps a
+ * config block from YAML with the `CLAWCODE_RERANKER_ENABLED=false`
+ * emergency disable flag.
+ *
+ * Behavior:
+ *   - `CLAWCODE_RERANKER_ENABLED=false` + cfg present → returns cfg with
+ *     `enabled: false` (force-disable on the next retrieval turn).
+ *   - `CLAWCODE_RERANKER_ENABLED=false` + cfg undefined → returns undefined
+ *     (back-compat: pre-101-04 path stays disabled).
+ *   - env var unset / any other value (including "true") → passes cfg
+ *     through unchanged.
+ *
+ * The emergency env override is the operator's mid-incident knob — unlike
+ * the `clawcode reload` YAML path it doesn't require daemon liveness, so
+ * an operator can disable rerank via systemd env without a config edit.
+ *
+ * Mirrors operator preference for flippable rollback paths (Phase 110
+ * shimRuntime, Phase 117 advisor backend). Wired by daemon.ts at the
+ * `setRerankerConfigResolver` call site so a single resolver closure
+ * handles both YAML + env signals.
+ */
+export type RerankerConfigBlock = Readonly<{
+  enabled: boolean;
+  topNToRerank: number;
+  finalTopK: number;
+  timeoutMs: number;
+}>;
+
+export function applyRerankerEnvOverride(
+  cfg: RerankerConfigBlock | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): RerankerConfigBlock | undefined {
+  if (env.CLAWCODE_RERANKER_ENABLED === "false") {
+    return cfg ? { ...cfg, enabled: false } : undefined;
+  }
+  return cfg;
+}
+
+/**
  * Minimal structural shape a rerank candidate needs to satisfy. Compatible
  * with both `MemoryRetrievalResult` (which carries `body`) and the legacy
  * RRF-shape pseudocode that names the field `content`. Accept either; the

@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   rerankTop,
   _resetRerankerForTests,
+  applyRerankerEnvOverride,
   type RerankFn,
 } from "../../src/memory/reranker.js";
 import { retrieveMemoryChunks } from "../../src/memory/memory-retrieval.js";
@@ -242,6 +243,70 @@ describe("retrieveMemoryChunks — Phase 101 Plan 04 reranker integration (SC-10
     expect(out[0].body).toBe("passage 2");
     expect(out[1].body).toBe("passage 1");
     expect(out[2].body).toBe("passage 0");
+  });
+
+  it("U9-T09: CLAWCODE_RERANKER_ENABLED=false env override forces disabled on a YAML-enabled cfg (emergency knob)", () => {
+    const cfg = { enabled: true, topNToRerank: 20, finalTopK: 5, timeoutMs: 500 };
+    // Operator emergency knob — overrides YAML.
+    const overridden = applyRerankerEnvOverride(cfg, {
+      CLAWCODE_RERANKER_ENABLED: "false",
+    } as NodeJS.ProcessEnv);
+    expect(overridden).toEqual({
+      enabled: false,
+      topNToRerank: 20,
+      finalTopK: 5,
+      timeoutMs: 500,
+    });
+    // Env unset → cfg passes through unchanged.
+    expect(applyRerankerEnvOverride(cfg, {} as NodeJS.ProcessEnv)).toEqual(cfg);
+    // Env "true" (any non-"false" value) → cfg passes through unchanged.
+    expect(
+      applyRerankerEnvOverride(cfg, {
+        CLAWCODE_RERANKER_ENABLED: "true",
+      } as NodeJS.ProcessEnv),
+    ).toEqual(cfg);
+    // Env "false" + cfg undefined → undefined (back-compat).
+    expect(
+      applyRerankerEnvOverride(undefined, {
+        CLAWCODE_RERANKER_ENABLED: "false",
+      } as NodeJS.ProcessEnv),
+    ).toBeUndefined();
+  });
+
+  it("U9-T10: env override path integrates end-to-end — disabled cfg from override → rerankFn NOT invoked", async () => {
+    const store = new MemoryStore(":memory:");
+    store.insertMemoryChunk({
+      path: "document:doc-y",
+      chunkIndex: 0,
+      heading: null,
+      body: "y content for env-override test",
+      tokenCount: 4,
+      scoreWeight: 0,
+      fileMtimeMs: Date.now(),
+      fileSha256: "sha-y",
+      embedding: await testEmbed("y"),
+    });
+    const rerankFn = vi.fn() as unknown as RerankFn;
+    // Simulate daemon resolver path: YAML says enabled:true, env forces false.
+    const yamlCfg = {
+      enabled: true,
+      topNToRerank: 20,
+      finalTopK: 5,
+      timeoutMs: 500,
+    };
+    const effective = applyRerankerEnvOverride(yamlCfg, {
+      CLAWCODE_RERANKER_ENABLED: "false",
+    } as NodeJS.ProcessEnv);
+    expect(effective?.enabled).toBe(false);
+    const out = await retrieveMemoryChunks({
+      query: "y",
+      store,
+      embed: testEmbed,
+      topK: 5,
+      reranker: effective ? { ...effective, rerankFn } : undefined,
+    });
+    expect(rerankFn).not.toHaveBeenCalled();
+    expect(out.length).toBeGreaterThan(0);
   });
 
   it("U9-T08: rerank with timeout → graceful fallback preserves RRF order", async () => {
