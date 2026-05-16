@@ -1451,6 +1451,63 @@ export class DiscordBridge {
       }
     }
 
+    // Phase 999.43 SC-E Plan 04 T02 — operator priority override via
+    // 🔴/🟡/🟢 reactions on a Discord attachment message. The branch is
+    // ADDITIVE: after firing the set-doc-priority-by-message IPC we
+    // FALL THROUGH to the regular reaction-forwarding pipeline below so
+    // the agent still sees "🔴 added" too (operator may still want the
+    // agent to react to the same emoji semantically).
+    //
+    // Emoji codepoints (D-03 LOCKED): 🔴 U+1F534 → high,
+    //   🟡 U+1F7E1 → medium, 🟢 U+1F7E2 → low.
+    if (type === "add") {
+      const PRIORITY_EMOJIS: Record<string, "high" | "medium" | "low"> = {
+        "🔴": "high",
+        "🟡": "medium",
+        "🟢": "low",
+      };
+      const emojiName = reaction.emoji.name ?? "";
+      const newLevel = PRIORITY_EMOJIS[emojiName];
+      if (newLevel) {
+        try {
+          const result = await sendIpcRequest(
+            SOCKET_PATH,
+            "set-doc-priority-by-message",
+            {
+              agent: agentName,
+              message_id: reaction.message.id,
+              level: newLevel,
+              who: "operator",
+              reason: `Discord ${emojiName} reaction by ${user.username ?? user.id}`,
+            },
+          );
+          this.log.info(
+            {
+              tag: "phase999.43-priority-emoji",
+              agent: agentName,
+              messageId: reaction.message.id,
+              newLevel,
+              user: user.username ?? user.id,
+              result,
+            },
+            "phase999.43 emoji-override processed",
+          );
+        } catch (err) {
+          this.log.warn(
+            {
+              tag: "phase999.43-priority-emoji",
+              err: err instanceof Error ? err.message : String(err),
+              messageId: reaction.message.id,
+              agent: agentName,
+            },
+            "phase999.43 emoji-override failed",
+          );
+        }
+        // Intentional fall-through to the existing reaction-forwarding
+        // pipeline below — both surfaces are additive.
+      }
+    }
+
     const emoji = reaction.emoji.name ?? reaction.emoji.id ?? "unknown";
     const userName = user.username ?? user.id;
 

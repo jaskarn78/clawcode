@@ -104,6 +104,18 @@ export const TOOL_DEFINITIONS = {
     description: "Ingest a document from your workspace for RAG search (text, markdown, or PDF)",
     ipcMethod: "ingest-document",
   },
+  // Phase 999.43 Plan 04 T02 — agent-callable priority override on a
+  // previously ingested document. D-08 sandbox: agents are capped at
+  // MEDIUM (Layer-1 enforced via z.enum(["medium","low"]) in the
+  // server.tool registration below; Layer-2 enforced at the daemon
+  // handler in src/manager/set-doc-priority-handler.ts). Only the
+  // operator can promote to HIGH via 🔴 emoji reaction or `clawcode rag
+  // set-priority`.
+  clawcode_rag_set_priority: {
+    description:
+      "Set the retrieval priority (medium/low) for a document you previously ingested. D-08 sandbox: agents are capped at MEDIUM; only the operator can promote to HIGH via 🔴 emoji reaction or `clawcode rag set-priority`.",
+    ipcMethod: "set-doc-priority",
+  },
   search_documents: {
     description: "Search across ingested documents for relevant content",
     ipcMethod: "search-documents",
@@ -1190,6 +1202,93 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text" as const, text: `Ingest failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: clawcode_rag_set_priority — Phase 999.43 Plan 04 T02
+  //
+  // Two layers of D-08 sandbox protect against agent self-escalation:
+  //
+  //   LAYER-1 (here): z.enum(["medium", "low"]) — the MCP SDK rejects
+  //   any "high" argument at the SDK boundary, before the IPC handler
+  //   even sees the request. This is the primary gate the agent's
+  //   model interacts with.
+  //
+  //   LAYER-2 (daemon): set-doc-priority-handler.ts re-validates
+  //   `who === "agent" && level === "high"` and returns a refusal +
+  //   audit-log entry. Defense-in-depth — even if the MCP schema is
+  //   ever relaxed or bypassed, the daemon refuses.
+  //
+  // Only operator surfaces (🔴 emoji reaction in src/discord/bridge.ts
+  // + `clawcode rag set-priority` CLI) can set HIGH.
+  server.tool(
+    "clawcode_rag_set_priority",
+    "Set retrieval priority for a previously-ingested document. D-08 sandbox: agents capped at MEDIUM; operator-only HIGH via 🔴 emoji or `clawcode rag set-priority`.",
+    {
+      agent: z
+        .string()
+        .describe(
+          "Your agent name (required for daemon to scope the documents store)",
+        ),
+      source: z
+        .string()
+        .describe(
+          "Document source identifier (full file path used at ingest time)",
+        ),
+      level: z
+        .enum(["medium", "low"])
+        .describe(
+          "Priority level. HIGH is operator-only — D-08 sandbox. Use 'medium' or 'low' only.",
+        ),
+      reason: z.string().optional().describe("Short rationale for the audit log"),
+    },
+    async ({ agent, source, level, reason }) => {
+      try {
+        const result = await sendIpcRequest(
+          SOCKET_PATH,
+          "set-doc-priority",
+          {
+            agent,
+            source,
+            level,
+            who: "agent",
+            callerAgent: agent, // self-attribution — daemon enforces Phase 90 isolation
+            reason,
+          },
+        );
+        const r = result as {
+          ok: boolean;
+          source?: string;
+          old_level?: string;
+          new_level?: string;
+          error?: string;
+        };
+        if (!r.ok) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Priority change refused: ${r.error ?? "unknown"}`,
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Priority of "${r.source}" changed: ${r.old_level} → ${r.new_level}`,
+            },
+          ],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            { type: "text" as const, text: `set-priority failed: ${msg}` },
+          ],
+        };
       }
     },
   );
