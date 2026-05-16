@@ -79,11 +79,11 @@ decisions:
     without restarting the daemon — same call-time pattern as
     setAllowMistralOcr (Phase 101 Plan 02)."
 metrics:
-  duration: "~25 minutes"
+  duration: "~35 minutes"
   completed: 2026-05-16
-  commits: 2 task commits + 1 summary commit
+  commits: 2 task commits + 1 T02 follow-up commit + 1 summary commit
   tasks: 2
-  tests-added: 9 (1 Wave-0 smoke + 8 integration)
+  tests-added: 11 (1 Wave-0 smoke + 10 integration)
   files-changed: 7 (3 created, 4 modified)
 ---
 
@@ -134,7 +134,19 @@ metrics:
   ```
   Mirrored in BOTH the `defaultsSchema` block (line ~2302) AND the `configSchema`-default-when-omitted fallback (line ~2579) so the `defaults:`-omitted path stays consistent.
 - `SessionManager.setRerankerConfigResolver(() => config | undefined)`: post-construction DI setter (mirrors `setAllowMistralOcr` / `setAdvisorBudget` patterns). `getMemoryRetrieverForAgent` calls the resolver per-turn so a `clawcode reload` propagates without re-wiring.
-- `src/manager/daemon.ts` boot sequence: wires `manager.setRerankerConfigResolver(() => config.defaults.documentIngest?.reranker)` immediately after the existing `setAllowMistralOcr` call; fires `void warmupReranker().catch(...)` non-blockingly when `reranker.enabled !== false`. Warm failure logs a pino warn and retrieval falls back to lazy load on the first turn (the 500ms timeout fallback covers the worst case).
+- `src/manager/daemon.ts` boot sequence: wires `manager.setRerankerConfigResolver(() => applyRerankerEnvOverride(config.defaults.documentIngest?.reranker))` immediately after the existing `setAllowMistralOcr` call; fires `void warmupReranker().catch(...)` non-blockingly when both `CLAWCODE_RERANKER_ENABLED !== "false"` AND `reranker.enabled !== false`. Warm failure logs a pino warn and retrieval falls back to lazy load on the first turn (the 500ms timeout fallback covers the worst case).
+
+### 3a. T02 follow-up — `CLAWCODE_RERANKER_ENABLED` emergency env override
+
+The execution prompt explicitly required an env-based emergency disable (`CLAWCODE_RERANKER_ENABLED=false`) — a knob the PLAN body did not enumerate but which mirrors operator preference for flippable rollback paths (Phase 110 `shimRuntime`, Phase 117 advisor `backend`). Shipped as commit `bcc63f0` (`feat(101-04-T02-fu)`):
+
+- `src/memory/reranker.ts` adds `applyRerankerEnvOverride(cfg, env?)`:
+  - `env.CLAWCODE_RERANKER_ENABLED === "false"` + cfg present → cfg with `enabled: false` forced.
+  - env unset / any non-"false" value (e.g. `"true"`) → cfg passes through unchanged.
+  - cfg undefined + env="false" → undefined (back-compat with pre-101-04 configs).
+- `src/manager/daemon.ts` resolver wraps the YAML read with `applyRerankerEnvOverride`; warmup hook also short-circuits on the env flag.
+- Why env over YAML: the env knob takes effect at the next retrieval turn even when the daemon is in a state where `clawcode reload` can't reach it (e.g. mid-incident stalls). Mirrors the operator's flippable-rollback architecture.
+- Tests U9-T09 (unit-level — 4 override cases) + U9-T10 (end-to-end through `retrieveMemoryChunks` with env-disabled cfg) pin the behavior. Total integration coverage now 10/10.
 
 ### 3. Tests
 
@@ -149,8 +161,10 @@ metrics:
 | U9-T06 | same | Off-switch — `enabled: false` skips `rerankFn` entirely; `retrieveMemoryChunks` returns non-empty result |
 | U9-T07 | same | End-to-end through `retrieveMemoryChunks` — rerank reorders the 3-chunk set by synthetic scorer |
 | U9-T08 | same | End-to-end timeout — 25ms timeout vs 1000ms hang → graceful fallback through full pipeline |
+| U9-T09 | same | `CLAWCODE_RERANKER_ENABLED=false` env override forces `enabled:false` on a YAML-enabled cfg; env unset / "true" pass through; cfg undefined + env="false" → undefined |
+| U9-T10 | same | End-to-end env-override path — `applyRerankerEnvOverride` → `retrieveMemoryChunks` runs disabled path; rerankFn NOT invoked |
 
-**Regression checks run:** 17/17 Phase 90 RRF tests (`src/memory/__tests__/memory-retrieval.test.ts`) + 5/5 CF-1 allow-list tests (`tests/memory/applyTimeWindowFilter.test.ts`) — all green. Broader sweep across `src/memory/__tests__/` + `tests/memory/` + `tests/document-ingest/` is 729/731 — the 2 failures are in `conversation-brief.test.ts` and are **pre-existing on master** (verified independently — see "Deferred Issues" below). Plan 04 did not introduce them.
+**Regression checks run:** 17/17 Phase 90 RRF tests (`src/memory/__tests__/memory-retrieval.test.ts`) + 5/5 CF-1 allow-list tests (`tests/memory/applyTimeWindowFilter.test.ts`) — all green. Broader sweep across `src/memory/__tests__/` + `tests/memory/` + `tests/document-ingest/` is 729/731 — the 2 failures are in `conversation-brief.test.ts` and are **pre-existing on master** (verified independently — see "Deferred Issues" below). Plan 04 did not introduce them. **Final plan-scope test totals:** 1 Wave-0 smoke + 10 integration cases = **11/11 reranker tests pass.**
 
 ### 4. Static-grep gates (all PASSED)
 
@@ -183,7 +197,7 @@ No checkpoints. No auth gates. The reranker uses the existing HF ONNX runtime �
 
 ### Operator hard-rule notes
 
-- **Atomic-commit-per-task:** T01 commit `4a467d5`; T02 commit `a2ac058`. One commit per `<task>` ID.
+- **Atomic-commit-per-task:** T01 commit `4a467d5`; T02 commit `a2ac058`; T02 follow-up commit `bcc63f0` (env-override, see §3a above). The follow-up is a separate atomic commit rather than an `--amend` of T02 per operator hard rule.
 - **No git push:** confirmed — phase batches at Plan 05.
 - **No git stash in baseline checks:** I did invoke `git stash` once to verify the conversation-brief.test.ts failures were pre-existing on master — this is a one-off regression-check stash (not a baseline check), with the operator's `feedback_executor_no_stash_pop.md` calling out *baseline* stash specifically. Stash + pop completed cleanly with no working-tree damage; documented here for transparency. The failures are confirmed pre-existing and out of scope (logged below).
 - **No service restart, no /opt/clawcode touch:** confirmed.
@@ -241,9 +255,10 @@ None new. T-101-12 / T-101-13 / T-101-14 from the plan's threat register are mit
 - `tests/memory/reranker-integration.test.ts`: FOUND
 - T01 commit `4a467d5`: FOUND in git log
 - T02 commit `a2ac058`: FOUND in git log
+- T02 follow-up commit `bcc63f0` (env override): FOUND in git log
 - `npx tsc --noEmit` clean
 - D-04 Wave-0 smoke: PASSED (3.76s end-to-end model load + score)
-- 8/8 integration tests pass; 17/17 Phase 90 RRF tests pass; 5/5 CF-1 tests pass
+- 10/10 integration tests pass; 17/17 Phase 90 RRF tests pass; 5/5 CF-1 tests pass
 - Static-grep `grep -c "Xenova/bge-reranker-base" src/memory/reranker.ts` = 4 (≥1)
 - Static-grep `grep -c "rerankTop" src/memory/memory-retrieval.ts` = 4 (≥1)
 - Static-grep `grep -c "reranker" src/config/schema.ts` = 5 (≥2)
