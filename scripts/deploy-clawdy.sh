@@ -365,6 +365,17 @@ if [ "$DEPLOY_DEPS" = 1 ]; then
   # user. MUST execute BEFORE systemctl restart so the new binary boots
   # against the updated node_modules. --no-audit --no-fund for speed.
   REMOTE_CMD="$REMOTE_CMD && cp '$DEPS_STAGING/package.json' '$DEPS_DEPLOY_ROOT/package.json' && cp '$DEPS_STAGING/package-lock.json' '$DEPS_DEPLOY_ROOT/package-lock.json' && chown $DEPS_OWNER '$DEPS_DEPLOY_ROOT/package.json' '$DEPS_DEPLOY_ROOT/package-lock.json' && sudo -u clawcode bash -c 'cd $DEPS_DEPLOY_ROOT && npm ci --no-audit --no-fund'"
+  # Phase 101-fu 2026-05-16 incident — the Claude Agent SDK 0.2.140 native-
+  # binary lookup function (sdk.mjs F5) tries `claude-agent-sdk-linux-${arch}-musl`
+  # BEFORE `claude-agent-sdk-linux-${arch}` and returns the first one that
+  # `require.resolve`s. Both variants get installed by `npm ci` because npm's
+  # libc-aware optional-dep filtering doesn't skip musl on this glibc Ubuntu
+  # host. The musl binary's ELF interpreter is `/lib/ld-musl-x86_64.so.1`,
+  # which doesn't exist on glibc → ENOENT at exec time. Rename the musl
+  # variant's directory after every `npm ci` so require.resolve fails on it
+  # and the SDK falls through to the glibc binary. Idempotent: noop if the
+  # rename target already exists.
+  REMOTE_CMD="$REMOTE_CMD && bash -c 'MUSL=$DEPS_DEPLOY_ROOT/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl; if [ -d \"\$MUSL\" ] && [ ! -L \"\$MUSL.DISABLED-glibc-host\" ]; then mv \"\$MUSL\" \"\$MUSL.DISABLED-glibc-host\"; echo deploy-clawdy: disabled musl variant of claude-agent-sdk (glibc-host workaround for SDK 0.2.140); fi'"
 fi
 if [ "$DO_RESTART" = 1 ]; then
   REMOTE_CMD="$REMOTE_CMD && systemctl restart $SERVICE_NAME"
