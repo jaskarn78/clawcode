@@ -854,7 +854,14 @@ Phase 93 delivered: three operator-reported UX fixes from the 2026-04-24 fin-acq
 7. **Fail-mode taxonomy + operator alerts** — when ingestion fails (OCR returns garbage, structured extraction can't find required fields, page-batch truncates mid-table, etc.), surface a structured failure via the trigger-engine delivery callback to admin-clawdy. Operator gets "fin couldn't parse Pon's tax return Schedule C — Tesseract OCR gave 12% confidence, recommend manual review" instead of the agent silently falling back to claim-but-fail.
 8. **Pon tax-return UAT case** — the canonical regression artifact. Phase ships when fin-acquisition can ingest the same Pon 2025 tax return that failed 2026-04-28 morning, produce a structured `ExtractedTaxReturn` matching operator-curated truth values (Box 1 wages, Schedule C profits, backdoor Roth amounts, etc.), and post a complete summary to thread without truncation, with the file actually written and verified.
 
-**Plans:** TBD (run /gsd:plan-phase 101 in v2.7 to break down)
+**Plans:** 5 plans
+
+Plans:
+- [ ] 101-01-PLAN.md — Ingestion engine: file-type detect (U1) + OCR fallback chain (U2, D-01/D-02) + page-batching with dimension control (U3) + CF-2 embedV2 cutover + vec_document_chunks int8 migration + tesseract-ocr deploy precheck. Covers SC-1, SC-2, SC-3.
+- [ ] 101-02-PLAN.md — Structured extraction surface: CF-5 Pon truth fixture checkpoint + ExtractedTaxReturn zod schema (D-06) + Anthropic tool-use extractor + ingest_document MCP tool (single entry point) + Mistral stub knob (D-08) + fail-mode alerts to admin-clawdy (U7). Covers SC-4, SC-5, SC-7, SC-8 (UAT gate).
+- [ ] 101-03-PLAN.md — Memory cross-ingest: CF-1 applyTimeWindowFilter allow-list for document: + crossIngestToMemory helper + Phase 115 dual-write auto-flip (CF-2 cross-write coordination). Covers SC-6.
+- [ ] 101-04-PLAN.md — Local cross-encoder reranker: Wave-0 bge-reranker-base smoke gate (D-04) + rerankTop over Phase 90 RRF + config off-switch + warmup hook. Covers SC-10. On Wave-0 fail, U9 splits to Phase 101.5.
+- [ ] 101-05-PLAN.md — Operator deploy: deploy-clawdy.sh + Pon UAT live verification (SC-8 ≥95%) + 24h soak gate + phase-end push. autonomous: false.
 
 **Status:** Pending — opened 2026-04-28 evening after the Pon tax return debug session. Closely related to Phase 100-fu's long-output-to-file directive (which addresses the Discord-output side); Phase 101 addresses the upstream document-parsing side. Likely the single highest-leverage operator-facing feature in the v2.7 milestone — fin-acquisition's daily workflow is document-heavy, and the current ad-hoc PyMuPDF fallbacks are unreliable.
 
