@@ -268,4 +268,49 @@ describe("ConfigWatcher", () => {
 
     await watcher.stop();
   });
+
+  // Phase 999.X — newConfig is passed to onChange so the daemon can
+  // reassign its `let config` ref. Closures inside onTickAfter
+  // (orphan-claude-reaper, subagent-session-reaper) read
+  // `config.defaults.<dial>` lazily and pick up yaml hot-reloads
+  // without restart.
+  it("passes newConfig to onChange for daemon `let config` reassignment", async () => {
+    let receivedNewConfig: import("../schema.js").Config | undefined;
+
+    const watcher = new ConfigWatcher({
+      configPath,
+      auditTrailPath: auditPath,
+      onChange: async (_diff, _agents, newConfig) => {
+        receivedNewConfig = newConfig;
+      },
+      log,
+      debounceMs: 100,
+    });
+
+    await watcher.start();
+
+    const newYaml = makeYaml({
+      agents: [
+        {
+          name: "researcher",
+          channels: ["999"],
+          skills: [],
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+        },
+      ],
+    });
+    await writeFile(configPath, newYaml);
+
+    await waitFor(() => receivedNewConfig !== undefined, 5000);
+
+    expect(receivedNewConfig).toBeDefined();
+    expect(receivedNewConfig!.agents).toHaveLength(1);
+    expect(receivedNewConfig!.agents[0]!.channels).toEqual(["999"]);
+
+    await watcher.stop();
+  });
 });

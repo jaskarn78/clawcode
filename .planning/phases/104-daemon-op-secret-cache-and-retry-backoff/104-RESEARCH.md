@@ -1,0 +1,648 @@
+# Phase 104: Daemon-side op:// secret cache + retry/backoff — Research
+
+**Researched:** 2026-04-30
+**Domain:** Daemon boot resilience, secret-resolution caching, transient-error retry against the 1Password CLI
+**Confidence:** HIGH
+
+## Summary
+
+ClawCode currently shells out to `op read` separately for every `op://` reference in `clawcode.yaml` on every daemon boot, with **three distinct resolution sites** (Discord bot token, shared `mcpServers[].env`, and per-agent `mcpEnvOverrides`). Two of those sites are sync `execSync` calls; the third is a per-agent async shell-out wired through SessionManager. None of them retry, none of them cache, and none of them rate-limit themselves. On a systemd crash-loop, every restart re-resolves every secret in parallel — which is exactly what blew the 1Password service-account quota into a multi-minute throttle on 2026-04-30.
+
+The fix is structurally small (~2 new modules, ~3 call-site swaps). The interesting design space is *not* "should we cache" but: **(a)** what's the cache key (URI vs vault/item/field tuple), **(b)** what's the TTL story for live rotation (the existing `ConfigWatcher` already provides a hot-reload signal we can hook), and **(c)** what's the right backoff — because 1Password's rate-limit response carries **no useful Retry-After value** (the error literally says "Try again in seconds" with the seconds blank), so we have to pick blind.
+
+**Primary recommendation:** Build a small `SecretsResolver` module (DI-pure, vitest-friendly) that wraps a `Map<string, string>` keyed on the verbatim `op://` URI, calls `op read` via `p-retry@8.0.0` with `retries: 3, factor: 2, minTimeout: 1000, maxTimeout: 8000, randomize: true` (jitter is critical against synchronized crash-loops), and pre-resolves every `op://` reference in the config exactly once at boot via `Promise.allSettled`. Wire it into all three resolution sites. Cache lifetime: until restart, with explicit invalidation hooked into the existing `ConfigWatcher.onChange` callback for any field that touched an `op://` reference. Telemetry: a small counter struct (`{hits, misses, retries, rateLimitHits, lastRefreshedAt}`) exposed via a new IPC method `secrets-status` that `/clawcode-status` can render.
+
+<user_constraints>
+## User Constraints (from CONTEXT.md)
+
+CONTEXT.md does not exist for this phase — this research is the upstream source of decisions. CONTEXT.md will be authored next via `/gsd:discuss-phase 104`.
+
+The roadmap entry pins these as **hard scope**:
+- Resolve at boot, inject into agent envs at spawn (no per-agent re-resolution).
+- Three reference zones in scope: `discord.botToken`, `agents.*.mcpEnvOverrides.*`, `mcpServers.*.env.*`.
+- Backoff is mandatory, not optional. Rate-limit responses must NOT crash-fail an agent.
+- Pairs with Phase 999.9 (shared MCP) but is sequenced **before** it.
+
+The roadmap entry pins these as **out of scope (deferred)**:
+- Replacing the `op` CLI shell-out with `@1password/sdk` — operator constraint, no new SDK dependencies.
+- Cross-process / on-disk secret cache — in-memory only.
+- Secret rotation against the 1Password Connect server (HTTP API) — separate phase if ever needed.
+</user_constraints>
+
+<phase_requirements>
+## Phase Requirements
+
+The roadmap lists requirements as TBD — to be derived in `/gsd:discuss-phase 104`. Based on the goal + open questions, here are the requirements this research supports. The planner should re-confirm these IDs in CONTEXT.md.
+
+| ID | Description | Research Support |
+|----|-------------|------------------|
+| SEC-01 | All three op:// resolution sites (Discord botToken, shared mcpServers[].env, per-agent mcpEnvOverrides) route through one `SecretsResolver` singleton instead of three independent shell-outs. | "Standard Stack" — `SecretsResolver` module pattern; "Architecture Patterns" — three call sites mapped. |
+| SEC-02 | Resolved values are cached in-memory keyed on the verbatim `op://` URI; restarts within the daemon process re-use cached values without re-hitting `op read`. | "Cache Key Shape" decision below; "Don't Hand-Roll" — use `Map<string, string>`, not a custom LRU. |
+| SEC-03 | `op read` failures retry with exponential backoff (3 attempts, 1s/2s/4s base + jitter); only after exhausting retries does the resolver throw. | "Standard Stack" — `p-retry@8`; "1Password Rate Limit Behavior" — backoff calibration. |
+| SEC-04 | Boot-time pre-resolution runs in parallel across all `op://` refs via `Promise.allSettled`; partial failures are reported per-secret with structured pino logs but do NOT block the daemon from starting (graceful degradation matches existing `MCP server disabled` pattern). | "Common Pitfalls" — fail-closed-vs-fail-open tradeoff documented. |
+| SEC-05 | Cache invalidation is wired into the existing `ConfigWatcher` so editing `clawcode.yaml` to point at a different `op://` URI causes that URI to be re-resolved on the next agent spawn (NOT the entire cache flushed). | "Code Examples" — `ConfigWatcher.onChange` hook integration. |
+| SEC-06 | Telemetry surface: a new IPC method (e.g., `secrets-status`) returns `{cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason}` for the `/clawcode-status` Discord renderer. | "Telemetry" section; counter shape mirrors existing `daemon-rate-limit-ipc.ts`. |
+| SEC-07 | No resolved secret value appears in any pino log line, error message, or IPC response — only the `op://` URI (operator-controlled config), structured fields, and the literal string `"<resolved>"` as a sentinel. | "Common Pitfalls" — secret leakage; matches existing security invariant in `op-env-resolver.ts`. |
+</phase_requirements>
+
+## Project Constraints (from CLAUDE.md + global rules)
+
+- **No hardcoded secrets in source.** Already enforced — every secret lives in 1Password and reaches the code via `op://` reference. The cache lives in process memory, never on disk.
+- **Validate at boundaries (zod).** The new IPC `secrets-status` method's request + response shapes must be added to `src/ipc/protocol.ts` zod schemas.
+- **Many small files > few large files (CLAUDE.md coding-style).** The new `SecretsResolver` belongs in its own module (`src/manager/secrets-resolver.ts`), not inlined into `daemon.ts` (which is already 3700+ lines).
+- **Immutability.** `SecretsResolver.resolve(uri)` should return a string (immutable by definition); the internal `Map` is the only mutable state and is encapsulated.
+- **Error handling at every level.** Wrap `op read` failures with structured context (URI + attempt number + last-stderr) before throwing.
+- **Pino structured logging.** Every cache hit/miss/retry/failure event uses `log.info({ ... }, "message")` with structured fields, never the resolved value.
+- **TypeScript ESM, vitest tests.** New modules are `.ts` ESM, tested under `src/manager/__tests__/`.
+- **No new heavyweight deps.** `p-retry@8.0.0` is the one new dependency proposed (10kB, zero transitive deps). The codebase already uses `pino`, `zod`, `chokidar`, native `child_process` — those cover everything else.
+
+## Standard Stack
+
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| `p-retry` | `8.0.0` | Exponential-backoff retry wrapper around `op read` | Sindresorhus's de-facto standard; ESM-only (matches project); accepts `AbortError` for "stop retrying immediately" (use this on permanent errors like 404 / not-authorized); built-in jitter via `randomize: true`; 10kB. Verified via `npm view p-retry version` on 2026-04-30 → `8.0.0`, `type: module`. |
+| `pino` | `^9` (already in deps) | Structured cache hit/miss/retry telemetry | Already wired through the daemon — every cache event logs as a structured JSON row; operator can `journalctl -u clawcode-daemon -o json` and grep on event names. |
+| `zod` | `^4.3.6` (already in deps) | Validate the new `secrets-status` IPC request/response | Project standard for IPC schemas (see `src/ipc/protocol.ts`). |
+| `node:child_process` | built-in (Node 22 LTS) | `spawn("op", ["read", uri])` — already in use in `op-env-resolver.ts` | Operator constraint pinned in existing `defaultOpReadShellOut` JSDoc: "no execa, no @1password/sdk". Re-use the existing pattern. |
+
+### Supporting
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| `chokidar` | `^5` (already in deps) | Used by `ConfigWatcher` for cache invalidation | Already wired — we only need to extend the existing `ConfigWatcher.onChange` callback to nudge `SecretsResolver.invalidate(uri)` for refs that changed. Do NOT add a second watcher. |
+
+### Alternatives Considered
+| Instead of | Could Use | Tradeoff |
+|------------|-----------|----------|
+| `p-retry@8.0.0` | Hand-rolled `for` loop with `setTimeout` | Saves a 10kB dep but loses jitter, AbortError contract, and the `onFailedAttempt` telemetry hook. Hand-rolling retry logic is exactly the kind of thing the `search-first` skill flags — see "Don't Hand-Roll" below. |
+| `p-retry@8.0.0` | `exponential-backoff` (npm) | Coveooss's library is fine but smaller community + missing AbortError. p-retry is the project default for retry semantics across the Node ecosystem. |
+| `p-retry@8.0.0` | `cockatiel` (Microsoft's resilience4j-style lib) | 10x heavier, designed for circuit breakers + bulkheads. Overkill for "retry op read three times." |
+| In-memory `Map<string, string>` | LRU via `lru-cache` | LRU adds eviction policy we don't need — secrets count is bounded by config size (~30 refs in current `clawcode.yaml`), TTL is "until restart" or "config-watcher invalidation." Plain `Map` wins. |
+| In-memory `Map<string, string>` | On-disk cache (`~/.clawcode/manager/secrets.cache`) | Adds attack surface (encrypted-at-rest decisions, file perms, leak vector via backups). Boot pressure already addressed by Phase 999.9 (shared MCP) + this phase's in-memory cache. Out of scope per roadmap. |
+| `Promise.allSettled` for parallel boot resolve | Sequential `for await` | Sequential resolution would multiply boot time by N (one secret per ~50ms `op read` shell-out × 30 refs ≈ 1.5s sequential vs ~150ms parallel with the same dedup behavior). Parallel pre-resolve is the boot-storm fix's whole point. |
+
+**Installation:**
+```bash
+npm install p-retry@^8.0.0
+```
+
+**Version verification (2026-04-30):**
+```
+$ npm view p-retry version
+8.0.0
+$ npm view p-retry type
+module
+```
+Published 2026-03-26 (per the `npm` registry; ESM-only, `engines.node: >=18.20`). Compatible with Node 22 LTS pinned in CLAUDE.md.
+
+## Architecture Patterns
+
+### Recommended Module Layout
+```
+src/
+├── manager/
+│   ├── secrets-resolver.ts          # NEW — SecretsResolver class (Map + p-retry + pino)
+│   ├── __tests__/
+│   │   └── secrets-resolver.test.ts # NEW — DI-pure unit tests (mock opRead, mock now)
+│   ├── op-env-resolver.ts           # EXISTING — refactor to delegate to SecretsResolver.resolve()
+│   ├── recovery/op-refresh.ts       # EXISTING — keep, but route its opRead through SecretsResolver.invalidateAndResolve()
+│   └── daemon.ts                    # MODIFY — replace 3 call sites (botToken execSync, defaultOpRefResolver wire, defaultOpReadShellOut wire)
+├── config/
+│   ├── loader.ts                    # MODIFY — `defaultOpRefResolver` becomes a thin wrapper that calls SecretsResolver
+│   └── watcher.ts                   # MODIFY — onChange callback nudges SecretsResolver.invalidate(uri) for changed refs
+└── ipc/
+    └── protocol.ts                  # MODIFY — add `secrets-status` request/response zod schemas
+```
+
+### Pattern 1: Singleton Resolver, DI-Pure Tests
+**What:** A single `SecretsResolver` instance is constructed in `startDaemon` and passed by reference to (a) the loader's resolver shim, (b) the per-agent `opEnvResolver` closure, (c) the Discord botToken resolution block, and (d) the recovery handler. Production wires `defaultOpReadShellOut` as the underlying `opRead`. Tests inject a `vi.fn()` mock.
+**When to use:** This is THE pattern. Mirrors how `SessionManager` is constructed once and threaded everywhere. Avoids the trap of every call site rolling its own retry.
+**Example:**
+```typescript
+// src/manager/secrets-resolver.ts (NEW)
+import pRetry, { AbortError } from "p-retry";
+import type pino from "pino";
+
+export type OpReadFn = (uri: string) => Promise<string>;
+
+export interface SecretsResolverDeps {
+  readonly opRead: OpReadFn;
+  readonly log: pino.Logger;
+  readonly retryOptions?: {
+    readonly retries?: number;       // default 3 (total attempts = retries + 1 = 4)
+    readonly minTimeout?: number;    // default 1000 (1s)
+    readonly maxTimeout?: number;    // default 8000 (8s)
+    readonly factor?: number;        // default 2
+    readonly randomize?: boolean;    // default true (jitter critical for boot storms)
+  };
+}
+
+export interface SecretsCounters {
+  hits: number;
+  misses: number;
+  retries: number;
+  rateLimitHits: number;
+  lastFailureAt: string | undefined;
+  lastFailureReason: string | undefined;
+  lastRefreshedAt: string | undefined;
+}
+
+export class SecretsResolver {
+  private readonly cache = new Map<string, string>();
+  private readonly inflight = new Map<string, Promise<string>>();
+  private readonly counters: SecretsCounters = {
+    hits: 0, misses: 0, retries: 0, rateLimitHits: 0,
+    lastFailureAt: undefined, lastFailureReason: undefined, lastRefreshedAt: undefined,
+  };
+
+  constructor(private readonly deps: SecretsResolverDeps) {}
+
+  async resolve(uri: string): Promise<string> {
+    if (!uri.startsWith("op://")) {
+      throw new Error(`SecretsResolver.resolve called with non-op URI: ${uri}`);
+    }
+    const cached = this.cache.get(uri);
+    if (cached !== undefined) {
+      this.counters.hits++;
+      return cached;
+    }
+    // De-dupe concurrent resolutions of the same URI (boot-storm fix).
+    const inflight = this.inflight.get(uri);
+    if (inflight) return inflight;
+
+    const promise = this.resolveWithRetry(uri).finally(() => {
+      this.inflight.delete(uri);
+    });
+    this.inflight.set(uri, promise);
+    return promise;
+  }
+
+  private async resolveWithRetry(uri: string): Promise<string> {
+    this.counters.misses++;
+    const result = await pRetry(
+      async () => {
+        const value = await this.deps.opRead(uri);
+        if (!value || value.length === 0) {
+          // Empty resolution is a permanent error — don't retry.
+          throw new AbortError(`op read returned empty string for ${uri}`);
+        }
+        return value;
+      },
+      {
+        retries: this.deps.retryOptions?.retries ?? 3,
+        minTimeout: this.deps.retryOptions?.minTimeout ?? 1000,
+        maxTimeout: this.deps.retryOptions?.maxTimeout ?? 8000,
+        factor: this.deps.retryOptions?.factor ?? 2,
+        randomize: this.deps.retryOptions?.randomize ?? true,
+        onFailedAttempt: (err) => {
+          this.counters.retries++;
+          const isRateLimit = /rate.?limit|too many requests/i.test(err.message);
+          if (isRateLimit) this.counters.rateLimitHits++;
+          // Structured log — operator-correlatable. NEVER log the resolved value.
+          this.deps.log.warn(
+            { uri, attempt: err.attemptNumber, retriesLeft: err.retriesLeft, reason: err.message, isRateLimit },
+            "secrets-resolver: op read attempt failed",
+          );
+        },
+      },
+    ).catch((err: unknown) => {
+      const reason = err instanceof Error ? err.message : String(err);
+      this.counters.lastFailureAt = new Date().toISOString();
+      this.counters.lastFailureReason = reason;
+      throw new Error(`Failed to resolve ${uri} after retries: ${reason}`, { cause: err instanceof Error ? err : undefined });
+    });
+
+    this.cache.set(uri, result);
+    this.counters.lastRefreshedAt = new Date().toISOString();
+    this.deps.log.info({ uri, cacheSize: this.cache.size }, "secrets-resolver: resolved + cached");
+    return result;
+  }
+
+  invalidate(uri: string): void {
+    if (this.cache.delete(uri)) {
+      this.deps.log.info({ uri }, "secrets-resolver: cache invalidated");
+    }
+  }
+
+  invalidateAll(): void {
+    const size = this.cache.size;
+    this.cache.clear();
+    this.deps.log.info({ size }, "secrets-resolver: full cache invalidated");
+  }
+
+  /**
+   * Pre-resolve every URI in the list in parallel. Used at daemon boot to
+   * fill the cache once, before any agent spawn. Failures DO NOT throw —
+   * they're returned as a per-URI result so the caller can decide
+   * fail-closed vs fail-open per zone.
+   */
+  async preResolveAll(uris: readonly string[]): Promise<readonly { uri: string; ok: boolean; reason?: string }[]> {
+    const results = await Promise.allSettled(
+      uris.map(async (uri) => {
+        await this.resolve(uri);
+        return uri;
+      }),
+    );
+    return results.map((r, i) => {
+      const uri = uris[i]!;
+      if (r.status === "fulfilled") return { uri, ok: true };
+      const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      return { uri, ok: false, reason };
+    });
+  }
+
+  snapshot(): Readonly<SecretsCounters> & { readonly cacheSize: number } {
+    return Object.freeze({ ...this.counters, cacheSize: this.cache.size });
+  }
+}
+```
+
+### Pattern 2: Sync Loader Shim Around Async Resolver
+**What:** `defaultOpRefResolver` in `src/config/loader.ts` is currently `execSync`-based and sync-by-design (the loader path is sync). We can't make it async without rippling through `resolveAllAgents`. Instead, **pre-resolve all URIs in `clawcode.yaml` async at daemon boot**, then have the loader's resolver consult an in-memory `Map` synchronously.
+**When to use:** This phase's central design move. It lets the loader stay sync (zero blast radius into `resolveAgentConfig` callers) while moving the actual `op read` calls outside the loader.
+**Example:**
+```typescript
+// In daemon.ts startDaemon, BEFORE resolveAllAgents:
+const allOpRefs = collectAllOpRefs(config); // walk discord.botToken + mcpServers[].env + agents[].mcpEnvOverrides
+await secretsResolver.preResolveAll(allOpRefs);
+
+// Then construct a sync wrapper for the loader:
+const syncOpResolver: OpRefResolver = (uri) => {
+  // Synchronous lookup against the already-warmed cache.
+  // If a URI somehow wasn't pre-resolved, fall back to throwing — the loader
+  // already has the McpResolutionErrorHandler path for graceful skip.
+  const snapshot = secretsResolver.snapshot();
+  // Map is internal; expose a sync get(): string | undefined helper instead.
+  const cached = secretsResolver.getCached(uri);
+  if (cached === undefined) {
+    throw new Error(`SecretsResolver: ${uri} not in cache (preResolveAll missed it)`);
+  }
+  return cached;
+};
+const resolvedAgents = resolveAllAgents(config, syncOpResolver, onMcpError);
+```
+
+### Pattern 3: ConfigWatcher Invalidation Hook
+**What:** When `clawcode.yaml` changes, the existing `ConfigWatcher.onChange` callback diffs old vs new. For any field whose new value is an `op://` URI different from the old value, call `secretsResolver.invalidate(oldUri)`. The watcher already passes `defaultOpRefResolver` to `resolveAllAgents` on reload — we just swap that for the new sync wrapper, and the next `preResolveAll` call (or first sync miss) lazily fetches the new value.
+**When to use:** This is the answer to the open question "Cache invalidation hook for live rotation." We don't need a signal handler or a separate IPC — `ConfigWatcher` is the canonical surface for "the operator changed the config." Live rotation = edit `clawcode.yaml` to point at a different field, save, watcher fires.
+
+### Pattern 4: Per-URI Inflight Dedup
+**What:** Two agents booting simultaneously both call `secretsResolver.resolve("op://clawdbot/X/credential")`. Without dedup, that's two `op read` invocations. The `inflight: Map<uri, Promise<string>>` ensures concurrent callers share one Promise.
+**When to use:** Boot-storm protection. Even with the cache, the first miss for each URI under concurrent load needs dedup or you'll fan out N parallel `op read` calls for the same secret.
+
+### Anti-Patterns to Avoid
+- **Caching the secret as-resolved into the YAML/config object on disk.** A bug in any code path that serializes config → file would write secrets to disk. Keep the cache strictly in `SecretsResolver`'s private field.
+- **Logging the resolved value, even at debug level.** Pino's default level is `info`, but operators sometimes flip to `debug` during incidents. A single `log.debug({ uri, value }, ...)` in the wrong place is a leak waiting to happen. Lint rule: never include the literal symbol name `value` or `resolved` followed by `:` in any log line — only `{ uri, ... }`.
+- **Retrying on permanent errors.** A 404 ("item not found"), a 401 ("not authorized"), or a malformed `op://` ref shouldn't burn retry budget. Use `p-retry`'s `AbortError` to stop immediately on those. Recognize them by stderr content: `not authorized`, `service account`, `item not found`, `field not found`.
+- **Sharing one cache across daemon restarts via on-disk persistence.** Out of scope per roadmap. Restart already cycles the cache; that's fine.
+
+## Don't Hand-Roll
+
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| Exponential backoff with jitter | `for` loop with `setTimeout(retry, 1000 << attempt)` | `p-retry@8.0.0` | Hand-rolled retry loops miss jitter (synchronized retries from N agents = the same boot storm in 1s instead of 0s), miss the AbortError contract for permanent errors, and miss the `onFailedAttempt` hook for telemetry. The 2026-04-30 incident shows boot-storm + lock-step retries amplify each other. |
+| Inflight request deduplication | Custom queue / mutex | `Map<string, Promise<T>>` (the "inflight map" pattern) | Hand-rolled mutex code is the #1 source of subtle deadlocks. The Map-of-Promises pattern is the idiomatic Node primitive — see how `clawhub-cache.ts` does it for ClawHub fetches. |
+| Counter aggregation for telemetry | Custom Prometheus-style metric registry | Plain object updated in-place + IPC method that returns a snapshot | We have one consumer (`/clawcode-status`), no scrape endpoint, no histogram needs (yet). Keep it boring. If we later add an exporter, swap the snapshot fn for a registry. |
+| Rate-limit detection from CLI stderr | Parse `Retry-After` style headers | Regex match on stderr for `rate.?limit\|too many requests` | 1Password CLI emits **no** retry-after value (verified via 1P community thread + official docs — see Sources). The error literally says "Try again in seconds" with the seconds blank. Best we can do is recognize the class and apply our own backoff. |
+
+**Key insight:** Every problem this phase solves has a battle-tested primitive available. The temptation will be "just inline a small retry loop in `defaultOpReadShellOut`" — resist it. The retry logic is exactly what's hardest to test under boot-storm conditions, and the de-facto standard library handles every edge case (AbortSignal, AggregateError, jitter, factor calibration) we'd otherwise spend a week getting right.
+
+## Runtime State Inventory
+
+This is **NOT** a rename/refactor/migration phase — it's a feature addition that introduces a new in-memory cache. No existing runtime state needs migrating.
+
+| Category | Items Found | Action Required |
+|----------|-------------|------------------|
+| Stored data | None — verified via grep `secretCache\|SecretCache` returned 0 hits. No prior on-disk cache exists. | None. |
+| Live service config | The 1Password service-account quota itself is "live external state" — the cache will reduce read pressure against it but does not need to be reset / drained. The service-account token (`OP_SERVICE_ACCOUNT_TOKEN` env var) is unchanged. | None. |
+| OS-registered state | systemd unit `clawcode-daemon.service` already has `EnvironmentFile=` carrying `OP_SERVICE_ACCOUNT_TOKEN` — verified per MEMORY.md `reference_clawcode_server.md`. No changes. | None. |
+| Secrets/env vars | `OP_SERVICE_ACCOUNT_TOKEN` (clawdbot full-scope) read from process env — unchanged by this phase. The vault-scoped finmentum tokens (resolved via `op-env-resolver.ts`) flow through the new cache automatically. | None. |
+| Build artifacts / installed packages | New runtime dep `p-retry@8.0.0` lands in `package.json` + `node_modules/`. tsup bundle output `dist/` will pick it up on next build. No stale artifacts. | `npm install` after package.json change; `npm run build` re-emits `dist/`. |
+
+**Section relevance:** Included for completeness but the answer is "fresh feature, no migration." The planner can compress this section in PLAN.md.
+
+## Common Pitfalls
+
+### Pitfall 1: Boot-Storm Synchronization Without Jitter
+**What goes wrong:** Three agents all hit `op read` at t=0, all get rate-limited at t=50ms, all retry at t=1000ms (no jitter), all hit the same throttle window. The retry storm IS the boot storm.
+**Why it happens:** Naive backoff uses fixed delays — `1s, 2s, 4s` — which means 3 callers hitting the same URL simultaneously will retry simultaneously.
+**How to avoid:** `p-retry`'s `randomize: true` adds random jitter (timeout *= random factor between 1 and 2). For 3 callers, this spreads retries across a ~1-second window instead of stacking them on the same millisecond.
+**Warning signs:** Multiple agents logging "rate-limited" at near-identical timestamps post-retry. If you see that pattern, jitter isn't on.
+
+### Pitfall 2: Sync Resolver / Async Cache Mismatch
+**What goes wrong:** The `defaultOpRefResolver` in `src/config/loader.ts` is sync (`execSync`). If you naïvely swap it for an async cache lookup, every caller of `resolveAgentConfig` breaks (TypeScript will catch this, but the fix sprawls into 20+ files).
+**Why it happens:** The loader was designed sync-pure on purpose — boot-time clarity, no event-loop juggling.
+**How to avoid:** Pre-resolve async at boot (Pattern 2 above), then expose a sync `getCached(uri)` helper for the loader. The loader stays sync; the resolver does its async work earlier in boot order.
+**Warning signs:** TypeScript error `Promise<string> is not assignable to string` in `resolveMcpEnvValue`. If you see that, you're trying to make the loader async — back up and use the pre-resolve pattern instead.
+
+### Pitfall 3: Cache Returning Stale Token After Rotation
+**What goes wrong:** Operator rotates a 1Password service-account token (e.g., the finmentum scoped token). The clawcode.yaml `op://` URI is unchanged (still points at the same item/field), but `op read` would now return a different value. The cache, keyed on URI, returns the stale resolved value forever.
+**Why it happens:** Cache key is the URI, not the resolved value or a server-side ETag. URI-based caching is correct for "config didn't change" but wrong for "config didn't change but the secret behind it did."
+**How to avoid:** Two layers of defense:
+1. **Auth-error recovery already exists** — `src/manager/recovery/op-refresh.ts` re-runs `op read` on auth errors. Wire it through `secretsResolver.invalidate(uri)` so a 401 from any MCP child triggers cache eviction + re-resolve. (This works because the new SA token is what triggered the rotation in the first place — the old cached value will fail auth at the MCP child, which fires recovery.)
+2. **Manual rotation IPC** — add `secrets-invalidate` IPC method (`{uri?: string}` — omit to flush all). Operator can `clawcode reload-secrets` after rotation. Kept minimal: don't add a signal handler, don't add a Discord slash. The IPC method is the single rotation surface.
+
+**Warning signs:** Agent reports "MCP X is degraded — auth-error" repeatedly after a manual token rotation; check whether `recovery/op-refresh.ts` is calling `secretsResolver.invalidate(uri)` before re-resolving. If not, the recovery handler is reading stale cache.
+
+### Pitfall 4: Empty-String Resolution Silently Succeeds
+**What goes wrong:** `op read` returns exit 0 + empty stdout under some edge cases (e.g., the field exists but is blank). Without an empty-check, the cache stores `""`, the agent's MCP child gets `OP_SERVICE_ACCOUNT_TOKEN=""`, and authentication silently passes through to "anonymous" mode (no auth → fail open).
+**Why it happens:** The existing `op-env-resolver.ts` already guards this — see line 89: "Failed to resolve op:// reference … op read returned empty string". Replicate this guard in `SecretsResolver`.
+**How to avoid:** Throw `AbortError` (not retryable) on empty resolution. See the code example above — `if (!value || value.length === 0) throw new AbortError(...)`.
+**Warning signs:** Agent boots, MCP appears to start, but every tool call from that MCP returns `"unauthorized"` instead of normal data. Search the logs for `OP_SERVICE_ACCOUNT_TOKEN` — if it's empty in the spawn-child env line, this pitfall hit.
+
+### Pitfall 5: Retry Burns the Quota Faster During Throttle
+**What goes wrong:** 1Password is already throttling; we retry 3 times; the retries themselves count against the quota; we extend the throttle window.
+**Why it happens:** Retries during a long-window throttle are net-negative — they consume budget without progress.
+**How to avoid:** When `onFailedAttempt` detects a rate-limit error, **abort retries for that URI** via `AbortError` on the second attempt. Better to fail fast and let the operator see the error than to compound the throttle. Calibration: on the 2026-04-30 incident, the throttle was ~10 minutes — no realistic backoff sequence (1s/2s/4s/8s) recovers within that window, so retrying past attempt 2 is throwing budget away.
+**Warning signs:** `secrets-status` IPC shows `rateLimitHits` >> `retries / 3`. That means each rate-limit event is causing all 3 retries to fire (not bailing early). Adjust the bail logic.
+
+### Pitfall 6: Discord botToken Resolution Path Stays Sync `execSync`
+**What goes wrong:** Phase ships, but `daemon.ts:3522` (Discord botToken) is forgotten — it's a literal `execSync('op read ...')` call inline in the boot path. Cache misses it; it shows up in `op service-account ratelimit` usage but never appears in `secrets-status` counters. Operators wonder why their hourly rate-limit is climbing.
+**Why it happens:** That code block is in a different boot phase (step 11 in `startDaemon`), 2000 lines after the agent resolution path, and uses sync `execSync` directly instead of going through any resolver.
+**How to avoid:** **Audit grep is mandatory.** Before declaring the phase done, `grep -rn 'op read\|op-cli\|opSecret\|execSync.*op ' src/` should return only the new `SecretsResolver`. Specifically confirm `daemon.ts:3522` is rewritten to `await secretsResolver.resolve(raw)`.
+**Warning signs:** Phase verification passes but `secrets-status` shows fewer cache entries than the count of `op://` references in `clawcode.yaml`. Missing one means a code path bypassed the resolver.
+
+## Code Examples
+
+### Pre-Resolve All op:// References at Boot
+```typescript
+// src/manager/daemon.ts startDaemon (insert after `loadConfig`, before `resolveAllAgents`)
+import { SecretsResolver } from "./secrets-resolver.js";
+import { defaultOpReadShellOut } from "./op-env-resolver.js"; // existing
+import { collectAllOpRefs } from "./secrets-collector.js";    // NEW small helper
+
+const secretsResolver = new SecretsResolver({
+  opRead: defaultOpReadShellOut,
+  log: log.child({ subsystem: "secrets" }),
+});
+
+// Walk the parsed config and collect every op:// URI.
+const allOpRefs = collectAllOpRefs(config); // returns readonly string[]
+log.info({ count: allOpRefs.length }, "secrets: pre-resolving op:// references");
+
+const preResolveResults = await secretsResolver.preResolveAll(allOpRefs);
+const failed = preResolveResults.filter((r) => !r.ok);
+if (failed.length > 0) {
+  // FAIL OPEN: log loudly, continue boot. Individual agents that depend on
+  // failed refs will hit the loader's onMcpResolutionError path and have
+  // those specific MCPs disabled. Mirrors existing graceful-degradation
+  // behavior for op:// reference failures (daemon.ts:1522 already does this).
+  for (const f of failed) {
+    log.error({ uri: f.uri, reason: f.reason }, "secrets: pre-resolve failed");
+  }
+}
+log.info({ resolved: preResolveResults.length - failed.length, failed: failed.length }, "secrets: pre-resolve complete");
+```
+
+### Sync Loader Wrapper
+```typescript
+// src/config/loader.ts (REPLACE the current defaultOpRefResolver export)
+// Note: kept here for back-compat with tests that don't have a SecretsResolver.
+export function defaultOpRefResolver(ref: string): string {
+  return execSync(`op read "${ref}"`, { encoding: "utf-8", timeout: 10_000 }).trim();
+}
+
+// In daemon.ts boot, construct the sync wrapper instead:
+const cachedResolver: OpRefResolver = (uri: string): string => {
+  const cached = secretsResolver.getCached(uri);
+  if (cached === undefined) {
+    // pre-resolve missed it (URI added between yaml-parse and now? or
+    // hot-reload added a new ref?). Falling back to async-resolve here would
+    // require making the loader async — instead, throw and let the loader's
+    // onMcpResolutionError handler degrade gracefully.
+    throw new Error(`SecretsResolver: ${uri} not pre-resolved (likely added by hot-reload — re-run preResolveAll)`);
+  }
+  return cached;
+};
+
+const resolvedAgents = resolveAllAgents(config, cachedResolver, (info) => {
+  log.error({ agent: info.agent, server: info.server, reason: info.message },
+    "MCP server disabled — env resolution failed");
+});
+```
+
+### Rewrite Discord botToken Resolution
+```typescript
+// src/manager/daemon.ts:~3522 (REPLACE the inline execSync block)
+let botToken: string;
+if (config.discord?.botToken) {
+  const raw = config.discord.botToken;
+  if (raw.startsWith("op://")) {
+    try {
+      botToken = await secretsResolver.resolve(raw);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. ` +
+        `Reason: ${reason}. Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken`
+      );
+    }
+  } else {
+    botToken = raw;
+  }
+}
+```
+
+### IPC `secrets-status` Method Shape
+```typescript
+// src/ipc/protocol.ts (ADD to the existing IPC method registry)
+export const SecretsStatusRequestSchema = z.object({
+  method: z.literal("secrets-status"),
+});
+export const SecretsStatusResponseSchema = z.object({
+  ok: z.literal(true),
+  cacheSize: z.number().int().nonnegative(),
+  hits: z.number().int().nonnegative(),
+  misses: z.number().int().nonnegative(),
+  retries: z.number().int().nonnegative(),
+  rateLimitHits: z.number().int().nonnegative(),
+  lastFailureAt: z.string().datetime().optional(),
+  lastFailureReason: z.string().optional(),
+  lastRefreshedAt: z.string().datetime().optional(),
+});
+
+// src/manager/daemon.ts IPC handler:
+case "secrets-status":
+  return { ok: true, ...secretsResolver.snapshot() };
+
+case "secrets-invalidate":
+  if (params.uri) secretsResolver.invalidate(params.uri);
+  else secretsResolver.invalidateAll();
+  return { ok: true };
+```
+
+### ConfigWatcher Invalidation Hook
+```typescript
+// src/manager/daemon.ts where ConfigWatcher is constructed (~3768):
+const configWatcher = new ConfigWatcher({
+  configPath,
+  auditTrailPath,
+  onChange: async (diff, newResolvedAgents) => {
+    // Phase 104 — invalidate any op:// refs that changed in this diff.
+    for (const change of diff.changes) {
+      const oldVal = change.oldValue;
+      const newVal = change.newValue;
+      if (typeof oldVal === "string" && oldVal.startsWith("op://") && oldVal !== newVal) {
+        secretsResolver.invalidate(oldVal);
+      }
+      // Also re-resolve newly added op:// refs so the cache stays warm.
+      if (typeof newVal === "string" && newVal.startsWith("op://")) {
+        try { await secretsResolver.resolve(newVal); } catch { /* logged inside resolver */ }
+      }
+    }
+    const summary = await configReloader.applyChanges(diff, newResolvedAgents);
+    log.info({ subsystems: summary.subsystemsReloaded, agents: summary.agentsAffected }, "config hot-reloaded");
+  },
+  log,
+  opRefResolver: cachedResolver, // the sync wrapper from earlier
+});
+```
+
+## State of the Art
+
+| Old Approach | Current Approach | When Changed | Impact |
+|--------------|------------------|--------------|--------|
+| Three independent `op read` shell-out sites in `daemon.ts`, `config/loader.ts`, `manager/op-env-resolver.ts` | Single `SecretsResolver` singleton with shared cache + retry | This phase | Eliminates the "Pitfall 6" risk where one path forgets caching/retry. |
+| Sync `execSync` calls in boot path | Async `Promise.allSettled` pre-resolve, then sync cache lookup | This phase | Boot wall-clock time drops (parallel) AND restart time drops (cache hit). |
+| No retry on `op read` failure — first error crash-fails the agent | `p-retry` with 3 attempts, jitter, AbortError on permanent failures | This phase | Transient rate-limits no longer kill agents. |
+| No cache — every `op read` re-shells the CLI | Process-lifetime cache, invalidated on `clawcode.yaml` edit + `recovery/op-refresh` auth-error | This phase | ~30 fewer `op read` calls per restart in current fleet. |
+
+**Deprecated/outdated:**
+- The inline `execSync` block at `daemon.ts:3522` (Discord botToken) — must be migrated to `SecretsResolver.resolve`. Don't leave two patterns.
+- `defaultOpRefResolver` in `src/config/loader.ts` — keep for tests/migration tooling but production daemon path uses `cachedResolver` instead.
+
+## Open Questions
+
+The roadmap entry lists 7 open questions. Research resolved 6; the 7th (telemetry surface design) is left for `/gsd:discuss-phase`.
+
+| # | Open Question | Recommendation | Confidence |
+|---|---------------|----------------|------------|
+| 1 | Cache TTL — until-restart vs hourly TTL vs signal/IPC live rotation? | **Until-restart, with explicit invalidation via (a) ConfigWatcher diff, (b) `recovery/op-refresh` auth-error path, (c) manual `secrets-invalidate` IPC.** TTL adds complexity for a benefit (silent rotation) we don't need — operator-driven invalidation covers both rotation scenarios. | HIGH |
+| 2 | Cache key — full URI vs vault/item/field tuple? | **Full URI, verbatim.** Tuple normalization is a parser + a category of "is `op://vault/item/field` equivalent to `op://Vault/Item/field`?" bugs. URIs in `clawcode.yaml` are operator-controlled and stable. Two refs with the same URI canonicalize to one cache entry naturally; two refs that differ in case are intentionally different (operator typo? — let it surface). | HIGH |
+| 3 | Partial-resolution failure at boot — fail closed, fail open, staged retry? | **Fail open, mirror existing pattern.** `daemon.ts:1522` already disables individual MCPs on resolution failure and continues. This phase doesn't change that contract — pre-resolution failures get the same treatment. Critical secrets (Discord botToken) keep the existing fail-closed behavior because the daemon literally can't function without them. | HIGH |
+| 4 | Where does the cache live — inline singleton vs dedicated module? | **Dedicated `SecretsResolver` module under `src/manager/`.** CLAUDE.md "many small files" rule + daemon.ts is already 3700+ lines. Module enables unit testing in isolation. | HIGH |
+| 5 | Cache invalidation hook for live rotation — signals, config-watcher, IPC, all three? | **ConfigWatcher + IPC `secrets-invalidate`. Skip signals.** Two surfaces are enough: edit-yaml (auto) + manual-rotation (IPC). SIGUSR1 adds a third path that no operator workflow uses. The `recovery/op-refresh` handler uses the same in-process invalidate API — so 401s during runtime auto-invalidate too. | HIGH |
+| 6 | Backoff calibration — does 1s/2s/4s match 1Password's throttle window? | **No, but it's close enough WITH JITTER + EARLY-BAIL.** 1P's actual throttle window is ~10 minutes (per community thread + 2026-04-30 incident). No backoff sequence under 1 minute will recover. Strategy: 3 attempts (1s/2s/4s base × jitter 1-2x = ~1-8 second total) for *transient* failures; bail to AbortError on attempt 2 if the error matches `rate.?limit\|too many requests`. This trades a deeper retry budget for not amplifying the throttle. | MEDIUM |
+| 7 | Telemetry — what counters/histograms surface in /clawcode-status? | **Recommend: `cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason, lastRefreshedAt`. Surface as a new section "Secrets cache" in `/clawcode-status` rendering.** No histograms in v1 (over-engineering for the actual operational need). Defer histogram (e.g., op-read latency p95) to a follow-up if operators ask. | MEDIUM — needs discuss-phase confirmation |
+
+## Environment Availability
+
+| Dependency | Required By | Available | Version | Fallback |
+|------------|------------|-----------|---------|----------|
+| `op` CLI | `defaultOpReadShellOut` invoking `spawn("op", ["read", ...])` | ✓ (verified by existing daemon-boot path that already shells out) | (whatever's on `clawdy` host) | None — daemon already requires it; this phase doesn't add a new requirement. |
+| `OP_SERVICE_ACCOUNT_TOKEN` env var | `op` CLI auth | ✓ (set by systemd `EnvironmentFile=`, per MEMORY.md `reference_clawcode_server.md`) | n/a | Daemon already fail-closes if this is missing; unchanged by this phase. |
+| Node 22 LTS | `p-retry@8.0.0` requires `engines.node: >=18.20` | ✓ | 22.x | n/a |
+| `p-retry@8.0.0` | New runtime dep | ✗ (NOT yet installed) | needs `npm install` | None acceptable — see "Don't Hand-Roll." |
+
+**Missing dependencies with no fallback:**
+- `p-retry@8.0.0` — install in plan task `add p-retry dependency`. Single `npm install p-retry@^8.0.0` + lockfile commit.
+
+**Missing dependencies with fallback:** None.
+
+## 1Password Rate Limit Behavior (HIGH confidence)
+
+Critical context from 1Password's official rate-limits docs + community incident reports:
+
+| Property | Value | Source |
+|----------|-------|--------|
+| Read limit (Business plan) | 10,000 reads / hour / service account token | Official docs |
+| Read limit (Teams/Standard) | 1,000 reads / hour / service account token | Official docs |
+| Daily cross-token limit | 50K (Business), 5K (Teams), 1K (Standard) | Official docs |
+| Error message text (verbatim) | "Too many requests. Your client has been rate-limited. Try again in seconds" | 1P community thread 167040 |
+| Retry-After value | **Empty / blank** ("seconds" with no number) | 1P community thread 167040 |
+| Exit code on rate limit | `1` (not 0; recent CLI fixed the 0-exit bug) | 1P community thread + WebSearch |
+| Observed throttle duration | ~15 minutes when limit is hit; one report says daily reset is 6 hours | 1P community thread 167040 |
+| Status check command | `op service-account ratelimit` returns current usage | Official docs |
+
+**Operational consequence:** The 1P CLI gives us **no machine-readable hint** for how long to wait. The only signal is the error string. Our backoff is a guess. The mitigation is *not retrying past attempt 2 on rate-limit errors* (Pitfall 5) — better to surface the throttle to the operator than compound it.
+
+**Optional enhancement (deferred):** A `clawcode secrets-quota` CLI command that wraps `op service-account ratelimit` and displays remaining quota + reset time. Useful for ops dashboards but out of scope for this phase.
+
+## Validation Architecture
+
+Nyquist validation is enabled (`workflow.nyquist_validation: true` in `.planning/config.json`).
+
+### Test Framework
+| Property | Value |
+|----------|-------|
+| Framework | vitest 3.x (project standard, ESM, TypeScript-native) |
+| Config file | `vitest.config.ts` at repo root |
+| Quick run command | `npx vitest run src/manager/__tests__/secrets-resolver.test.ts -t "<test-name>"` |
+| Full suite command | `npx vitest run` |
+
+### Phase Requirements → Test Map
+| Req ID | Behavior | Test Type | Automated Command | File Exists? |
+|--------|----------|-----------|-------------------|--------------|
+| SEC-01 | All three op:// resolution sites use `SecretsResolver` (no direct `execSync`/`spawn` to `op`) | unit | `npx vitest run src/manager/__tests__/secrets-resolver-callsites.test.ts` (NEW — greps src/ via fs and asserts no stray `op read` execSync calls outside SecretsResolver/loader.ts back-compat) | ❌ Wave 0 |
+| SEC-02 | Cache returns same value for repeated `resolve(uri)` calls; opRead invoked once | unit | `npx vitest run src/manager/__tests__/secrets-resolver.test.ts -t "RES-01: cache hit avoids opRead"` | ❌ Wave 0 |
+| SEC-02 | Concurrent resolve() of same URI yields one opRead call (inflight dedup) | unit | `npx vitest run secrets-resolver.test.ts -t "RES-02: inflight dedup"` | ❌ Wave 0 |
+| SEC-03 | Transient opRead failure retried with backoff; succeeds on attempt 2 | unit | `npx vitest run secrets-resolver.test.ts -t "RES-03: retry succeeds before exhaustion"` | ❌ Wave 0 |
+| SEC-03 | Rate-limit error bails early via AbortError (not full 3-retry budget) | unit | `npx vitest run secrets-resolver.test.ts -t "RES-04: rate-limit bails early"` | ❌ Wave 0 |
+| SEC-03 | Empty-string resolution throws (no silent zero-token cache write) | unit | `npx vitest run secrets-resolver.test.ts -t "RES-05: empty resolution throws AbortError"` | ❌ Wave 0 |
+| SEC-04 | `preResolveAll` returns per-URI ok/fail; partial failure does not throw | unit | `npx vitest run secrets-resolver.test.ts -t "RES-06: preResolveAll partial failure"` | ❌ Wave 0 |
+| SEC-04 | Daemon boot continues with degraded MCPs when individual op:// pre-resolves fail | integration | `npx vitest run src/manager/__tests__/daemon-boot-secrets-degraded.test.ts` (NEW — exercises startDaemon with a mocked opRead that fails for one URI) | ❌ Wave 0 |
+| SEC-05 | ConfigWatcher onChange diff invalidates changed op:// URIs | unit | `npx vitest run src/manager/__tests__/secrets-resolver-watcher.test.ts -t "WATCH-01: changed URI invalidates"` | ❌ Wave 0 |
+| SEC-05 | recovery/op-refresh routes through SecretsResolver.invalidateAndResolve | unit | extend `src/manager/__tests__/recovery-op-refresh.test.ts` with REC-OP-REFRESH-INV-01 | ⚠️ EXTEND |
+| SEC-06 | `secrets-status` IPC returns counters snapshot with expected zod-validated shape | unit | `npx vitest run src/ipc/__tests__/secrets-status.test.ts` (NEW) | ❌ Wave 0 |
+| SEC-06 | snapshot() counters update correctly on hit/miss/retry/rate-limit | unit | `npx vitest run secrets-resolver.test.ts -t "RES-07: counters track lifecycle"` | ❌ Wave 0 |
+| SEC-07 | No log line in any path includes the resolved value (only URI + structured fields) | unit | `npx vitest run secrets-resolver.test.ts -t "RES-08: resolved value never logged"` (uses pino test transport that captures all log calls) | ❌ Wave 0 |
+| SEC-07 | Error messages thrown by SecretsResolver never embed the resolved value | unit | `npx vitest run secrets-resolver.test.ts -t "RES-09: error messages contain only URI"` | ❌ Wave 0 |
+
+### Sampling Rate
+- **Per task commit:** `npx vitest run src/manager/__tests__/secrets-resolver*.test.ts src/ipc/__tests__/secrets-status.test.ts`
+- **Per wave merge:** `npx vitest run src/manager/__tests__/ src/config/__tests__/ src/ipc/__tests__/`
+- **Phase gate:** `npx vitest run` (full suite green) before `/gsd:verify-work`
+
+### Wave 0 Gaps
+- [ ] `src/manager/secrets-resolver.ts` — implements `SecretsResolver` class (covers SEC-01..SEC-04, SEC-06, SEC-07)
+- [ ] `src/manager/secrets-collector.ts` — `collectAllOpRefs(config)` walks config tree extracting `op://` URIs (helper for boot pre-resolve)
+- [ ] `src/manager/__tests__/secrets-resolver.test.ts` — covers RES-01..RES-09
+- [ ] `src/manager/__tests__/secrets-resolver-callsites.test.ts` — grep-based assertion that no stray `op read` execSync exists outside `loader.ts:defaultOpRefResolver` (kept for back-compat) and `secrets-resolver.ts`
+- [ ] `src/manager/__tests__/secrets-resolver-watcher.test.ts` — covers SEC-05 (ConfigWatcher hook)
+- [ ] `src/manager/__tests__/daemon-boot-secrets-degraded.test.ts` — integration test for SEC-04 (partial pre-resolve failure)
+- [ ] `src/ipc/__tests__/secrets-status.test.ts` — covers SEC-06 IPC handler
+- [ ] Extension to `src/manager/__tests__/recovery-op-refresh.test.ts` — REC-OP-REFRESH-INV-01 verifies the recovery handler invalidates cache before re-resolve
+- [ ] Add `p-retry@^8.0.0` to package.json + commit lockfile
+
+## Sources
+
+### Primary (HIGH confidence)
+- **In-repo source files** (read in full or in part during this research):
+  - `src/config/loader.ts` — current `defaultOpRefResolver` + `resolveMcpEnvValue`
+  - `src/manager/op-env-resolver.ts` — current async per-agent resolver
+  - `src/manager/recovery/op-refresh.ts` — auth-error recovery handler that re-runs op read
+  - `src/manager/daemon.ts` (lines 1500-1530, 1620-1700, 3490-3535, 3760-3782) — three resolution sites + ConfigWatcher wiring
+  - `src/manager/session-config.ts` (lines 180-220, 760-810) — opEnvResolver invocation in `buildSessionConfig`
+  - `src/config/watcher.ts` — ConfigWatcher onChange + opRefResolver threading on hot-reload
+  - `src/manager/__tests__/op-env-resolver.test.ts` — existing DI-pure test pattern to mirror
+  - `src/marketplace/clawhub-client.ts` — existing rate-limit error class pattern (`ClawhubRateLimitedError`) for parallel design
+  - `clawcode.example.yaml` — reference shape for the three op:// zones
+- **Official docs:**
+  - [1Password Service Account Rate Limits (developer.1password.com)](https://developer.1password.com/docs/service-accounts/rate-limits/) — rate-limit numbers per plan tier
+  - [1Password CLI service-account commands](https://developer.1password.com/docs/cli/reference/management-commands/service-account/) — `op service-account ratelimit` command for status check
+  - [p-retry GitHub README](https://github.com/sindresorhus/p-retry) — v8.0.0 API + AbortError contract + onFailedAttempt hook
+- **Registry verification (2026-04-30):**
+  - `npm view p-retry version` → `8.0.0`
+  - `npm view p-retry type` → `module` (ESM-only — matches project)
+
+### Secondary (MEDIUM confidence)
+- [1Password community thread — Service Account Rate Limits: 15+ Minutes Block, No Backoff Duration Shown](https://www.1password.community/discussions/developers/service-account-rate-limits-15-minutes-block-no-backoff-duration-shown/167040) — documents the verbatim error string and the absence of Retry-After hint
+- [1Password community — Your client has been rate-limited](https://www.1password.community/discussions/developers/your-client-has-been-rate-limited/85392) — additional rate-limit anecdotes
+- [1Password community — CLI rate limit details](https://www.1password.community/discussions/developers/cli-rate-limit-details/92281) — CLI exit-code behavior
+
+### Tertiary (LOW confidence — flagged for validation in CONTEXT.md / discuss-phase)
+- 1Password docs do not give exit code 1 explicitly for rate-limit (community-reported); plan to verify by triggering a rate-limit in staging or by reading current `op` source. Not a blocker — `p-retry` doesn't care about exit codes, only thrown errors.
+- "10-minute throttle window" estimate from the 2026-04-30 incident is single-incident data. Could be longer/shorter; backoff strategy already accounts for this by failing-fast on rate-limit errors rather than gambling on recovery within retries.
+
+## Metadata
+
+**Confidence breakdown:**
+- Standard stack: **HIGH** — `p-retry@8.0.0` verified against npm registry today; pino + zod + chokidar already in deps; native child_process used.
+- Architecture: **HIGH** — three resolution sites mapped from source code; sync-loader pattern verified by reading `loader.ts` and `daemon.ts` boot order; ConfigWatcher hook verified by reading `watcher.ts` line 160-175.
+- Pitfalls: **HIGH** — pitfalls 1, 4, 5, 6 are direct consequences of code/incident evidence. Pitfall 2 verified by reading the loader's sync contract. Pitfall 3 verified by `recovery/op-refresh.ts` reading mechanism.
+- 1Password rate-limit behavior: **HIGH for limits + error text + community-reported window**; **MEDIUM for exact Retry-After absence** (single primary docs source confirms; community confirms verbatim).
+- Telemetry shape (Open Q #7): **MEDIUM** — recommendation is reasonable but operator may want different counters; defer to discuss-phase.
+- Backoff calibration (Open Q #6): **MEDIUM** — exact 1s/2s/4s × jitter is a defensible default; calibration to specific 1P recovery windows is empirical and may need tuning post-deploy.
+
+**Research date:** 2026-04-30
+**Valid until:** 2026-05-30 (30 days; stable domain — no fast-moving libraries beyond p-retry minor versions)

@@ -316,6 +316,143 @@ describe("ProgressiveMessageEditor (Phase 54)", () => {
     expect(payload.backoff_ms).toBe(600);
   });
 
+  /**
+   * Phase 100-fu — concurrent-flush lock (PME-LOCK-*).
+   *
+   * Bug: editFn was invoked fire-and-forget. When the first send was still
+   * in-flight (~500ms Discord network round-trip) and the throttle timer
+   * (default 750ms) fired the next chunk, both calls reached bridge.ts's
+   * editFn implementation. Both saw messageRef.current === null, both called
+   * channel.send(content), and Discord showed TWO near-identical messages
+   * instead of ONE progressively-edited message.
+   *
+   * Fix: serialize editFn invocations through an in-flight promise so call N+1
+   * always awaits call N before starting.
+   */
+  it("PME-LOCK-1: second editFn call waits for first to resolve (serialized)", async () => {
+    // Track editFn lifecycle ordering: when each call starts and ends.
+    const events: string[] = [];
+    let resolveFirst: (() => void) | null = null;
+    let resolveSecond: (() => void) | null = null;
+
+    const editFn = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            events.push("start-1");
+            resolveFirst = () => {
+              events.push("end-1");
+              resolve();
+            };
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            events.push("start-2");
+            resolveSecond = () => {
+              events.push("end-2");
+              resolve();
+            };
+          }),
+      );
+
+    const editor = new ProgressiveMessageEditor({
+      editFn,
+      editIntervalMs: 100,
+    });
+
+    editor.update("first"); // immediate
+    await Promise.resolve();
+    expect(events).toEqual(["start-1"]); // first started, NOT yet ended
+
+    // Schedule second update via timer
+    editor.update("second");
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // CRITICAL: editFn was called by the editor (call count == 2),
+    // BUT the second editFn body must NOT have started executing because
+    // the first promise hasn't resolved yet.
+    expect(events).toEqual(["start-1"]); // start-2 must NOT appear yet
+
+    // Now resolve the first; the second should now begin.
+    resolveFirst!();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual(["start-1", "end-1", "start-2"]);
+
+    // Cleanup so vitest doesn't hang on un-awaited promises
+    resolveSecond!();
+    await Promise.resolve();
+  });
+
+  it("PME-LOCK-2: serialized calls let the second editFn observe state set by the first", async () => {
+    // Discord-style mock: first call sets sendCount=1 (simulating channel.send).
+    // The second call observes sendCount===1 and takes the edit branch (simulating
+    // messageRef.current !== null). Without serialization, both calls would race
+    // and BOTH would observe sendCount===0 → both call send → duplicate message.
+    let sendCount = 0;
+    const seenStateAt = { first: -1, second: -1 };
+    let callIndex = 0;
+
+    const editFn = vi.fn().mockImplementation(async () => {
+      const idx = callIndex++;
+      // Simulate Discord network round-trip: read state, await, then write.
+      const observed = sendCount;
+      if (idx === 0) seenStateAt.first = observed;
+      else seenStateAt.second = observed;
+      // Simulate the await on channel.send (next microtask)
+      await Promise.resolve();
+      await Promise.resolve();
+      if (observed === 0) sendCount++;
+    });
+
+    const editor = new ProgressiveMessageEditor({
+      editFn,
+      editIntervalMs: 50,
+    });
+
+    editor.update("first");
+    await Promise.resolve();
+    editor.update("second");
+    await vi.advanceTimersByTimeAsync(50);
+    // Drain microtasks so both serialized awaits resolve
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(seenStateAt.first).toBe(0);
+    // Critical: the second call must observe sendCount === 1 (set by first call).
+    expect(seenStateAt.second).toBe(1);
+    // Net result: only ONE "send" happened (no duplicate Discord message).
+    expect(sendCount).toBe(1);
+  });
+
+  it("PME-LOCK-3: editFn rejection on call N does not block call N+1", async () => {
+    const editFn = vi
+      .fn()
+      .mockRejectedValueOnce({ code: 50001, message: "Missing Access" })
+      .mockResolvedValueOnce(undefined);
+
+    const editor = new ProgressiveMessageEditor({
+      editFn,
+      editIntervalMs: 100,
+    });
+
+    editor.update("first"); // rejects
+    await vi.advanceTimersByTimeAsync(0);
+    // Drain rejection
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(editFn).toHaveBeenCalledTimes(1);
+
+    editor.update("second"); // must still fire even though prior rejected
+    await vi.advanceTimersByTimeAsync(100);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(editFn).toHaveBeenCalledTimes(2);
+  });
+
   it("Test 12: flush() still sends pending text and calls editFn once at the end (regression)", async () => {
     const editFn = vi.fn().mockResolvedValue(undefined);
     const editor = new ProgressiveMessageEditor({

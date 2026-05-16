@@ -1,0 +1,72 @@
+name: Go Shim Build
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'cmd/clawcode-mcp-shim/**'
+      - 'internal/shim/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/go-build.yml'
+  pull_request:
+    paths:
+      - 'cmd/clawcode-mcp-shim/**'
+      - 'internal/shim/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/go-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build clawcode-mcp-shim (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Verify go.mod tidiness
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+
+      - name: Run Go tests (host arch)
+        if: matrix.goarch == 'amd64'
+        run: go test ./...
+
+      - name: Build static binary (${{ matrix.goarch }})
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o clawcode-mcp-shim-linux-${{ matrix.goarch }} ./cmd/clawcode-mcp-shim
+          # Sanity-check binary size — Go static MCP server should be well under 12 MB
+          SIZE=$(stat -c %s clawcode-mcp-shim-linux-${{ matrix.goarch }})
+          echo "Binary size: $SIZE bytes"
+          if [ "$SIZE" -gt 12582912 ]; then
+            echo "ERROR: binary exceeds 12 MB ceiling — investigate dependencies or build flags" >&2
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawcode-mcp-shim-linux-${{ matrix.goarch }}
+          path: clawcode-mcp-shim-linux-${{ matrix.goarch }}
+          retention-days: 30
+          if-no-files-found: error

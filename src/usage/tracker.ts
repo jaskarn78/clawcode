@@ -7,6 +7,7 @@ import type {
   UsageAggregate,
   CostByAgentModel,
   CostByCategory,
+  CostByDay,
 } from "./types.js";
 
 /**
@@ -31,6 +32,8 @@ type PreparedStatements = {
   readonly totalUsageByAgent: Statement;
   readonly costsByAgentModel: Statement;
   readonly costsByCategory: Statement;
+  // Phase 116-05 F17 — per-day cost trend rows for the cost dashboard.
+  readonly costsByDay: Statement;
 };
 
 /**
@@ -159,6 +162,23 @@ export class UsageTracker {
   }
 
   /**
+   * Phase 116-05 F17 — get per-day cost rows for a time range, grouped
+   * by (date, agent, model). UTC-aligned via SQLite's `date(timestamp)`.
+   *
+   * One query covers a 30-day window. The `idx_usage_timestamp` index
+   * already exists (initSchema) so the WHERE filter is sargable; GROUP
+   * BY then sorts by date for stable trend rendering.
+   *
+   * @param startTime - ISO timestamp (inclusive)
+   * @param endTime - ISO timestamp (exclusive)
+   * @returns Frozen array of CostByDay rows in date-ascending order.
+   */
+  getCostsByDay(startTime: string, endTime: string): readonly CostByDay[] {
+    const rows = this.stmts.costsByDay.all(startTime, endTime) as CostByDay[];
+    return Object.freeze(rows.map((row) => Object.freeze({ ...row })));
+  }
+
+  /**
    * Close the database connection.
    */
   close(): void {
@@ -183,6 +203,18 @@ export class UsageTracker {
       CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id);
       CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_events(timestamp);
       CREATE INDEX IF NOT EXISTS idx_usage_agent ON usage_events(agent);
+
+      -- Phase 103 OBS-04 — per-agent rate-limit snapshots (one row per
+      -- rateLimitType: five_hour, seven_day, seven_day_opus,
+      -- seven_day_sonnet, overage). Owned + populated by RateLimitTracker
+      -- (src/usage/rate-limit-tracker.ts) which shares this DB handle so
+      -- there is exactly one SQLite file per agent. Additive — never
+      -- destructive to existing usage_events rows.
+      CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+        rate_limit_type TEXT PRIMARY KEY,
+        payload TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL
+      );
     `);
 
     // Phase 72 — idempotent column migrations. SQLite throws "duplicate
@@ -256,6 +288,21 @@ export class UsageTracker {
         WHERE timestamp >= ? AND timestamp < ?
         GROUP BY COALESCE(category, 'tokens')
         ORDER BY cost_usd DESC
+      `),
+      // Phase 116-05 F17 — per-day trend buckets. `date(timestamp)` uses
+      // SQLite's built-in date() which slices the UTC ISO timestamp at the
+      // 10-char date prefix (cheap; no timezone math). Sorting by date
+      // first guarantees the dashboard receives ascending buckets ready
+      // for line/area chart rendering.
+      costsByDay: this.db.prepare(`
+        SELECT date(timestamp) AS date, agent, model,
+          COALESCE(SUM(tokens_in), 0) AS tokens_in,
+          COALESCE(SUM(tokens_out), 0) AS tokens_out,
+          COALESCE(SUM(cost_usd), 0) AS cost_usd
+        FROM usage_events
+        WHERE timestamp >= ? AND timestamp < ?
+        GROUP BY date(timestamp), agent, model
+        ORDER BY date ASC, cost_usd DESC
       `),
     };
   }

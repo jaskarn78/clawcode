@@ -49,6 +49,33 @@ export const DEFAULT_IDENTITY_TEMPLATE = `# IDENTITY.md - Who Am I?
 `;
 
 /**
+ * Phase 999.47 D-03 (SC-5) — verbatim pointer line every agent's MEMORY.md
+ * must contain so the autoload window surfaces the canonical homelab
+ * inventory on every turn.
+ *
+ * This is a single-sourced constant — both the forward path
+ * (`src/agent/workspace.ts` initial MEMORY.md write) and the operator-gated
+ * backfill (`scripts/homelab/seed-memory-pointer.sh`) reference the SAME
+ * string, so the two surfaces cannot drift.
+ *
+ * Do NOT paraphrase. The em-dash and trailing text are part of the contract
+ * with the seeder script's `grep -Fxq` exact-line idempotency check.
+ */
+export const HOMELAB_POINTER_LINE =
+  "- [Homelab inventory](/home/clawcode/homelab/INVENTORY.md) — canonical source of truth for hosts, VMs, containers, access";
+
+/**
+ * Phase 999.47 D-03 — default MEMORY.md content emitted on agent workspace
+ * creation. Mirrors the layout the seeder script writes when an existing
+ * agent has no MEMORY.md (`# Memory\n\n<pointer>\n`) so the two paths
+ * converge on the same byte layout.
+ */
+export const DEFAULT_MEMORY_TEMPLATE = `# Memory
+
+${HOMELAB_POINTER_LINE}
+`;
+
+/**
  * Replace {{name}} placeholders in a template string with the agent name.
  */
 export function renderIdentity(template: string, agentName: string): string {

@@ -73,6 +73,16 @@ export type RunDreamActionArgs = Readonly<{
   force?: boolean;
   idleBypass?: boolean;
   model?: "haiku" | "sonnet" | "opus";
+  /**
+   * Phase 115 Plan 05 T03 — D-05 priority dream-pass override. When true,
+   * the daemon bypasses the truncation-event counter gate and treats
+   * the run as a priority pass (D-10 Row 5 — mutating promotion allowed,
+   * priorityScore floor overridden). Surfaces as `--priority` on the CLI.
+   *
+   * For operator-driven testing + emergency override only; the production
+   * trigger is the cron's tier-1 truncation counter consult.
+   */
+  priority?: boolean;
   log?: Logger;
   /**
    * DI hook for hermetic tests. Production callers omit this and the action
@@ -106,6 +116,10 @@ export async function runDreamAction(
     force: args.force === true,
     idleBypass: args.idleBypass === true,
     modelOverride: args.model,
+    // Phase 115 Plan 05 T03 — D-05 priority pass override. Daemon-side
+    // run-dream-pass handler treats this as the priority signal threading
+    // through D-10 Row 5 in dream-auto-apply.
+    priority: args.priority === true,
   };
 
   let response: RunDreamPassIpcResponse;
@@ -187,6 +201,13 @@ export function registerDreamCommand(parent: Command): void {
       "--idle-bypass",
       "Skip the isAgentIdle gate (fire even if agent is active)",
     )
+    .option(
+      "--priority",
+      "Phase 115 D-05 — force-priority pass: mutating promotion allowed, " +
+        "priorityScore floor overridden (D-10 Row 5). For operator testing " +
+        "+ emergency override; the cron's truncation-event counter is the " +
+        "production trigger.",
+    )
     .addOption(
       new Option(
         "--model <model>",
@@ -199,6 +220,7 @@ export function registerDreamCommand(parent: Command): void {
         opts: {
           force?: boolean;
           idleBypass?: boolean;
+          priority?: boolean;
           model?: "haiku" | "sonnet" | "opus";
         },
       ) => {
@@ -206,6 +228,7 @@ export function registerDreamCommand(parent: Command): void {
           agent,
           force: opts.force,
           idleBypass: opts.idleBypass,
+          priority: opts.priority,
           model: opts.model,
         });
         process.exit(code);

@@ -79,14 +79,14 @@ const noopLog = {
 function buildDeps(
   overrides: Partial<ApplyDreamResultDeps> = {},
 ): ApplyDreamResultDeps {
-  const applyAutoLinks =
+  const applyAutoLinks: ApplyDreamResultDeps["applyAutoLinks"] =
     overrides.applyAutoLinks ??
-    vi.fn(async (_agent: string, links: Array<{ from: string; to: string }>) => ({
+    vi.fn<ApplyDreamResultDeps["applyAutoLinks"]>(async (_agent, links) => ({
       added: links.length,
     }));
-  const writeDreamLog =
+  const writeDreamLog: ApplyDreamResultDeps["writeDreamLog"] =
     overrides.writeDreamLog ??
-    vi.fn(async () => ({
+    vi.fn<ApplyDreamResultDeps["writeDreamLog"]>(async () => ({
       logPath: "/tmp/dreams/2026-04-25.md",
       appended: false,
     }));
@@ -101,7 +101,7 @@ function buildDeps(
 
 describe("applyDreamResult — D-04 additive-only auto-applier", () => {
   it("A1: completed outcome with 3 newWikilinks invokes applyAutoLinks once with 3 entries", async () => {
-    const applyAutoLinks = vi.fn(async (_a: string, links: Array<{ from: string; to: string }>) => ({
+    const applyAutoLinks = vi.fn<ApplyDreamResultDeps["applyAutoLinks"]>(async (_a, links) => ({
       added: links.length,
     }));
     const deps = buildDeps({ applyAutoLinks });
@@ -155,7 +155,7 @@ describe("applyDreamResult — D-04 additive-only auto-applier", () => {
   });
 
   it("A5: promotionCandidates + suggestedConsolidations flow into writeDreamLog (surfaced, not applied)", async () => {
-    const writeDreamLog = vi.fn(async () => ({
+    const writeDreamLog = vi.fn<ApplyDreamResultDeps["writeDreamLog"]>(async () => ({
       logPath: "/tmp/dreams/x.md",
       appended: false,
     }));
@@ -175,7 +175,7 @@ describe("applyDreamResult — D-04 additive-only auto-applier", () => {
     const applyAutoLinks = vi.fn(async () => {
       throw new Error("link-store unavailable");
     });
-    const writeDreamLog = vi.fn(async () => ({
+    const writeDreamLog = vi.fn<ApplyDreamResultDeps["writeDreamLog"]>(async () => ({
       logPath: "/tmp/dreams/x.md",
       appended: false,
     }));

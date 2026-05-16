@@ -142,7 +142,7 @@ describe("ingestDiscordHistory — I2 paginates 250 msgs over 3 pages", () => {
 describe("ingestDiscordHistory — I3 sleeps BETWEEN requests only", () => {
   it("for 3 pages calls sleep exactly 2 times (not before first, not after last)", async () => {
     const corpus = makeMessages(250, "c1");
-    const sleepSpy = vi.fn(async () => {});
+    const sleepSpy = vi.fn<NonNullable<DiscordIngestDeps["sleep"]>>(async () => {});
     await ingestDiscordHistory(
       baseDeps({ fetchMessages: pagedFetch(corpus), sleep: sleepSpy }),
     );

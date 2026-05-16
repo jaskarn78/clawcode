@@ -7,10 +7,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "./dist",
-    "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "tests/__fakes__/**/*"],
+  "exclude": ["src/dashboard/client/**/*"]
 }

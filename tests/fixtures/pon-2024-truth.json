@@ -1,0 +1,27 @@
+{
+  "_SYNTHETIC_PLACEHOLDER": true,
+  "_synthetic_note": "Phase 101 Plan 02 CF-5 unblocker. These values are SHAPE-CORRECT placeholders only — they do NOT reflect Pon's actual 2024 tax return. Operator MUST replace with curated truth values before Plan 05 Pon UAT runs. Created 2026-05-16 to enable autonomous Plan 02-04 execution overnight.",
+  "_swap_procedure": "Replace this entire JSON content with operator-validated values from Pon's 2024 Form 1040. Preserve schema shape; values become real. Then re-run Plan 02 T03 Pon UAT test (`npx vitest run tests/document-ingest/pon-uat.test.ts`) and Plan 05 T03 live UAT gate.",
+  "taxYear": 2024,
+  "taxpayerName": "PLACEHOLDER, Sample",
+  "box1Wages": 97400.00,
+  "scheduleC": {
+    "netProfit": 42500.00,
+    "grossReceipts": 158000.00,
+    "expenses": [
+      { "category": "Advertising", "amount": 4200.00 },
+      { "category": "Office Supplies", "amount": 1850.00 },
+      { "category": "Software Subscriptions", "amount": 6300.00 },
+      { "category": "Travel", "amount": 3100.00 }
+    ]
+  },
+  "backdoorRoth": {
+    "amount": 7000.00,
+    "year": 2024
+  },
+  "iraDeduction": 0.00,
+  "qbi": {
+    "deduction": 8500.00
+  },
+  "extractionSchemaVersion": "v1"
+}

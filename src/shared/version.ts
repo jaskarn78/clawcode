@@ -5,4 +5,4 @@
  * needing a runtime `require('package.json')`. Keep in sync with the
  * `version` field in package.json; CI does not enforce this yet.
  */
-export const CLAWCODE_VERSION = "0.2.0" as const;
+export const CLAWCODE_VERSION = "1.2.8" as const;

@@ -175,4 +175,71 @@ describe("loadMarketplaceCatalog — ClawHub union (Phase 90 Plan 04 HUB-CAT-1..
     expect(result).toHaveLength(0);
     expect(warnSpy).toHaveBeenCalled();
   });
+
+  // 2026-05-04 today-fire: a real ClawHub response surfaced an item whose
+  // `name` was undefined; the catalog set it as the byName key and the
+  // Step-3 sort threw "Cannot read properties of undefined (reading
+  // 'localeCompare')", crashing the entire /clawcode-skills-browse for
+  // every operator. The fix skips name-less items at ingestion + filters
+  // before sort. This test pins both layers.
+  it("HUB-CAT-7: skips clawhub items with missing/empty name; rest of catalog still loads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mkt-hub-7-"));
+    const localRoot = join(root, "local");
+    await mkdir(localRoot, { recursive: true });
+
+    // Construct a hand-rolled response that has one item with name="" and
+    // one with name=undefined, alongside two valid items. The clawhubResponse
+    // helper above forces a default name="x" so we bypass it here.
+    vi.mocked(clawhubClient.fetchClawhubSkills).mockResolvedValueOnce(
+      Object.freeze({
+        items: Object.freeze([
+          Object.freeze({
+            id: "uuid-1",
+            name: "valid-skill-a",
+            description: "A",
+            version: "1.0.0",
+            author: "auth",
+            downloadUrl: "https://clawhub.ai/a.tar.gz",
+          }),
+          // Missing name (undefined coerced through unknown for safety).
+          Object.freeze({
+            id: "uuid-2",
+            name: undefined as unknown as string,
+            description: "no name",
+            version: "1.0.0",
+            author: "auth",
+            downloadUrl: "https://clawhub.ai/b.tar.gz",
+          }),
+          Object.freeze({
+            id: "uuid-3",
+            name: "",
+            description: "empty name",
+            version: "1.0.0",
+            author: "auth",
+            downloadUrl: "https://clawhub.ai/c.tar.gz",
+          }),
+          Object.freeze({
+            id: "uuid-4",
+            name: "valid-skill-b",
+            description: "B",
+            version: "1.0.0",
+            author: "auth",
+            downloadUrl: "https://clawhub.ai/d.tar.gz",
+          }),
+        ]),
+        nextCursor: null,
+      }) as ClawhubSkillsResponse,
+    );
+
+    const result = await loadMarketplaceCatalog({
+      localSkillsPath: localRoot,
+      sources: [{ kind: "clawhub", baseUrl: "https://clawhub.ai" }],
+    });
+
+    const names = result.map((e) => e.name);
+    expect(names).toEqual(["valid-skill-a", "valid-skill-b"]);
+    // Verify the sort itself didn't throw (regression check — pre-fix
+    // this whole call would reject with the localeCompare error).
+    expect(result).toHaveLength(2);
+  });
 });

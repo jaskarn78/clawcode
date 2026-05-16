@@ -34,18 +34,18 @@ function makeMockSessionManager(initialEffort: string = "low") {
   });
   const getEffortForAgent = vi.fn((_name: string) => currentEffort);
 
-  const sendToAgent = vi.fn(async () => "mock-response");
+  const dispatchTurn = vi.fn(async () => "mock-response");
   const streamFromAgent = vi.fn(async () => "mock-stream");
   const getTraceCollector = vi.fn(() => undefined);
 
   const sm = {
-    sendToAgent,
+    dispatchTurn,
     streamFromAgent,
     getTraceCollector,
     setEffortForAgent,
     getEffortForAgent,
   };
-  return { sm, setEffortForAgent, getEffortForAgent, sendToAgent, streamFromAgent };
+  return { sm, setEffortForAgent, getEffortForAgent, dispatchTurn, streamFromAgent };
 }
 
 describe("TurnDispatcher — per-skill effort override (EFFORT-05)", () => {
@@ -70,9 +70,9 @@ describe("TurnDispatcher — per-skill effort override (EFFORT-05)", () => {
     expect(mock.setEffortForAgent).toHaveBeenCalledTimes(2);
     expect(mock.setEffortForAgent.mock.calls[0]).toEqual(["alice", "max"]);
     expect(mock.setEffortForAgent.mock.calls[1]).toEqual(["alice", "low"]);
-    // Ordering: pre-turn override BEFORE sendToAgent, revert AFTER.
+    // Ordering: pre-turn override BEFORE dispatchTurn, revert AFTER.
     const preOrder = mock.setEffortForAgent.mock.invocationCallOrder[0];
-    const sendOrder = mock.sendToAgent.mock.invocationCallOrder[0];
+    const sendOrder = mock.dispatchTurn.mock.invocationCallOrder[0];
     const postOrder = mock.setEffortForAgent.mock.invocationCallOrder[1];
     expect(preOrder).toBeLessThan(sendOrder);
     expect(sendOrder).toBeLessThan(postOrder);
@@ -80,7 +80,7 @@ describe("TurnDispatcher — per-skill effort override (EFFORT-05)", () => {
 
   it("restores priorEffort even when send throws (try/finally contract)", async () => {
     const error = new Error("upstream-boom");
-    mock.sm.sendToAgent = vi.fn(async () => { throw error; });
+    mock.sm.dispatchTurn = vi.fn(async () => { throw error; });
     dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
 
     const origin = makeRootOrigin("discord", "msg-2");
@@ -99,7 +99,7 @@ describe("TurnDispatcher — per-skill effort override (EFFORT-05)", () => {
     await dispatcher.dispatch(origin, "alice", "no skill in sight");
 
     expect(mock.setEffortForAgent).not.toHaveBeenCalled();
-    expect(mock.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(mock.dispatchTurn).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT call setEffort when skillEffort is explicitly undefined", async () => {

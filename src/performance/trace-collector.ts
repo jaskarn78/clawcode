@@ -49,8 +49,333 @@ export class TraceCollector {
    */
   startTurn(turnId: string, agent: string, channelId: string | null): Turn {
     const childLog = this.log.child({ agent, turnId });
-    return new Turn(turnId, agent, channelId, this.store, childLog);
+    const turn = new Turn(turnId, agent, channelId, this.store, childLog, this);
+    // Phase 115 Plan 05 T04 — register so `recordLazyRecallCall` can fold
+    // the increment in directly. Unregistration happens at Turn.end().
+    this.registerActiveTurn(agent, turn);
+    return turn;
   }
+
+  /**
+   * Phase 115 Plan 05 T03 — record a tier-1 truncation event (D-05 trigger).
+   *
+   * Called from session-config.ts when MEMORY.md exceeds
+   * INJECTED_MEMORY_MAX_CHARS at assembly time and the head-tail
+   * truncation fires. Persists into the `tier1_truncation_events` table
+   * for the dream-cron 2-in-24h priority-pass trigger.
+   *
+   * Failure-isolated — observability never blocks the parent path.
+   * Errors are logged at warn level but never propagated.
+   */
+  recordTier1TruncationEvent(agent: string, droppedChars = 0): void {
+    try {
+      this.store.recordTier1TruncationEvent(agent, droppedChars);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, droppedChars, err: msg, action: "tier1-truncation-record-failed" },
+        "[trace] recordTier1TruncationEvent failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 05 T03 — count tier-1 truncation events in a window.
+   *
+   * Used by dream-cron's `shouldFirePriorityPass` to compute the 2-in-24h
+   * trigger condition. Returns 0 on error (fail-safe — never block dream
+   * scheduling on observability failures).
+   */
+  countTruncationEventsSince(agent: string, sinceMs: number): number {
+    try {
+      return this.store.countTier1TruncationEventsSince(agent, sinceMs);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, sinceMs, err: msg, action: "tier1-truncation-count-failed" },
+        "[trace] countTier1TruncationEventsSince failed (non-fatal); returning 0",
+      );
+      return 0;
+    }
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — record one lazy-recall tool invocation.
+   *
+   * Per CONTEXT.md sub-scope 7, the four lazy-load tools (`clawcode_memory_search`,
+   * `_recall`, `_edit`, `_archive`) are the agent-facing surface that converts
+   * the model from "always-injected memory" to "tool-mediated lazy recall."
+   * This method increments the per-agent call counter the dashboard surfaces
+   * (column `lazy_recall_call_count` in traces.db, slot opened by 115-00-T02).
+   *
+   * Per-turn association: when a Turn is active for `agent`, the increment
+   * folds into the active turn buffer and lands in the `lazy_recall_call_count`
+   * column at turn-end. When NO active turn exists (e.g. the tool fired
+   * outside a Discord turn loop — heartbeat-driven, daemon-initiated probes),
+   * a per-agent rolling counter accumulates and gets attached to the next
+   * turn that ends for the agent.
+   *
+   * Failure-isolated — a counter failure NEVER blocks the tool path. Errors
+   * are logged at warn level and dropped.
+   *
+   * @param agent — agent whose lazy-recall counter should be incremented
+   * @param tool  — tool name for the structured log line
+   *                ('clawcode_memory_search' | 'clawcode_memory_recall' |
+   *                'clawcode_memory_edit' | 'clawcode_memory_archive')
+   */
+  recordLazyRecallCall(agent: string, tool: string): void {
+    try {
+      // Try the active-turn registry first.
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpLazyRecallCount(tool);
+        return;
+      }
+      // No active turn — bump the per-agent rolling counter that the next
+      // ended turn will pick up.
+      const rolling = this.pendingLazyRecallByAgent.get(agent) ?? 0;
+      this.pendingLazyRecallByAgent.set(agent, rolling + 1);
+
+      // Best-effort structured trace line so operators can grep
+      // `lazy_recall_call agent=X tool=Y` in journalctl. Never throws.
+      this.log.debug(
+        { agent, tool, action: "lazy-recall-call" },
+        "[trace] lazy_recall_call_count incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, tool, err: msg, action: "lazy-recall-record-failed" },
+        "[trace] recordLazyRecallCall failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — drain the per-agent rolling lazy-recall counter
+   * accumulated since the last turn end. Returns the count and clears the
+   * slot. Called from Turn.end() so the column reflects every recorded
+   * call. Tests rely on this to assert the counter is correctly attributed.
+   */
+  drainPendingLazyRecallCount(agent: string): number {
+    const n = this.pendingLazyRecallByAgent.get(agent) ?? 0;
+    if (n > 0) this.pendingLazyRecallByAgent.delete(agent);
+    return n;
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — register an active Turn so `recordLazyRecallCall`
+   * can fold the increment in directly. Called from Turn constructor; the
+   * Turn unregisters on `end()`.
+   *
+   * Stored as a single-Turn-per-agent slot. ClawCode runs at most one Turn
+   * per agent at a time (Phase 50 invariant); concurrent Turns per agent
+   * are not supported.
+   */
+  registerActiveTurn(agent: string, turn: Turn): void {
+    this.activeTurns.set(agent, turn);
+  }
+
+  unregisterActiveTurn(agent: string, turn: Turn): void {
+    if (this.activeTurns.get(agent) === turn) {
+      this.activeTurns.delete(agent);
+    }
+  }
+
+  // Phase 115 Plan 05 T04 — per-agent rolling lazy-recall counter for tool
+  // calls that fire OUTSIDE an active Turn (heartbeat probes, daemon-driven
+  // memory operations, etc.). Drained into the next Turn that ends for
+  // the agent.
+  private readonly pendingLazyRecallByAgent = new Map<string, number>();
+
+  // Phase 115 Plan 05 T04 — per-agent active-Turn registry. Single slot
+  // per agent (Phase 50 invariant: at most one Turn per agent at a time).
+  private readonly activeTurns = new Map<string, Turn>();
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache HIT.
+   *
+   * Increments the per-agent hit counter that the dashboard divides by
+   * (hit + miss) to compute `tool_cache_hit_rate`. Mirrors the
+   * `recordLazyRecallCall` pattern (rolling counter + structured debug
+   * log line) — this is best-effort observability, never on the dispatch
+   * critical path.
+   *
+   * Per-turn association is via the active-Turn registry; calls outside
+   * any turn (e.g., heartbeat-driven tool probes) bump a per-agent
+   * rolling counter that the next ended turn picks up.
+   *
+   * Failure-isolated. Errors logged at warn level, never thrown.
+   */
+  recordToolCacheHit(agent: string, tool: string): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpToolCacheHit(tool);
+        return;
+      }
+      const rolling = this.pendingToolCacheHitsByAgent.get(agent) ?? 0;
+      this.pendingToolCacheHitsByAgent.set(agent, rolling + 1);
+      this.log.debug(
+        { agent, tool, action: "tool-cache-hit-rolling" },
+        "[trace] tool_cache_hit incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, tool, err: msg, action: "tool-cache-hit-record-failed" },
+        "[trace] recordToolCacheHit failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache MISS.
+   *
+   * Same flow as `recordToolCacheHit` but for the miss counter. The
+   * dashboard computes `tool_cache_hit_rate = hits / (hits + misses)`
+   * over a sliding window — both producers required.
+   */
+  recordToolCacheMiss(agent: string, tool: string): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpToolCacheMiss(tool);
+        return;
+      }
+      const rolling = this.pendingToolCacheMissesByAgent.get(agent) ?? 0;
+      this.pendingToolCacheMissesByAgent.set(agent, rolling + 1);
+      this.log.debug(
+        { agent, tool, action: "tool-cache-miss-rolling" },
+        "[trace] tool_cache_miss incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, tool, err: msg, action: "tool-cache-miss-record-failed" },
+        "[trace] recordToolCacheMiss failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — drain rolling tool-cache hit / miss counters
+   * for the agent. Called from Turn.end() so out-of-turn cache events
+   * land on the next ended turn. Returns { hits, misses } and clears
+   * both slots.
+   */
+  drainPendingToolCacheCounters(
+    agent: string,
+  ): { readonly hits: number; readonly misses: number } {
+    const hits = this.pendingToolCacheHitsByAgent.get(agent) ?? 0;
+    const misses = this.pendingToolCacheMissesByAgent.get(agent) ?? 0;
+    if (hits > 0) this.pendingToolCacheHitsByAgent.delete(agent);
+    if (misses > 0) this.pendingToolCacheMissesByAgent.delete(agent);
+    return { hits, misses };
+  }
+
+
+  // Phase 115 Plan 07 T03 — per-agent rolling tool-cache hit / miss counters
+  // for tool calls firing OUTSIDE an active Turn (heartbeat / daemon-driven
+  // probes). Drained into the next Turn that ends for the agent.
+  private readonly pendingToolCacheHitsByAgent = new Map<string, number>();
+  private readonly pendingToolCacheMissesByAgent = new Map<string, number>();
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record bounded-tier
+   * injection size for the agent's currently-active Turn. Mirrors
+   * `recordLazyRecallCall`'s active-turn pattern but does NOT use
+   * a rolling counter — Tier 1 size is a per-assembly snapshot, not
+   * a per-event count.
+   *
+   * Behavior:
+   *   - Active Turn for `agent` exists → fold into Turn.bumpTier1Size.
+   *   - No active Turn → debug log, drop. The dashboard reads the
+   *     most-recent non-NULL row via ORDER BY started_at DESC LIMIT 1
+   *     (getPhase115DashboardMetrics line 674-680), so missing one
+   *     bootstrap turn worth of data has no operator-facing impact —
+   *     the next session-restart will populate.
+   *
+   * Failure-isolated. Errors logged at warn level, never thrown.
+   */
+  recordTier1Size(agent: string, injectChars: number, capChars: number): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpTier1Size(injectChars, capChars);
+        return;
+      }
+      this.log.debug(
+        { agent, injectChars, capChars, action: "tier1-size-no-active-turn" },
+        "[trace] recordTier1Size called with no active turn — dropped",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, injectChars, capChars, err: msg, action: "tier1-size-record-failed" },
+        "[trace] recordTier1Size failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record one
+   * `[diag] likely-prompt-bloat` warning for the given agent. Called
+   * by the classifier sink at session-manager.ts:2392-2406. The sink
+   * already duck-types this method onto the TraceCollector — adding
+   * it here closes the schema-without-writer gap.
+   *
+   * Method NAME is `incrementPromptBloatWarning` to match the
+   * `PromptBloatTraceSink` interface declared at
+   * session-adapter.ts:196-204; renaming would force a session-adapter
+   * edit which the sink contract was specifically designed to avoid.
+   *
+   * Mirrors `recordLazyRecallCall`'s active-turn + rolling-counter
+   * pattern: when the classifier fires outside an active turn (rare
+   * but possible — onError hooks may run after turn.end committed
+   * for the same Discord message id), the increment lands in a
+   * per-agent rolling counter that the next ended turn drains.
+   *
+   * Failure-isolated. Errors logged at warn, never thrown.
+   */
+  incrementPromptBloatWarning(agent: string): void {
+    try {
+      const turn = this.activeTurns.get(agent);
+      if (turn !== undefined) {
+        turn.bumpPromptBloatWarning();
+        return;
+      }
+      const rolling = this.pendingPromptBloatWarningsByAgent.get(agent) ?? 0;
+      this.pendingPromptBloatWarningsByAgent.set(agent, rolling + 1);
+      this.log.debug(
+        { agent, action: "prompt-bloat-warning-rolling" },
+        "[trace] prompt_bloat_warning incremented (no-active-turn rolling)",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.log.warn(
+        { agent, err: msg, action: "prompt-bloat-warning-record-failed" },
+        "[trace] incrementPromptBloatWarning failed (non-fatal)",
+      );
+    }
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — drain rolling
+   * prompt-bloat counter for the agent. Called from Turn.end() so
+   * out-of-turn classifier fires land on the next ended turn.
+   * Returns the count and clears the slot.
+   */
+  drainPendingPromptBloatWarnings(agent: string): number {
+    const n = this.pendingPromptBloatWarningsByAgent.get(agent) ?? 0;
+    if (n > 0) this.pendingPromptBloatWarningsByAgent.delete(agent);
+    return n;
+  }
+
+  // Phase 115 post-deploy patch (2026-05-08) — per-agent rolling
+  // prompt-bloat warning counter for classifier fires that hit
+  // OUTSIDE an active Turn. Drained into the next Turn that ends.
+  private readonly pendingPromptBloatWarningsByAgent = new Map<string, number>();
 }
 
 /**
@@ -96,6 +421,78 @@ export class Turn {
    * field at `end()` because the Turn itself is the GC root.
    */
   private _toolCache: ToolCache | undefined = undefined;
+  /**
+   * Phase 115 Plan 05 T04 — per-turn lazy-recall call counter. Incremented
+   * by `bumpLazyRecallCount` from the four `clawcode_memory_*` IPC handlers
+   * in daemon.ts. Drained into the `lazyRecallCallCount` column in
+   * traces.db at `end()` time.
+   */
+  private lazyRecallCallCount = 0;
+  /**
+   * Phase 115 Plan 07 T03 — per-turn tool-cache hit / miss counters.
+   * Incremented by `bumpToolCacheHit` / `bumpToolCacheMiss` from the
+   * `dispatchTool` cache wrapper. Drained into `tool_cache_hit_rate`
+   * column in traces.db at `end()` time as `hits / (hits + misses)`.
+   * Turns with zero cache-eligible tool calls land NULL in the column.
+   */
+  private toolCacheHits = 0;
+  private toolCacheMisses = 0;
+  /**
+   * Phase 115 Plan 08 T01 — per-turn tool-latency split-metric accumulators
+   * (sub-scope 17a/b).
+   *
+   * - toolExecutionMs: sum of pure-execution durations from each
+   *   `tool_call.<name>` span (tool_use_emitted → tool_result_arrived).
+   *   Producer is the existing span lifecycle in session-adapter.ts:1419-1514;
+   *   the addToolExecutionMs helper folds each span's duration in.
+   * - toolRoundtripMs: sum of per-batch wall-clock durations
+   *   (tool_use_emitted → next parent assistant message arrived). Producer
+   *   is session-adapter.ts iterateWithTracing — open at first tool_use of
+   *   a parent assistant message, close on next parent assistant message.
+   * - parallelToolCallCount: MAX(tool_use blocks across any single parent
+   *   assistant message in the turn). Producer is session-adapter.ts'
+   *   per-message `toolUseCount` scan at line ~1399-1402.
+   *
+   * All three remain at sentinel values (0 for sums, 0 for max) when no
+   * tool_use blocks fired in the turn. Turn.end() converts the sentinel
+   * to NULL in the persisted record (so dashboard percentile queries can
+   * distinguish "no tool calls this turn" from "0ms execution").
+   */
+  private toolExecutionMs = 0;
+  private toolRoundtripMs = 0;
+  private parallelToolCallCount = 0;
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — per-turn bounded-tier
+   * injection size accumulator (sub-scope 1). Set by `bumpTier1Size`
+   * after the assembler's `enforceDropLowestImportance` enforcement
+   * fires on the identity section. NULL means "not measured this turn"
+   * (most per-message turns; only bootstrap turns measure). When set,
+   * the column reflects the actual rendered char count of the carved
+   * identity block; `tier1BudgetPct` is the ratio over
+   * INJECTED_MEMORY_MAX_CHARS. Distinguishing NULL from 0 matters —
+   * 0 would be a bug signal, NULL is "out of scope this turn".
+   */
+  private tier1InjectChars: number | null = null;
+  private tier1BudgetPct: number | null = null;
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — per-turn prompt-bloat
+   * warning counter (sub-scope 13). Incremented by
+   * `bumpPromptBloatWarning`, which is called from the
+   * `classifyPromptBloat` sink at session-manager.ts:2392-2406 each
+   * time the classifier emits a `[diag] likely-prompt-bloat` log.
+   * Drained into `promptBloatWarnings24h` at `end()` — the column
+   * name carries the 24h window because the dashboard SUM-aggregates
+   * over a rolling 24h window; the per-turn writer just records the
+   * per-turn delta.
+   */
+  private promptBloatWarnings = 0;
+  /**
+   * Phase 115 Plan 05 T04 — back-reference to the parent collector so the
+   * Turn can pull rolling lazy-recall counts from outside-of-turn calls
+   * at `end()` time. Optional so legacy bench-harness Turns (instantiated
+   * directly) keep working.
+   */
+  private readonly collector: TraceCollector | undefined;
 
   constructor(
     id: string,
@@ -103,6 +500,7 @@ export class Turn {
     channelId: string | null,
     store: TraceStore,
     log: Logger,
+    collector?: TraceCollector,
   ) {
     this.id = id;
     this.agent = agent;
@@ -110,6 +508,196 @@ export class Turn {
     this.store = store;
     this.log = log;
     this.startedAtMs = Date.now();
+    this.collector = collector;
+  }
+
+  /**
+   * Phase 115 Plan 05 T04 — record one lazy-recall tool call within this
+   * turn. Folded into the `lazyRecallCallCount` column at `end()`. No-op
+   * after `end()` (post-commit).
+   *
+   * `tool` is the tool name (e.g. 'clawcode_memory_search'). It only
+   * appears in the structured debug log line — the persisted column is
+   * an aggregate count, not a per-tool histogram (sub-scope 7 dashboard
+   * only needs the rate, not the breakdown — Plan 115-09 closeout).
+   */
+  bumpLazyRecallCount(tool: string): void {
+    if (this.committed) return;
+    this.lazyRecallCallCount += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        tool,
+        count: this.lazyRecallCallCount,
+        action: "lazy-recall-call",
+      },
+      "[trace] lazy_recall_call_count incremented",
+    );
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record the bounded-tier
+   * (Tier 1) injection size for this turn. Called from
+   * `assembleContextTraced` immediately after the identity assembly
+   * runs, with `injectChars` = rendered identity char count and
+   * `capChars` = `INJECTED_MEMORY_MAX_CHARS` (16K). The ratio lands
+   * in `tier1BudgetPct` (clamped to [0, 1] for sane downstream math —
+   * the column type is REAL and dashboard renders as percentage).
+   *
+   * Last-write-wins on repeat calls within the same turn (the
+   * assembler runs once per bootstrap; this guards against accidental
+   * multi-write when a future caller wires per-turn re-assembly).
+   * No-op after `end()` (post-commit).
+   *
+   * `capChars` of 0 short-circuits to NULL (defensive — avoids
+   * div-by-zero; should never happen in production where the constant
+   * is 16_000).
+   */
+  bumpTier1Size(injectChars: number, capChars: number): void {
+    if (this.committed) return;
+    if (capChars <= 0) return;
+    if (injectChars < 0) return;
+    this.tier1InjectChars = injectChars;
+    // Ratio in [0, 1]. The dashboard subtitle renderer multiplies by 100
+    // for the % display and applies the 90%-budget warning threshold.
+    this.tier1BudgetPct = injectChars / capChars;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        injectChars,
+        capChars,
+        budgetPct: this.tier1BudgetPct,
+        action: "tier1-size-recorded",
+      },
+      "[trace] tier1_inject_chars + tier1_budget_pct recorded",
+    );
+  }
+
+  /**
+   * Phase 115 post-deploy patch (2026-05-08) — record one
+   * `[diag] likely-prompt-bloat` event for this turn. Called from
+   * the `classifyPromptBloat` trace-sink at session-manager.ts when
+   * the classifier fires (invalid_request_error + stable prefix
+   * exceeds PROMPT_BLOAT_THRESHOLD = 20K chars). Folded into
+   * `promptBloatWarnings24h` column at `end()`; the dashboard
+   * SUM-aggregates across a rolling 24h window per agent.
+   *
+   * No-op after `end()` (post-commit). Prompt-bloat events typically
+   * fire during error handling on a turn that's about to crash —
+   * the classifier runs FIRST (session-manager.ts:2386) so the
+   * counter increment happens before turn.end("error") commits.
+   */
+  bumpPromptBloatWarning(): void {
+    if (this.committed) return;
+    this.promptBloatWarnings += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        count: this.promptBloatWarnings,
+        action: "prompt-bloat-warning",
+      },
+      "[trace] prompt_bloat_warnings_24h incremented",
+    );
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache HIT within this turn.
+   * Folded into `tool_cache_hit_rate` at `end()`. No-op after `end()`.
+   *
+   * `tool` only appears in the structured debug log — the persisted
+   * column is an aggregate rate, not a per-tool histogram (Plan 115-09
+   * dashboard renders the rate, not the breakdown).
+   */
+  bumpToolCacheHit(tool: string): void {
+    if (this.committed) return;
+    this.toolCacheHits += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        tool,
+        hits: this.toolCacheHits,
+        action: "tool-cache-hit",
+      },
+      "[trace] tool_cache_hit incremented",
+    );
+  }
+
+  /**
+   * Phase 115 Plan 07 T03 — record one tool-cache MISS within this turn.
+   * Folded into `tool_cache_hit_rate` at `end()`. No-op after `end()`.
+   */
+  bumpToolCacheMiss(tool: string): void {
+    if (this.committed) return;
+    this.toolCacheMisses += 1;
+    this.log.debug(
+      {
+        agent: this.agent,
+        turnId: this.id,
+        tool,
+        misses: this.toolCacheMisses,
+        action: "tool-cache-miss",
+      },
+      "[trace] tool_cache_miss incremented",
+    );
+  }
+
+  /**
+   * Phase 115 Plan 08 T01 — fold one tool_call.<name> span's pure-execution
+   * duration into the per-turn `tool_execution_ms` accumulator. Called
+   * from session-adapter.ts at the same point the existing span ends
+   * (matching `parent_tool_use_id` user message arrives). Sums across
+   * every tool span in the turn.
+   *
+   * No-op after `end()` (post-commit).
+   */
+  addToolExecutionMs(durationMs: number): void {
+    if (this.committed) return;
+    if (durationMs > 0) this.toolExecutionMs += durationMs;
+  }
+
+  /**
+   * Phase 115 Plan 08 T01 — fold one batch-roundtrip duration into the
+   * per-turn `tool_roundtrip_ms` accumulator. A batch-roundtrip opens
+   * when the first tool_use block appears in a parent assistant message
+   * and closes when the NEXT parent assistant message arrives — capturing
+   * the SDK dispatch + actual tool execution + result delivery + LLM
+   * resume cost. Per-batch (not per-tool) so parallel batches collapse
+   * to a single wall-clock interval.
+   *
+   * Sums across every batch in the turn (multi-batch turns where the
+   * model emits sequential tool_use → tool_result cycles).
+   *
+   * No-op after `end()` (post-commit).
+   */
+  addToolRoundtripMs(durationMs: number): void {
+    if (this.committed) return;
+    if (durationMs > 0) this.toolRoundtripMs += durationMs;
+  }
+
+  /**
+   * Phase 115 Plan 08 T01 — record the parallel tool-use batch size for
+   * one parent assistant message. The persisted column is the MAX
+   * batch size observed in any one message during this turn:
+   * sequential-only turns land 1; turns with at least one N-block
+   * parallel batch land N. Subsumes the `> 0` "had any tool" check used
+   * by Plan 08 T02's `tool_use_rate_per_turn` computation while
+   * preserving the sub-scope 17(b) parallel-vs-serial signal.
+   *
+   * Producer is session-adapter.ts iterateWithTracing — at the
+   * per-message tool_use scan (~line 1399-1402), it already counts
+   * `toolUseCount`; this method records that count.
+   *
+   * No-op after `end()` (post-commit).
+   */
+  recordParallelToolCallCount(batchSize: number): void {
+    if (this.committed) return;
+    if (batchSize > this.parallelToolCallCount) {
+      this.parallelToolCallCount = batchSize;
+    }
   }
 
   /**
@@ -195,6 +783,39 @@ export class Turn {
     if (this.committed) return;
     this.committed = true;
     const endedAtMs = Date.now();
+
+    // Phase 115 Plan 05 T04 — drain any pending out-of-turn lazy-recall
+    // calls accumulated for this agent and add them to the per-turn count.
+    let lazyRecallCallCount = this.lazyRecallCallCount;
+    // Phase 115 Plan 07 T03 — drain any pending out-of-turn tool-cache
+    // hits / misses accumulated for this agent.
+    let toolCacheHits = this.toolCacheHits;
+    let toolCacheMisses = this.toolCacheMisses;
+    // Phase 115 post-deploy patch (2026-05-08) — drain any pending
+    // out-of-turn prompt-bloat warnings (classifier fires that hit
+    // after a turn already committed but before the next started).
+    let promptBloatWarnings = this.promptBloatWarnings;
+    if (this.collector) {
+      lazyRecallCallCount += this.collector.drainPendingLazyRecallCount(this.agent);
+      const drained = this.collector.drainPendingToolCacheCounters(this.agent);
+      toolCacheHits += drained.hits;
+      toolCacheMisses += drained.misses;
+      promptBloatWarnings += this.collector.drainPendingPromptBloatWarnings(this.agent);
+      this.collector.unregisterActiveTurn(this.agent, this);
+    }
+    // Compute hit rate. Only meaningful when at least one cache-eligible
+    // tool call happened during this turn (or rolled in from out-of-turn).
+    // Otherwise leave it null so the column reflects "no signal" rather
+    // than 0% / 100% (which would skew percentile rollups).
+    const totalCacheEvents = toolCacheHits + toolCacheMisses;
+    const toolCacheHitRate =
+      totalCacheEvents > 0 ? toolCacheHits / totalCacheEvents : null;
+    // Note — `tool_cache_size_mb` is a fleet-wide signal sourced from
+    // ToolCacheStore.sizeMb() and surfaced via the `tool-cache-status`
+    // IPC, not a per-turn column. We leave the persisted column NULL on
+    // the per-turn write side; the dashboard reads the live size via the
+    // IPC handler when the cache panel renders.
+
     const base = {
       id: this.id,
       agent: this.agent,
@@ -217,6 +838,57 @@ export class Turn {
           }
         : {}),
       ...(this.turnOrigin ? { turnOrigin: this.turnOrigin } : {}),
+      // Phase 115 Plan 05 T04 — only attach when non-zero so legacy turn
+      // shape stays NULL on the column for turns that never invoked a
+      // lazy-recall tool. Mirrors the cache-telemetry-snapshot conditional
+      // spread above.
+      ...(lazyRecallCallCount > 0 ? { lazyRecallCallCount } : {}),
+      // Phase 115 Plan 07 T03 — only attach when at least one cache-eligible
+      // tool call ran (hit OR miss). Otherwise the column lands NULL so
+      // percentile rollups can distinguish "no cache events this turn" from
+      // "0% hit rate" (which has signal — implies misses but no hits).
+      ...(toolCacheHitRate !== null
+        ? {
+            toolCacheHitRate,
+            toolCacheHitCount: toolCacheHits,
+            toolCacheMissCount: toolCacheMisses,
+          }
+        : {}),
+      // Phase 115 Plan 08 T01 — only attach the three split-latency fields
+      // when at least one tool_use batch fired this turn (signal: max
+      // parallel count > 0). Turns without tool calls land NULL on all
+      // three columns so percentile rollups distinguish "no tool calls"
+      // from "0ms execution / 0 batch size" (which would be a buggy producer
+      // signal). Producer must call recordParallelToolCallCount(>=1) for
+      // any turn that fired a tool_use, even sequential single-call turns.
+      ...(this.parallelToolCallCount > 0
+        ? {
+            toolExecutionMs: this.toolExecutionMs,
+            toolRoundtripMs: this.toolRoundtripMs,
+            parallelToolCallCount: this.parallelToolCallCount,
+          }
+        : {}),
+      // Phase 115 post-deploy patch (2026-05-08) — only attach tier1_*
+      // when bumpTier1Size was actually called this turn. NULL means
+      // "not measured this turn" (most per-message turns; only bootstrap
+      // turns measure). Distinguishing NULL from 0 matters: 0 would be a
+      // bug signal (cap divisor of zero shouldn't reach here), NULL
+      // is "out of scope". Mirrors the parallelToolCallCount > 0 conditional
+      // spread above.
+      ...(this.tier1InjectChars !== null
+        ? {
+            tier1InjectChars: this.tier1InjectChars,
+            tier1BudgetPct: this.tier1BudgetPct,
+          }
+        : {}),
+      // Phase 115 post-deploy patch (2026-05-08) — only attach
+      // promptBloatWarnings24h when at least one classifier fire happened
+      // this turn (or rolled in from out-of-turn). NULL means "no signal
+      // this turn" — preserves dashboard SUM aggregator semantics where
+      // healthy turns contribute 0 and crash turns contribute the count.
+      ...(promptBloatWarnings > 0
+        ? { promptBloatWarnings24h: promptBloatWarnings }
+        : {}),
     });
     try {
       this.store.writeTurn(record);

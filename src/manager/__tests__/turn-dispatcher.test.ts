@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import pino from "pino";
 import { TurnDispatcher, TurnDispatcherError } from "../turn-dispatcher.js";
+import type { MemoryRetriever, MemoryCueWriter, DiscordReactFn, SubagentCapture } from "../turn-dispatcher.js";
 import { makeRootOrigin } from "../turn-origin.js";
 
 type MockTurn = {
@@ -22,7 +23,7 @@ function makeMockTurn(id: string, agent: string, channelId: string | null): Mock
 }
 
 function makeMockSessionManager(overrides: Partial<{
-  sendToAgent: (name: string, msg: string, turn?: unknown) => Promise<string>;
+  dispatchTurn: (name: string, msg: string, turn?: unknown) => Promise<string>;
   streamFromAgent: (name: string, msg: string, onChunk: (a: string) => void, turn?: unknown) => Promise<string>;
   getTraceCollector: (name: string) => { startTurn: (id: string, agent: string, ch: string | null) => MockTurn } | undefined;
 }> = {}) {
@@ -35,7 +36,7 @@ function makeMockSessionManager(overrides: Partial<{
     }),
   };
   const sm = {
-    sendToAgent: overrides.sendToAgent ?? vi.fn(async () => "mock-response"),
+    dispatchTurn: overrides.dispatchTurn ?? vi.fn(async () => "mock-response"),
     streamFromAgent: overrides.streamFromAgent ?? vi.fn(async () => "mock-stream"),
     getTraceCollector: overrides.getTraceCollector ?? vi.fn(() => defaultCollector),
   };
@@ -56,11 +57,11 @@ describe("TurnDispatcher.dispatch", () => {
     });
   });
 
-  it("calls sendToAgent once with a Turn whose id === rootTurnId", async () => {
+  it("calls dispatchTurn once with a Turn whose id === rootTurnId", async () => {
     const origin = makeRootOrigin("discord", "msg_1");
     await dispatcher.dispatch(origin, "alice", "hello");
-    expect(mock.sm.sendToAgent).toHaveBeenCalledTimes(1);
-    const [name, message, turn] = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(mock.sm.dispatchTurn).toHaveBeenCalledTimes(1);
+    const [name, message, turn] = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(name).toBe("alice");
     expect(message).toBe("hello");
     expect(turn).toBeDefined();
@@ -88,7 +89,7 @@ describe("TurnDispatcher.dispatch", () => {
     );
   });
 
-  it("ends the Turn with 'success' when sendToAgent resolves", async () => {
+  it("ends the Turn with 'success' when dispatchTurn resolves", async () => {
     const origin = makeRootOrigin("discord", "msg_1");
     await dispatcher.dispatch(origin, "alice", "hi");
     expect(mock.turns).toHaveLength(1);
@@ -96,9 +97,9 @@ describe("TurnDispatcher.dispatch", () => {
     expect(mock.turns[0].end).toHaveBeenCalledTimes(1);
   });
 
-  it("ends the Turn with 'error' and re-throws when sendToAgent rejects", async () => {
+  it("ends the Turn with 'error' and re-throws when dispatchTurn rejects", async () => {
     const err = new Error("upstream boom");
-    mock.sm.sendToAgent = vi.fn(async () => { throw err; });
+    mock.sm.dispatchTurn = vi.fn(async () => { throw err; });
     dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
     const origin = makeRootOrigin("discord", "msg_1");
     await expect(dispatcher.dispatch(origin, "alice", "hi")).rejects.toBe(err);
@@ -107,8 +108,8 @@ describe("TurnDispatcher.dispatch", () => {
     expect(mock.turns[0].end).toHaveBeenCalledTimes(1);
   });
 
-  it("returns the response string from sendToAgent (passthrough)", async () => {
-    mock.sm.sendToAgent = vi.fn(async () => "the-actual-reply");
+  it("returns the response string from dispatchTurn (passthrough)", async () => {
+    mock.sm.dispatchTurn = vi.fn(async () => "the-actual-reply");
     dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
     const origin = makeRootOrigin("discord", "msg_1");
     const result = await dispatcher.dispatch(origin, "alice", "hi");
@@ -121,14 +122,14 @@ describe("TurnDispatcher.dispatch", () => {
     const origin = makeRootOrigin("discord", "msg_1");
     const result = await dispatcher.dispatch(origin, "alice", "hi");
     expect(result).toBe("mock-response");
-    const [, , turn] = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, , turn] = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(turn).toBeUndefined();
   });
 
   it("throws TurnDispatcherError on empty agentName", async () => {
     const origin = makeRootOrigin("discord", "msg_1");
     await expect(dispatcher.dispatch(origin, "", "hi")).rejects.toBeInstanceOf(TurnDispatcherError);
-    expect(mock.sm.sendToAgent).not.toHaveBeenCalled();
+    expect(mock.sm.dispatchTurn).not.toHaveBeenCalled();
   });
 });
 
@@ -165,14 +166,14 @@ describe("TurnDispatcher.dispatchStream", () => {
 });
 
 describe("TurnDispatcher — AbortSignal threading (Phase 59)", () => {
-  it("forwards signal to sendToAgent via dispatch", async () => {
+  it("forwards signal to dispatchTurn via dispatch", async () => {
     const mock = makeMockSessionManager();
     const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
     const origin = makeRootOrigin("task", "t:1");
     const controller = new AbortController();
     await dispatcher.dispatch(origin, "alice", "do-task", { signal: controller.signal });
-    expect(mock.sm.sendToAgent).toHaveBeenCalledTimes(1);
-    const callArgs = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(mock.sm.dispatchTurn).toHaveBeenCalledTimes(1);
+    const callArgs = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     // 4th arg is options with signal
     expect(callArgs[3]).toEqual({ signal: controller.signal });
   });
@@ -184,7 +185,7 @@ describe("TurnDispatcher — AbortSignal threading (Phase 59)", () => {
     const controller = new AbortController();
     controller.abort();
     await dispatcher.dispatch(origin, "alice", "do-task", { signal: controller.signal });
-    const callArgs = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const callArgs = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[3]?.signal?.aborted).toBe(true);
   });
 
@@ -206,7 +207,7 @@ describe("TurnDispatcher — AbortSignal threading (Phase 59)", () => {
     const origin = makeRootOrigin("discord", "msg_bc");
     const result = await dispatcher.dispatch(origin, "alice", "hello");
     expect(result).toBe("mock-response");
-    const callArgs = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const callArgs = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     // signal should be undefined when not provided
     expect(callArgs[3]).toEqual({ signal: undefined });
   });
@@ -254,7 +255,7 @@ describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
 
   it("re-throws without ending caller-owned Turn on session error", async () => {
     const err = new Error("upstream boom");
-    const mock = makeMockSessionManager({ sendToAgent: vi.fn(async () => { throw err; }) });
+    const mock = makeMockSessionManager({ dispatchTurn: vi.fn(async () => { throw err; }) });
     const dispatcher = new TurnDispatcher({ sessionManager: mock.sm as never, log: silentLog });
     const ownedTurn = makeMockTurn("discord:callerownedaa", "alice", null);
     (ownedTurn as unknown as { recordOrigin: (o: unknown) => void }).recordOrigin = vi.fn();
@@ -286,7 +287,10 @@ describe("TurnDispatcher — caller-owned Turn (Plan 57-03)", () => {
 describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () => {
   it("MEM-03-TD1: retrieveMemoryChunks invoked with query; result wrapped as <memory-context>", async () => {
     const mock = makeMockSessionManager();
-    const retriever = vi.fn(async () =>
+    // Cast the frozen result to the retriever's declared return shape;
+    // Object.freeze tightens the literal types to readonly tuples which
+    // don't satisfy the wider `readonly MemoryRetrievalResult[]` contract.
+    const retriever: MemoryRetriever = vi.fn<MemoryRetriever>(async (_agent, _query) =>
       Object.freeze([
         Object.freeze({
           chunkId: "c1",
@@ -296,7 +300,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
           fusedScore: 0.5,
           scoreWeight: 0,
         }),
-      ]),
+      ]) as unknown as Awaited<ReturnType<MemoryRetriever>>,
     );
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
@@ -307,7 +311,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
     await dispatcher.dispatch(origin, "alice", "Zaid investment proportion?");
 
     expect(retriever).toHaveBeenCalledWith("alice", "Zaid investment proportion?");
-    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sendCall = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     const sentMessage = sendCall[1] as string;
     expect(sentMessage).toMatch(/<memory-context/);
     expect(sentMessage).toContain("Zaid wants 40% SGOV");
@@ -326,7 +330,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
     });
     const origin = makeRootOrigin("discord", "msg_m2");
     await dispatcher.dispatch(origin, "alice", "hello world");
-    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sendCall = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     const sentMessage = sendCall[1] as string;
     expect(sentMessage).toBe("hello world"); // unchanged
     expect(sentMessage).not.toContain("<memory-context");
@@ -342,7 +346,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
     });
     const origin = makeRootOrigin("discord", "msg_m3");
     await dispatcher.dispatch(origin, "alice", "random text");
-    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sendCall = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(sendCall[1]).toBe("random text");
   });
 
@@ -355,13 +359,13 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
     });
     const origin = makeRootOrigin("discord", "msg_m4");
     await dispatcher.dispatch(origin, "alice", "plain message");
-    const sendCall = (mock.sm.sendToAgent as ReturnType<typeof vi.fn>).mock.calls[0];
+    const sendCall = (mock.sm.dispatchTurn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(sendCall[1]).toBe("plain message");
   });
 
   it("MEM-03-TD5: dispatchStream also augments with memory context", async () => {
     const mock = makeMockSessionManager();
-    const retriever = vi.fn(async () =>
+    const retriever: MemoryRetriever = vi.fn<MemoryRetriever>(async (_agent, _query) =>
       Object.freeze([
         Object.freeze({
           chunkId: "c1",
@@ -371,7 +375,7 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
           fusedScore: 0.5,
           scoreWeight: 0,
         }),
-      ]),
+      ]) as unknown as Awaited<ReturnType<MemoryRetriever>>,
     );
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
@@ -391,8 +395,8 @@ describe("TurnDispatcher — memoryRetriever injection (Phase 90 MEM-03)", () =>
 describe("TurnDispatcher — cue detection hook (Phase 90 MEM-05)", () => {
   it("MEM-05-TD1: cue in user message triggers memoryCueWriter + discordReact", async () => {
     const mock = makeMockSessionManager();
-    const cueWriter = vi.fn(async () => "/ws/memory/2026-04-24-remember-abcd.md");
-    const reactSpy = vi.fn(async () => {});
+    const cueWriter = vi.fn<MemoryCueWriter>(async () => "/ws/memory/2026-04-24-remember-abcd.md");
+    const reactSpy = vi.fn<DiscordReactFn>(async () => {});
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
       log: silentLog,
@@ -484,7 +488,7 @@ describe("TurnDispatcher — cue detection hook (Phase 90 MEM-05)", () => {
 describe("TurnDispatcher — subagent capture hook (Phase 90 MEM-06)", () => {
   it("MEM-06-TD1: onTaskToolReturn DI slot is callable from external caller", async () => {
     const mock = makeMockSessionManager();
-    const captureSpy = vi.fn(async () => "/ws/memory/2026-04-24-subagent-research.md");
+    const captureSpy = vi.fn<SubagentCapture>(async () => "/ws/memory/2026-04-24-subagent-research.md");
     const dispatcher = new TurnDispatcher({
       sessionManager: mock.sm as never,
       log: silentLog,

@@ -81,6 +81,18 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   "agents.*.memoryRetrievalTopK",
   "defaults.memoryRetrievalTopK",
   "defaults.memoryRetrievalTokenBudget",
+  // Phase 115 sub-scope 3 — per-agent + agents-prefix token budget.
+  // Reloadable: same closure-re-read path as memoryRetrievalTopK above.
+  // Plan 115-01 lit up this previously-dead knob; the closure in
+  // SessionManager.getMemoryRetrieverForAgent reads
+  // config?.memoryRetrievalTokenBudget on each retrieval.
+  "agents.*.memoryRetrievalTokenBudget",
+  // Phase 115 sub-scope 4 — tag-exclusion list for hybrid-RRF retrieval.
+  // Reloadable: same closure-re-read path. Locked default
+  // ["session-summary","mid-session","raw-fallback"] per CONTEXT.md
+  // sub-scope 4.
+  "agents.*.memoryRetrievalExcludeTags",
+  "defaults.memoryRetrievalExcludeTags",
   // Phase 90 MEM-02 — scanner enable flag. Reloadable semantics: a YAML
   // flip from true→false at runtime does NOT stop an already-running
   // scanner (requires daemon restart); a false→true flip starts scanners
@@ -113,6 +125,102 @@ export const RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // of the Phase 83/86/89/90/94 additive-optional reloadable blueprint.
   "agents.*.dream",
   "defaults.dream",
+  // Phase 96 D-03 / D-09 — fileAccess + outputDir reloadable.
+  // Reload semantics:
+  //   - fileAccess: classifying as reloadable signals "no daemon restart
+  //     needed". The next 60s heartbeat tick (src/heartbeat/checks/fs-
+  //     probe.ts — Phase 96 plan 07 task 1) reads the freshly-loaded paths
+  //     via deps.getResolvedConfig(agent) and runs runFsProbe against the
+  //     new declarations. Operators wanting sub-60s response can run
+  //     /clawcode-probe-fs <agent> (Phase 96 plan 05) manually.
+  //   - outputDir: resolveOutputDirTemplate is read lazily on each
+  //     clawcode_share_file call (Phase 96 plan 04) — a YAML edit takes
+  //     effect on the NEXT share invocation. No restart required.
+  // 10th and 11th applications of the Phase 83/86/89/90/94/95 additive-
+  // optional reloadable blueprint.
+  "agents.*.fileAccess",
+  "defaults.fileAccess",
+  "agents.*.outputDir",
+  "defaults.outputDir",
+  // Phase 110 Stage 0a — shimRuntime + brokers schema scaffolding.
+  //   - defaults.shimRuntime: per-shim-type runtime selector. Reloadable
+  //     via the existing prefix-match classifier (children of the prefix
+  //     all classify reloadable). Stage 0a accepts only "node"; Stage 0b
+  //     widens the enum and lands the alternate-runtime spawn path. The
+  //     swap happens on the NEXT agent start (current shims keep running
+  //     under their boot-time runtime — same posture as Phase 90 MEM-04).
+  //   - defaults.brokers: server-id keyed dispatch table. Schema-only in
+  //     Stage 0a; the broker dispatcher is wired in Stage 1a. Mirrors the
+  //     Phase 109-C `brokerPooling` precedent (schema present, consumer
+  //     reads at its own cadence) so a runtime YAML edit in Stage 0a is
+  //     a no-op until Stage 1a lands. Classified reloadable so the
+  //     Stage 1a wiring picks up edits without a restart.
+  "defaults.shimRuntime",
+  "defaults.brokers",
+  // Phase 109-B — orphan-claude reaper config. Mode/minAgeSeconds edits
+  // hot-reload via the daemon's onTickAfter closure, which reads
+  // `config.defaults.orphanClaudeReaper` on each 60s tick. The closure-
+  // capture fix (same PR that landed subagentReaper reloadable) ensures
+  // the ModeGetter sees the post-reload value without a daemon restart.
+  "defaults.orphanClaudeReaper",
+  // Phase 999.X — subagent-thread reaper config. Mode/idle/minAge edits
+  // hot-reload through the existing ConfigReloader path (Phase 109-B
+  // precedent — same shape as defaults.orphanClaudeReaper above). The
+  // daemon's onTickAfter closure reads `config.defaults.subagentReaper`
+  // each tick, so a YAML edit takes effect on the next 60s sweep without
+  // a restart.
+  "defaults.subagentReaper",
+  // Phase 999.25 — subagent completion relay. enabled +
+  // quiescenceMinutes hot-reload via the same closure-capture-fixed
+  // path as subagentReaper above. The daemon's quiescence sweep reads
+  // `config.defaults.subagentCompletion` on each 60s tick.
+  "defaults.subagentCompletion",
+  // Phase 127 — stream-stall supervisor threshold (no-useful-tokens
+  // timeout). The setInterval checker in persistent-session-handle.ts +
+  // wrapSdkQuery re-reads the live ResolvedAgentConfig.streamStallTimeoutMs
+  // on every tick (interval Math.min(threshold/4, 30_000)ms), so a yaml
+  // edit picked up by ConfigWatcher applies to the very next stall-check
+  // pass without daemon restart. Per-model overrides
+  // (defaults.modelOverrides.<haiku|sonnet|opus>.streamStallTimeoutMs)
+  // are read by the loader resolver at agent-start; live reload re-runs
+  // the resolver via ConfigReloader so per-model edits propagate the
+  // same tick. Mirrors the closure-re-read pattern from Phase 90 MEM-03
+  // (memoryRetrievalTopK) — see types.ts:78-83 above. Doc-of-intent +
+  // hot-reload boundary documented per Phase 999.54-03 precedent.
+  "agents.*.streamStallTimeoutMs",
+  "defaults.streamStallTimeoutMs",
+  "defaults.modelOverrides",
+  // Phase 100 GSD-07 — settingSources + gsd.projectDir DELIBERATELY EXCLUDED
+  // from RELOADABLE_FIELDS. See NON_RELOADABLE_FIELDS below + Plan 100-02
+  // session-adapter wiring for rationale: both fields are SDK session-boot
+  // baseOptions (passed to sdk.query at session start, NOT re-read per turn),
+  // so a runtime YAML edit cannot retroactively change a live SDK session.
+  // Operators MUST run `clawcode restart admin-clawdy` for an edit to take
+  // effect. 1st application of an agent-restart classification in Phase 100
+  // (vs. the 11 prior reloadable classifications in 83/86/89/90/94/95/96).
+  //
+  // Phase 999.47 Plan 02 — homelab refresh tick. Prefix-match: children
+  // of `defaults.homelab.*` all classify reloadable. The heartbeat
+  // check `homelab-refresh` reads the live resolved config via the
+  // standard ConfigReloader closure pattern (mirrors
+  // `defaults.streamStallTimeoutMs` Phase 127 precedent above). NOTE:
+  // `repoPath` is captured into refresh.sh's working directory at boot
+  // (Plan 03) and is documented as documentation-of-intent only —
+  // operators changing the inventory repo location should run
+  // `clawcode restart` for the new path to take effect cleanly.
+  "defaults.homelab",
+  // Phase 999.43 — auto-ingest Discord attachments + per-agent
+  // ingestion priority. Both are read LAZILY on each
+  // `attachmentReceived` event (Plan 02 dispatcher reads via
+  // SessionManager.getAgentConfig at receive time — no cached
+  // session-boot capture). A clawcode.yaml edit takes effect on the
+  // NEXT attachment Discord delivers. Mirrors the Phase 90 MEM-03
+  // closure-re-read pattern (types.ts:78-83). 12th application of
+  // the additive-optional reloadable blueprint.
+  "agents.*.autoIngestAttachments",
+  "defaults.autoIngestAttachments",
+  "agents.*.ingestionPriority",
+  "defaults.ingestionPriority",
 ]);
 
 /**
@@ -132,6 +240,74 @@ export const NON_RELOADABLE_FIELDS: ReadonlySet<string> = new Set([
   // RELOADABLE_FIELDS, so this entry is documentation-of-intent; the
   // differ tests in differ.test.ts assert memoryPath ends up reloadable:false.
   "agents.*.memoryPath",
+  // Phase 100 GSD-07 — settingSources + gsd.projectDir are SDK session-boot
+  // baseOptions (cwd + settingSources at src/manager/session-adapter.ts:585-636
+  // — see Plan 100-02). They are NOT re-read per turn. A clawcode.yaml edit
+  // takes effect ONLY on the NEXT agent restart (`clawcode restart <name>`).
+  // The classifier in differ.ts:144-149 already falls through to false for
+  // unclassified paths; the explicit entries below match the Phase 75
+  // SHARED-01 memoryPath documentation-of-intent pattern (line above).
+  // Architectural rationale (RESEARCH.md Architecture Pattern 5): cwd is
+  // captured into baseOptions when the SDK builds its query handle; mutating
+  // the YAML after that point cannot reach the active session. Same for
+  // settingSources, which controls which skills/commands/CLAUDE.md the SDK
+  // scans at session start. 1st application of an agent-restart classification
+  // in Phase 100 — the 11 prior phases (83/86/89/90/94/95/96) all classified
+  // their additive fields as RELOADABLE. Operators wanting these to take
+  // effect run: clawcode restart admin-clawdy
+  "agents.*.settingSources",
+  "defaults.settingSources",
+  "agents.*.gsd",
+  "agents.*.gsd.projectDir",
+  "defaults.gsd",
+  "defaults.gsd.projectDir",
   "defaults.model",
   "defaults.basePath",
+  // Phase 115 sub-scope 2 — excludeDynamicSections is captured into the SDK's
+  // baseOptions inside session-adapter.ts createSession / resumeSession when
+  // the session is built; it is NOT re-read per turn. Same architectural
+  // pattern as Phase 100's settingSources / gsd above. A clawcode.yaml edit
+  // takes effect ONLY on the NEXT agent restart. Operators wanting an
+  // immediate change must run: `clawcode restart <agent>`.
+  "agents.*.excludeDynamicSections",
+  "defaults.excludeDynamicSections",
+  // Phase 115 sub-scope 5 (Plan 04) — cacheBreakpointPlacement is captured
+  // into the assembled stable prefix at session create/resume time (the
+  // marker placement is baked into systemPrompt.append). Same architectural
+  // pattern as excludeDynamicSections above. A clawcode.yaml edit takes
+  // effect ONLY on the NEXT agent restart. Operators wanting an immediate
+  // change must run: `clawcode restart <agent>`.
+  "agents.*.cacheBreakpointPlacement",
+  "defaults.cacheBreakpointPlacement",
+  // Phase 136 — llmRuntime.backend is captured into the SDK / backend
+  // boot path at session start (createLlmRuntimeService → backend
+  // constructor); it is NOT re-read per turn. Same architectural pattern
+  // as Phase 117 advisor.backend (NON_RELOADABLE via the same set) and
+  // Phase 999.54 mcpServers.alwaysLoad. A clawcode.yaml edit takes
+  // effect ONLY on the NEXT agent restart. Operators wanting an
+  // immediate change must run: `clawcode restart <agent>` (or the whole
+  // daemon for fleet-wide). Doc-of-intent — the differ falls through
+  // to false for unclassified paths, so the explicit entries mirror
+  // the Phase 100 / Phase 115 precedent.
+  "agents.*.llmRuntime",
+  "agents.*.llmRuntime.backend",
+  "defaults.llmRuntime",
+  "defaults.llmRuntime.backend",
+  // Phase 999.54 (D-04) — mcpServers[].alwaysLoad is captured into the SDK's
+  // baseOptions inside session-adapter.ts createSession / resumeSession via
+  // transformMcpServersForSdk (Plan 01) when the session is built; it is NOT
+  // re-read per turn. Same architectural pattern as Phase 100 GSD-07's
+  // settingSources / gsd and Phase 115 sub-scope 2/5's excludeDynamicSections /
+  // cacheBreakpointPlacement above. A clawcode.yaml edit takes effect ONLY on
+  // the NEXT agent restart. Operators wanting an immediate change must run:
+  // `clawcode restart <agent>`. The classifier in differ.ts:144-149 falls
+  // through to `reloadable: false` for unclassified paths; the explicit
+  // entries below match the documentation-of-intent precedent (grep target
+  // for future maintainers + Plan 04 regression-test source-of-truth).
+  // Phase 999.54 Plan 02 also bakes `alwaysLoad: true` into the auto-injected
+  // `clawcode` server at loader.ts:295-304 — fleet-wide preload default;
+  // per-agent overrides (inline-object form) win via the existing
+  // resolvedMcpMap.has("clawcode") gate.
+  "defaults.mcpServers.*.alwaysLoad",
+  "agents.*.mcpServers.*.alwaysLoad",
 ]);

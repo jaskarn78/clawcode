@@ -337,6 +337,32 @@
       .sidebar-controls { padding: 8px 12px; }
       .ctrl-slider { width: 70px; }
     }
+
+    /* Phase 999.8 Plan 02 — tier legend overlay (top-right corner of .graph-area).
+       Uses HTML overlay (NOT inside <svg>) so D3's zoom transform doesn't scale it. */
+    .graph-legend {
+      position: absolute; top: 12px; right: 12px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 12px;
+      font-family: "JetBrains Mono", monospace; font-size: 0.68rem;
+      color: var(--text-dim); width: 150px;
+      pointer-events: auto;
+      z-index: 5;
+    }
+    .graph-legend summary {
+      cursor: pointer; color: var(--text-faint);
+      font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.1em;
+    }
+    .graph-legend .legend-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 0;
+    }
+    .graph-legend .sw {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+    .graph-legend .ct {
+      margin-left: auto; color: var(--text-faint);
+    }
   </style>
 </head>
 <body>
@@ -372,6 +398,16 @@
   <!-- GRAPH -->
   <div class="graph-area" id="graph-area">
     <div class="graph-stats" id="stats"></div>
+    <!-- Phase 999.8 Plan 02 — tier legend (HTML overlay, NOT inside <svg>: D3 zoom would scale it) -->
+    <div class="graph-legend" id="legend">
+      <details open>
+        <summary>Tiers</summary>
+        <div class="legend-row" data-tier="hot"><span class="sw" style="background:#e06c75"></span>Hot <span class="ct" id="ct-hot">0</span></div>
+        <div class="legend-row" data-tier="warm"><span class="sw" style="background:#7f6df2"></span>Warm <span class="ct" id="ct-warm">0</span></div>
+        <div class="legend-row" data-tier="cold"><span class="sw" style="background:#5a8db8"></span>Cold <span class="ct" id="ct-cold">0</span></div>
+        <div class="legend-row" data-tier="orphan"><span class="sw" style="background:#444"></span>Orphan <span class="ct" id="ct-orphan">0</span></div>
+      </details>
+    </div>
     <div class="graph-loading" id="loading"><span>Loading graph...</span></div>
   </div>
 
@@ -390,7 +426,10 @@
     <div class="detail-scroll" id="d-scroll"></div>
   </div>
 
-<script>
+<script type="module">
+// Phase 999.8 Plan 02 — nodeClr extracted to its own ESM module for testability.
+import { nodeClr } from "./graph-color.js";
+
 // ─── State ───
 let sim = null, gdata = { nodes: [], links: [] };
 let nodeEls = null, linkEls = null, labelEls = null;
@@ -418,11 +457,7 @@ function renderMd(raw) {
 }
 
 function nodeR(d) { return S.size * (0.5 + d.importance * 0.8 + Math.min(d.linkCount||0, 10) * 0.06); }
-function nodeClr(d) {
-  if ((d.linkCount||0) === 0) return "#444";
-  if (d.tier === "hot") return "#e06c75";
-  return "#7f6df2";
-}
+// Phase 999.8 Plan 02 — nodeClr now imported from ./graph-color.js (top of script block).
 
 // ─── Sliders ───
 function wire(id, key, fn, cb) {
@@ -517,6 +552,20 @@ function render(data) {
   const lc={};
   links.forEach(l=>{lc[l.source]=(lc[l.source]||0)+1;lc[l.target]=(lc[l.target]||0)+1;});
   nodes.forEach(n=>{n.linkCount=lc[n.id]||0;});
+
+  // Phase 999.8 Plan 02 — live tier counts for the legend overlay (recomputed every render).
+  const counts = { hot: 0, warm: 0, cold: 0, orphan: 0 };
+  nodes.forEach(n => {
+    if ((n.linkCount||0) === 0) counts.orphan++;
+    else if (n.tier === "hot") counts.hot++;
+    else if (n.tier === "cold") counts.cold++;
+    else counts.warm++;
+  });
+  document.getElementById("ct-hot").textContent = counts.hot;
+  document.getElementById("ct-warm").textContent = counts.warm;
+  document.getElementById("ct-cold").textContent = counts.cold;
+  document.getElementById("ct-orphan").textContent = counts.orphan;
+
   document.getElementById("stats").innerHTML = `<span><span class="val">${nodes.length}</span> nodes</span><span><span class="val">${links.length}</span> edges</span>`;
 
   const w=area.clientWidth, h=area.clientHeight;

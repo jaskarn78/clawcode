@@ -35,9 +35,26 @@ export const TOOL_DEFINITIONS = {
     description: "Spawn a subagent in a new Discord thread",
     ipcMethod: "spawn-subagent-thread",
   },
+  // Phase 999.25 — explicit work-completion signal. A subagent calls
+  // this when its delegated work is done so the relay to the parent
+  // channel fires immediately instead of waiting hours for the
+  // session to be stopped.
+  subagent_complete: {
+    description:
+      "Signal that this subagent has finished its delegated work. Posts your final answer to the parent agent's channel and stops further relays. Call this once, after your last substantive reply in the thread. agentName must match this subagent's session name (e.g. 'fin-acquisition-via-fin-research-AbC123'). Operator-defined agents who call this get a clear no-op error.",
+    ipcMethod: "subagent-complete",
+  },
   read_thread: {
     description: "Read recent messages from a Discord thread (your subagent's work)",
     ipcMethod: "read-thread",
+  },
+  archive_thread: {
+    description: "Archive a Discord thread and prune its registry binding",
+    ipcMethod: "archive-discord-thread",
+  },
+  schedule_reminder: {
+    description: "Schedule a one-off reminder that fires as a standalone turn",
+    ipcMethod: "schedule-reminder",
   },
   memory_lookup: {
     description: "Search your memory for relevant context, past decisions, and knowledge",
@@ -46,6 +63,30 @@ export const TOOL_DEFINITIONS = {
   memory_save: {
     description: "Save knowledge, decisions, or important context to long-term memory",
     ipcMethod: "memory-save",
+  },
+  // Phase 115 sub-scope 7 — lazy-load memory tools. Replace the always-
+  // injected memory model with tool-mediated recall: search returns
+  // 500-char snippets + memory IDs; recall fetches the full body on
+  // demand; edit / archive let the agent curate Tier 1 (MEMORY.md / USER.md).
+  clawcode_memory_search: {
+    description:
+      "Search this agent's memory (FTS5 + sqlite-vec hybrid). Returns top-K snippets with memory IDs.",
+    ipcMethod: "clawcode-memory-search",
+  },
+  clawcode_memory_recall: {
+    description:
+      "Fetch the full body of a memory by ID (returned from clawcode_memory_search hits).",
+    ipcMethod: "clawcode-memory-recall",
+  },
+  clawcode_memory_edit: {
+    description:
+      "Edit your Tier 1 memory file (MEMORY.md or USER.md). Modes: view / create / append / str_replace.",
+    ipcMethod: "clawcode-memory-edit",
+  },
+  clawcode_memory_archive: {
+    description:
+      "Promote a found chunk into MEMORY.md or USER.md (agent-curated Tier 2 → Tier 1 archive).",
+    ipcMethod: "clawcode-memory-archive",
   },
   ask_advisor: {
     description: "Ask opus for advice on a complex decision without switching sessions",
@@ -62,6 +103,18 @@ export const TOOL_DEFINITIONS = {
   ingest_document: {
     description: "Ingest a document from your workspace for RAG search (text, markdown, or PDF)",
     ipcMethod: "ingest-document",
+  },
+  // Phase 999.43 Plan 04 T02 — agent-callable priority override on a
+  // previously ingested document. D-08 sandbox: agents are capped at
+  // MEDIUM (Layer-1 enforced via z.enum(["medium","low"]) in the
+  // server.tool registration below; Layer-2 enforced at the daemon
+  // handler in src/manager/set-doc-priority-handler.ts). Only the
+  // operator can promote to HIGH via 🔴 emoji reaction or `clawcode rag
+  // set-priority`.
+  clawcode_rag_set_priority: {
+    description:
+      "Set the retrieval priority (medium/low) for a document you previously ingested. D-08 sandbox: agents are capped at MEDIUM; only the operator can promote to HIGH via 🔴 emoji reaction or `clawcode rag set-priority`.",
+    ipcMethod: "set-doc-priority",
   },
   search_documents: {
     description: "Search across ingested documents for relevant content",
@@ -91,6 +144,14 @@ export const TOOL_DEFINITIONS = {
   task_complete: {
     description: "Signal completion of a delegated task you received. Provide the structured result matching the schema's output shape. Call this at the END of your turn -- the daemon dispatches the result back to the caller.",
     ipcMethod: "task-complete",
+  },
+  // Quick 260511-pw3 — schema introspection. Senders use this BEFORE
+  // delegate_task so they don't take a blind shot at an unknown schema
+  // (Admin Clawdy's 2026-05-11 `bug.report` failure mode).
+  list_agent_schemas: {
+    description:
+      "List the task schemas a target agent accepts via delegate_task. Each entry includes `callerAllowed` (whether YOU are on the per-target allowlist) and `registered` (whether the schema YAML exists in the fleet registry). Both must be true for delegate_task to succeed. Call this BEFORE delegate_task to pick a valid schema.",
+    ipcMethod: "list-agent-schemas",
   },
 } as const;
 
@@ -261,28 +322,112 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     },
   );
 
-  // Tool: send_message
-  server.tool(
-    "send_message",
-    "Send a message to a ClawCode agent's inbox",
-    {
-      to: z.string().describe("Target agent name"),
-      content: z.string().describe("Message content"),
-      from: z.string().default("mcp-client").describe("Sender name"),
-      priority: z.enum(["normal", "high", "urgent"]).default("normal").describe("Message priority"),
-    },
-    async ({ to, content, from, priority }) => {
-      const result = (await sendIpcRequest(SOCKET_PATH, "send-message", {
+  // Tools: ask_agent (canonical) + send_message (DEPRECATED alias)
+  //
+  // Phase 999.2 Plan 02 D-RNX-01 / D-RNX-04 — the MCP SDK does not support
+  // tool aliases natively (server.tool throws on duplicate name). The
+  // canonical alias pattern is to extract a shared schema + handler closure
+  // and call server.tool() twice with different names. tools/list iterates
+  // Object.entries(this._registeredTools) in INSERTION ORDER (verified
+  // against node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js:67-69),
+  // so registering ask_agent FIRST controls LLM tool-list ordering — the
+  // LLM sees the new name before the deprecated one.
+  //
+  // Behavior is unchanged from the pre-rename send_message tool. Plan 03
+  // layers v2 sync-reply behavior on top by modifying askAgentHandler.
+  // Phase 999.2 Plan 03 D-SYN-04 — `mirror_to_target_channel` extends the
+  // schema with an optional boolean (default false). Both server.tool()
+  // registrations share this object so the canonical and aliased tools stay
+  // in lockstep automatically.
+  const askAgentSchema = {
+    to: z.string().describe("Target agent name"),
+    content: z.string().describe("Message content"),
+    from: z.string().default("mcp-client").describe("Sender name"),
+    priority: z.enum(["normal", "high", "urgent"]).default("normal").describe("Message priority"),
+    mirror_to_target_channel: z.boolean().default(false).describe(
+      "When true, post the prompt + response as embeds in target's Discord channel for an audit trail.",
+    ),
+  } as const;
+
+  // Phase 999.2 Plan 03 — v2 sync-reply behavior. See D-SYN-01..06:
+  //   - When the target agent is running, surface its reply in the tool-result
+  //     text so the caller's LLM can act on it (D-SYN-02 — fixes the
+  //     2026-04-29 smoking-gun bug where the wrapper destructured
+  //     {ok, messageId} and silently discarded result.response).
+  //   - When the target is offline, render an explicit offline-text response
+  //     so the caller knows the message was queued but not answered (D-SYN-03).
+  //   - On dispatch error, render `Failed to ask {to}: {message}` so the
+  //     caller (and the calling LLM) sees the failure rather than a
+  //     false-success (D-SYN-05).
+  const askAgentHandler = async ({
+    to,
+    content,
+    from,
+    priority,
+    mirror_to_target_channel,
+  }: {
+    to: string;
+    content: string;
+    from: string;
+    priority: "normal" | "high" | "urgent";
+    mirror_to_target_channel: boolean;
+  }) => {
+    try {
+      // The wire request uses the canonical IPC name `ask-agent` per
+      // D-RNI-IPC-01. The daemon's stacked-case switch handles both names
+      // (ask-agent + send-message) so the wire format is forward-compatible.
+      const result = (await sendIpcRequest(SOCKET_PATH, "ask-agent", {
         from,
         to,
         content,
         priority,
-      })) as { ok: boolean; messageId: string };
+        mirror_to_target_channel,
+      })) as { ok: boolean; messageId: string; response?: string };
 
+      if (result.response !== undefined) {
+        // D-SYN-02 — surface the reply in the tool-result text. THE BUG-FIX LINE.
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Message sent to ${to} (id: ${result.messageId})\n\n${to} replied:\n${result.response}`,
+          }],
+        };
+      }
+      // D-SYN-03 — offline target.
       return {
-        content: [{ type: "text" as const, text: `Message sent to ${to} (id: ${result.messageId})` }],
+        content: [{
+          type: "text" as const,
+          text: `Message queued in ${to}'s inbox. ${to} is not running — no synchronous reply.`,
+        }],
       };
-    },
+    } catch (err) {
+      // D-SYN-05 — error propagation as plain tool-result text.
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text" as const, text: `Failed to ask ${to}: ${msg}` }],
+      };
+    }
+  };
+
+  // Register canonical name FIRST (D-RNX-04 — controls LLM tool-list order).
+  server.tool(
+    "ask_agent",
+    "Ask another ClawCode agent a question and receive their reply synchronously. " +
+      "Use this when you need a response — e.g., 'fin-acquisition, what's our LTV target?'. " +
+      "Set mirror_to_target_channel=true to post the Q+A as embeds in the target's channel for visibility.",
+    askAgentSchema,
+    askAgentHandler,
+  );
+
+  // Register deprecated alias SECOND. Same handler closure (object identity)
+  // — calling either tool dispatches to the same code path.
+  server.tool(
+    "send_message",
+    "[DEPRECATED — use ask_agent instead] " +
+      "Backwards-compatibility alias for ask_agent. Identical behavior; " +
+      "scheduled for removal once all agents have migrated (Phase 999.2 D-RNX-03).",
+    askAgentSchema,
+    askAgentHandler,
   );
 
   // Tool: list_schedules
@@ -332,15 +477,18 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
   // Tool: spawn_subagent_thread
   server.tool(
     "spawn_subagent_thread",
-    "Spawn a subagent in a new Discord thread. If you pass `task`, the subagent starts working on it immediately and posts its response in the thread — you do NOT need to send a follow-up message.",
+    "Spawn a subagent in a new Discord thread. If you pass `task`, the subagent starts working on it immediately and posts its response in the thread — you do NOT need to send a follow-up message. Use `delegateTo` to have a specialist agent (e.g., research-clawdy, fin-research) do the work using their config — useful when you want elevated thinking, opus-level reasoning, or specialist skills you don't have.",
     {
       agent: z.string().describe("Parent agent name"),
       threadName: z.string().describe("Name for the Discord thread"),
       model: z.enum(["sonnet", "opus", "haiku"]).optional().describe("Model for the subagent"),
       systemPrompt: z.string().optional().describe("Custom system prompt (personality/role override; not the task)"),
       task: z.string().optional().describe("The task for the subagent to perform. When provided, the subagent starts working immediately and posts its response in the thread — no separate prompt needed."),
+      autoRelay: z.boolean().optional().describe("Defaults: TRUE for non-delegated spawns (the subagent's first reply IS the deliverable), FALSE when `delegateTo` is set (Phase 999.57 — the subagent must call `subagent_complete` to fire the relay, because delegated multi-turn work cannot be summarized from turn 1). When true, after the relay trigger fires, a summary is sent to your (parent) main channel — you'll see 'subagent done — here's what it found' without polling the thread. Pass `autoRelay: true` explicitly with `delegateTo` only when you expect a one-shot reply. autoArchive=true implies autoRelay=true."),
+      autoArchive: z.boolean().optional().describe("Fire-and-forget pattern. When true, after the subagent posts its initial reply: (1) summary is relayed to your main channel (autoRelay), (2) the Discord thread is archived, (3) the subagent session is stopped. Best paired with `task` for short-lived 'do one thing then go away' subagents. Default: false (interactive — operator can keep replying in the thread)."),
+      delegateTo: z.string().optional().describe("Optional. When set to a target agent name (e.g., 'fin-research', 'research', 'code-clawdy'), the spawned subagent uses the target's config (model, soul, skills) instead of yours. The thread still spawns in your channel, autoRelay still summarizes back to your main channel — but the work is done with the target agent's identity. Use this to delegate elevated-thinking work (research, coding) to a dedicated specialist standing agent."),
     },
-    async ({ agent, threadName, model, systemPrompt, task }) => {
+    async ({ agent, threadName, model, systemPrompt, task, autoRelay, autoArchive, delegateTo }) => {
       try {
         const result = (await sendIpcRequest(SOCKET_PATH, "spawn-subagent-thread", {
           parentAgent: agent,
@@ -348,6 +496,9 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
           model,
           systemPrompt,
           task,
+          autoRelay: autoRelay ?? true,
+          autoArchive: autoArchive ?? false,
+          delegateTo,
         })) as { threadId: string; sessionName: string; parentAgent: string; channelId: string };
 
         const text = [
@@ -361,6 +512,40 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
+      }
+    },
+  );
+
+  // Phase 999.25 — subagent_complete tool. The subagent calls this
+  // when its delegated work is done; relay fires immediately instead
+  // of waiting for the session to be stopped (which today defers
+  // delivery by hours).
+  server.tool(
+    "subagent_complete",
+    "Signal that this subagent has finished its delegated work. Posts your final answer to the parent agent's channel right away (instead of waiting until your session is stopped) and prevents duplicate relays. Call this exactly once, after your last substantive message in the thread. agentName MUST be your own session name (e.g. 'fin-acquisition-via-fin-research-AbC123' — typically the parent passed it in your spawn task description, or it's available as your agent identity). Idempotent: calling twice returns reason='already-completed'.",
+    {
+      agentName: z
+        .string()
+        .describe(
+          "Your own session name (the subagent thread session, e.g. 'fin-acquisition-via-fin-research-AbC123')",
+        ),
+    },
+    async ({ agentName }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "subagent-complete", {
+          agentName,
+        })) as { ok: boolean; reason: string };
+        const text = result.ok
+          ? `Completion relayed (${result.reason})`
+          : `Not relayed: ${result.reason}`;
+        return { content: [{ type: "text" as const, text }] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            { type: "text" as const, text: `Error: ${message}` },
+          ],
+        };
       }
     },
   );
@@ -407,6 +592,70 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return { content: [{ type: "text" as const, text: `Failed to read thread: ${msg}` }], isError: true };
+      }
+    },
+  );
+
+  // Tool: archive_thread
+  //
+  // Phase 100 follow-up — closes the operator-surfaced gap (2026-04-26):
+  // "I don't have a tool to archive Discord threads." Wraps the daemon's
+  // SubagentThreadSpawner.archiveThread which (a) calls Discord's setArchived
+  // (and optionally setLocked) and (b) auto-prunes the thread-bindings.json
+  // registry entry so maxThreadSessions accounting reflects reality.
+  server.tool(
+    "archive_thread",
+    "Archive a Discord thread (close it without deleting). Use this when a subagent task is complete and the thread is no longer needed. Also auto-prunes the bindings registry so the parent agent can spawn new threads up to its maxThreadSessions cap. Pass `lock: true` to prevent further messages.",
+    {
+      threadId: z.string().describe("Discord thread ID to archive"),
+      lock: z.boolean().optional().describe("Also lock the thread (prevents new messages even from operator). Default: false."),
+    },
+    async ({ threadId, lock }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "archive-discord-thread", {
+          threadId,
+          lock: lock ?? false,
+        })) as { ok: boolean; bindingPruned: boolean };
+        const text = result.bindingPruned
+          ? `Thread ${threadId} archived${lock ? " + locked" : ""}; binding pruned from registry.`
+          : `Thread ${threadId} archived${lock ? " + locked" : ""}; no binding existed in registry (already cleaned).`;
+        return { content: [{ type: "text" as const, text }] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Failed to archive thread: ${msg}` }], isError: true };
+      }
+    },
+  );
+
+  // Tool: schedule_reminder
+  //
+  // Phase 100 follow-up — operator-surfaced 2026-04-27. Closes the
+  // "no scheduling primitive" gap where agents promised "ping me at 7:58
+  // PM" but the reminder leaked into context and bled into the next
+  // inbound turn. Routes through SchedulerSource → TriggerEngine → the
+  // f984008 trigger-delivery callback, so the reply posts as a standalone
+  // turn in the agent's bound channel.
+  server.tool(
+    "schedule_reminder",
+    "Schedule a one-off reminder. At the specified time, you'll receive a synthetic turn with the given prompt — your response posts to your bound channel via webhook. Use this for 'ping me in 15 min' / 'check back at 7:58 PM' patterns. The reminder is in-memory only — does not survive daemon restart, so caveat the operator if a restart is imminent.",
+    {
+      agent: z.string().describe("Your agent name (pass your own name)"),
+      at: z.string().describe("When to fire. ISO 8601 (e.g. '2026-04-27T19:58:00-07:00') OR relative ('in 15 min', 'in 2 hours', 'in 30s', 'in 3 days')"),
+      prompt: z.string().describe("Message you'll receive when the reminder fires (becomes the turn payload)"),
+    },
+    async ({ agent, at, prompt }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "schedule-reminder", {
+          agent,
+          at,
+          prompt,
+        })) as { ok: boolean; reminderId: string; fireAt: string };
+        return {
+          content: [{ type: "text" as const, text: `Reminder ${result.reminderId} scheduled for ${result.fireAt}.` }],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Failed to schedule reminder: ${msg}` }], isError: true };
       }
     },
   );
@@ -529,6 +778,162 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     },
   );
 
+  // ── Phase 115 sub-scope 7 — lazy-load memory tools ─────────────────────
+  //
+  // Four tools that convert the agent from "always-injected memory" to
+  // "tool-mediated lazy recall." See plan 115-05 for the threat model.
+  //
+  // SECURITY notes:
+  //   - clawcode_memory_edit's `path` arg is z.enum(["MEMORY.md", "USER.md"])
+  //     ONLY. Operator-curated identity files (SOUL.md / IDENTITY.md) are
+  //     intentionally excluded — the agent CANNOT edit them.
+  //   - The `agent` arg matches the existing memory_lookup / memory_save
+  //     pattern: the daemon resolves the per-agent MemoryStore via
+  //     `manager.getMemoryStore(agent)`, so cross-agent recall is impossible
+  //     at the daemon-side IPC handler boundary.
+  //
+  // Tool: clawcode_memory_search — FTS5 + sqlite-vec hybrid search.
+  server.tool(
+    "clawcode_memory_search",
+    "Search this agent's memory (FTS5 + sqlite-vec hybrid). Returns top-K snippets with memory IDs. " +
+      "Use clawcode_memory_recall(memoryId) to fetch full body.",
+    {
+      query: z.string().describe("What to search for in your memory"),
+      k: z.number().int().min(1).max(50).default(10).describe("Top-K hits to return (1-50)"),
+      includeTags: z.array(z.string()).optional().describe("Only return memories with at least one of these tags"),
+      excludeTags: z.array(z.string()).optional().describe("Drop memories whose tags intersect this list"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ query, k, includeTags, excludeTags, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-search", {
+          agent,
+          query,
+          k,
+          includeTags,
+          excludeTags,
+        })) as {
+          hits: ReadonlyArray<Record<string, unknown>>;
+          agentName: string;
+        };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to search memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Tool: clawcode_memory_recall — fetch full body by id.
+  server.tool(
+    "clawcode_memory_recall",
+    "Fetch the full body of a memory by ID. Use the memoryId returned from a clawcode_memory_search hit.",
+    {
+      memoryId: z.string().describe("Memory ID returned from clawcode_memory_search"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ memoryId, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-recall", {
+          agent,
+          memoryId,
+        })) as Record<string, unknown>;
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to recall memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Tool: clawcode_memory_edit — Anthropic memory_20250818 contract on Tier 1 files.
+  server.tool(
+    "clawcode_memory_edit",
+    "Edit your Tier 1 memory file. Path is locked to MEMORY.md or USER.md only. " +
+      "Modes: view (read), create (overwrite), append, str_replace.",
+    {
+      path: z.enum(["MEMORY.md", "USER.md"]).describe("Tier 1 file to edit (locked enum)"),
+      mode: z.enum(["view", "create", "str_replace", "append"]).describe("Edit operation"),
+      oldStr: z.string().optional().describe("For str_replace: the existing string to replace"),
+      newStr: z.string().optional().describe("For str_replace: the replacement string"),
+      content: z.string().optional().describe("For create / append: the content to write"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ path, mode, oldStr, newStr, content, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-edit", {
+          agent,
+          path,
+          mode,
+          oldStr,
+          newStr,
+          content,
+        })) as { ok: boolean; after?: string; error?: string };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to edit memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // Tool: clawcode_memory_archive — agent-curated Tier 2 → Tier 1 promotion.
+  server.tool(
+    "clawcode_memory_archive",
+    "Promote a found memory chunk into MEMORY.md or USER.md (agent-curated archive). " +
+      "Bypasses the dream-pass review window — your decision is operator-trusted.",
+    {
+      chunkId: z.string().describe("Chunk ID to promote (returned from clawcode_memory_search)"),
+      targetPath: z.enum(["MEMORY.md", "USER.md"]).describe("Target Tier 1 file"),
+      wrappingPrefix: z.string().optional().describe("Optional prefix prepended to the chunk body (e.g. heading)"),
+      wrappingSuffix: z.string().optional().describe("Optional suffix appended to the chunk body"),
+      agent: z.string().describe("Your agent name (pass your own name)"),
+    },
+    async ({ chunkId, targetPath, wrappingPrefix, wrappingSuffix, agent }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "clawcode-memory-archive", {
+          agent,
+          chunkId,
+          targetPath,
+          wrappingPrefix,
+          wrappingSuffix,
+        })) as { ok: boolean; error?: string };
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Failed to archive memory: ${msg}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // Tool: ask_advisor
   server.tool(
     "ask_advisor",
@@ -587,29 +992,293 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
     },
   );
 
-  // Tool: send_to_agent
-  server.tool(
-    "send_to_agent",
-    "Send a message to another agent via their Discord channel",
-    {
-      from: z.string().describe("Your agent name (pass your own name)"),
-      to: z.string().describe("Target agent name"),
-      message: z.string().describe("Message content to send"),
-    },
-    async ({ from, to, message }) => {
-      try {
-        const result = (await sendIpcRequest(SOCKET_PATH, "send-to-agent", {
-          from,
-          to,
-          message,
-        })) as { delivered: boolean; messageId: string };
+  // Tools: post_to_agent (canonical) + send_to_agent (DEPRECATED alias)
+  //
+  // Phase 999.2 Plan 02 D-RNX-02 / D-RNX-04 — same shared-handler pattern as
+  // ask_agent above. post_to_agent is the broadcast / fire-and-forget tool
+  // (writes inbox + posts webhook embed in target's channel — no synchronous
+  // reply path). For Q&A, agents should use ask_agent instead.
+  const postToAgentSchema = {
+    from: z.string().describe("Your agent name (pass your own name)"),
+    to: z.string().describe("Target agent name"),
+    message: z.string().describe("Message content to send"),
+  } as const;
+
+  const postToAgentHandler = async ({
+    from,
+    to,
+    message,
+  }: {
+    from: string;
+    to: string;
+    message: string;
+  }) => {
+    try {
+      // Wire request uses canonical IPC name `post-to-agent` per D-RNI-IPC-02.
+      const result = (await sendIpcRequest(SOCKET_PATH, "post-to-agent", {
+        from,
+        to,
+        message,
+      })) as {
+        ok?: boolean;
+        delivered: boolean;
+        messageId: string;
+        // Quick 260511-pw2 — present iff `delivered=false`. One of:
+        // "no-target-channels" | "no-webhook" | "webhook-send-failed".
+        // Surfaced so the sender's LLM doesn't mistake the inbox id for a
+        // queryable task id (Admin Clawdy 2026-05-11 bug).
+        reason?: string;
+      };
+      if (result.delivered) {
         return {
           content: [
             {
               type: "text" as const,
-              text: result.delivered
-                ? `Message delivered to ${to} (id: ${result.messageId})`
-                : `Message queued for ${to} (id: ${result.messageId})`,
+              text: `Message delivered to ${to} via their Discord channel.`,
+            },
+          ],
+        };
+      }
+      // Inbox-only fallback. Heartbeat reconciler
+      // (src/heartbeat/checks/inbox.ts) drains the inbox for every agent so
+      // the message still lands — but NOT immediately. Be explicit so the
+      // sender's LLM knows this is not a task id to poll.
+      const reasonNote = result.reason ? ` (reason: ${result.reason})` : "";
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              `Message written to ${to}'s inbox${reasonNote}. ` +
+              `Webhook delivery to their Discord channel failed, so they will receive it on their next inbox-heartbeat sweep (not immediately). ` +
+              `Note: this is NOT a delegate_task id — do not call task_status on it. ` +
+              `For synchronous Q&A use ask_agent instead.`,
+          },
+        ],
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        content: [
+          { type: "text" as const, text: `Failed to send to ${to}: ${msg}` },
+        ],
+      };
+    }
+  };
+
+  // Register canonical name FIRST (D-RNX-04).
+  server.tool(
+    "post_to_agent",
+    "Broadcast a message to another agent's Discord channel. " +
+      "The agent sees it as a normal message in their channel. " +
+      "Does NOT wait for a reply — for synchronous Q&A use ask_agent.",
+    postToAgentSchema,
+    postToAgentHandler,
+  );
+
+  // Register deprecated alias SECOND.
+  server.tool(
+    "send_to_agent",
+    "[DEPRECATED — use post_to_agent instead] " +
+      "Backwards-compatibility alias for post_to_agent. Identical behavior; " +
+      "scheduled for removal once all agents have migrated (Phase 999.2 D-RNX-03).",
+    postToAgentSchema,
+    postToAgentHandler,
+  );
+
+  // Tool: ingest_document
+  //
+  // Phase 101 Plan 02 T04 — SINGLE ingestion entry point per
+  // `feedback_silent_path_bifurcation`. Handles PDFs (text + scanned),
+  // docx, xlsx, images, and plain text via the three-tier OCR fallback
+  // (Tesseract CLI → WASM → Claude vision). Optional structured
+  // extraction (`extract: 'structured' | 'both'`) drives Anthropic
+  // tool-use against the matching zod schema in EXTRACTION_SCHEMAS
+  // (`taxReturn` shipped; brokerage/401k/ADV deferred per D-06).
+  //
+  // Inputs:
+  //   - file_path:  required absolute path; daemon validates containment
+  //                 within the agent workspace (T-101-08).
+  //   - agent:      defaults to the channel-bound agent (validated at the
+  //                 IPC layer; pre-Phase-101 contract retained).
+  //   - taskHint:   'standard' (Haiku) | 'high-precision' (Sonnet).
+  //   - extract:    'text' (no structured pass) | 'structured' | 'both'.
+  //   - schemaName: which extraction schema to apply (default 'taxReturn').
+  //   - backend:    explicit OCR tier override (D-08 'mistral' gated by
+  //                 defaults.documentIngest.allowMistralOcr).
+  //   - force:      D-07 — bypass the `<doc-slug>-<date>.json` cache hit.
+  server.tool(
+    "ingest_document",
+    "Robustly ingest a PDF/docx/xlsx/image into the agent's document store + memory. " +
+      "Single entry point for document handling — handles type detection, OCR fallback " +
+      "(Tesseract → Claude vision), and structured extraction via zod schemas " +
+      "(taskHint='high-precision' uses Sonnet, default Haiku). Pass " +
+      "extract='structured'|'both' + schemaName to also produce a validated JSON " +
+      "output (ExtractedTaxReturn shipped today). Use force=true to bypass the " +
+      "<doc-slug>-<date>.json cache (D-07 schema-version re-extract).",
+    {
+      agent: z.string().describe("Your agent name"),
+      file_path: z.string().describe("Absolute path to the document file"),
+      source: z.string().optional().describe("Custom source identifier (defaults to file path)"),
+      taskHint: z
+        .enum(["standard", "high-precision"])
+        .optional()
+        .describe(
+          "Quality dial. 'standard' (default) → Haiku for OCR/extraction (~$0.005/page); " +
+            "'high-precision' → Sonnet (~$0.015/page). Use 'high-precision' for tax returns and other dense tabular financial documents.",
+        ),
+      extract: z
+        .enum(["text", "structured", "both"])
+        .optional()
+        .describe(
+          "What to extract. 'text' (default) — only chunked text for RAG. " +
+            "'structured' — also run zod-schema-validated extraction via Anthropic tool-use. " +
+            "'both' — text chunks + structured JSON. Structured outputs land at " +
+            "<workspace>/documents/<doc-slug>-<date>.json.",
+        ),
+      schemaName: z
+        .enum(["taxReturn"])
+        .optional()
+        .describe(
+          "Which extraction schema to apply when extract != 'text'. " +
+            "'taxReturn' (default) maps to ExtractedTaxReturn (D-06).",
+        ),
+      backend: z
+        .enum([
+          "tesseract-cli",
+          "tesseract-wasm",
+          "claude-haiku",
+          "claude-sonnet",
+          "mistral",
+          "none",
+        ])
+        .optional()
+        .describe(
+          "Override the OCR three-tier auto-chain. 'mistral' (D-08) requires " +
+            "defaults.documentIngest.allowMistralOcr=true; the stub then throws " +
+            "'not yet implemented' until the operator wires the API client.",
+        ),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "D-07 schema-version opt-in re-extract. Default false: when " +
+            "<doc-slug>-<date>.json exists with matching extractionSchemaVersion, " +
+            "the cached result is returned. Set true to re-run extraction.",
+        ),
+    },
+    async ({ agent, file_path, source, taskHint, extract, schemaName, backend, force }) => {
+      try {
+        const result = await sendIpcRequest(SOCKET_PATH, "ingest-document", {
+          agent,
+          file_path,
+          source,
+          taskHint,
+          extract,
+          schemaName,
+          backend,
+          force,
+        });
+        const r = result as {
+          ok: boolean;
+          source: string;
+          chunks_created: number;
+          total_chars: number;
+          structured?: unknown;
+          paths?: { textMd?: string; structuredJson?: string };
+          telemetry?: unknown;
+        };
+        const lines = [
+          `Ingested "${r.source}": ${r.chunks_created} chunks (${r.total_chars} chars)`,
+        ];
+        if (r.paths?.textMd) lines.push(`text: ${r.paths.textMd}`);
+        if (r.paths?.structuredJson) lines.push(`structured: ${r.paths.structuredJson}`);
+        if (r.structured !== undefined) {
+          lines.push(`structured fields extracted: ${JSON.stringify(r.structured).length} chars`);
+        }
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `Ingest failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Tool: clawcode_rag_set_priority — Phase 999.43 Plan 04 T02
+  //
+  // Two layers of D-08 sandbox protect against agent self-escalation:
+  //
+  //   LAYER-1 (here): z.enum(["medium", "low"]) — the MCP SDK rejects
+  //   any "high" argument at the SDK boundary, before the IPC handler
+  //   even sees the request. This is the primary gate the agent's
+  //   model interacts with.
+  //
+  //   LAYER-2 (daemon): set-doc-priority-handler.ts re-validates
+  //   `who === "agent" && level === "high"` and returns a refusal +
+  //   audit-log entry. Defense-in-depth — even if the MCP schema is
+  //   ever relaxed or bypassed, the daemon refuses.
+  //
+  // Only operator surfaces (🔴 emoji reaction in src/discord/bridge.ts
+  // + `clawcode rag set-priority` CLI) can set HIGH.
+  server.tool(
+    "clawcode_rag_set_priority",
+    "Set retrieval priority for a previously-ingested document. D-08 sandbox: agents capped at MEDIUM; operator-only HIGH via 🔴 emoji or `clawcode rag set-priority`.",
+    {
+      agent: z
+        .string()
+        .describe(
+          "Your agent name (required for daemon to scope the documents store)",
+        ),
+      source: z
+        .string()
+        .describe(
+          "Document source identifier (full file path used at ingest time)",
+        ),
+      level: z
+        .enum(["medium", "low"])
+        .describe(
+          "Priority level. HIGH is operator-only — D-08 sandbox. Use 'medium' or 'low' only.",
+        ),
+      reason: z.string().optional().describe("Short rationale for the audit log"),
+    },
+    async ({ agent, source, level, reason }) => {
+      try {
+        const result = await sendIpcRequest(
+          SOCKET_PATH,
+          "set-doc-priority",
+          {
+            agent,
+            source,
+            level,
+            who: "agent",
+            callerAgent: agent, // self-attribution — daemon enforces Phase 90 isolation
+            reason,
+          },
+        );
+        const r = result as {
+          ok: boolean;
+          source?: string;
+          old_level?: string;
+          new_level?: string;
+          error?: string;
+        };
+        if (!r.ok) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Priority change refused: ${r.error ?? "unknown"}`,
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Priority of "${r.source}" changed: ${r.old_level} → ${r.new_level}`,
             },
           ],
         };
@@ -617,34 +1286,9 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
         const msg = error instanceof Error ? error.message : String(error);
         return {
           content: [
-            { type: "text" as const, text: `Failed to send to ${to}: ${msg}` },
+            { type: "text" as const, text: `set-priority failed: ${msg}` },
           ],
         };
-      }
-    },
-  );
-
-  // Tool: ingest_document
-  server.tool(
-    "ingest_document",
-    "Ingest a document from your workspace for RAG search (supports .txt, .md, .pdf)",
-    {
-      agent: z.string().describe("Your agent name"),
-      file_path: z.string().describe("Absolute path to the document file"),
-      source: z.string().optional().describe("Custom source identifier (defaults to file path)"),
-    },
-    async ({ agent, file_path, source }) => {
-      try {
-        const result = await sendIpcRequest(SOCKET_PATH, "ingest-document", {
-          agent, file_path, source,
-        });
-        const r = result as { ok: boolean; source: string; chunks_created: number; total_chars: number };
-        return {
-          content: [{ type: "text" as const, text: `Ingested "${r.source}": ${r.chunks_created} chunks (${r.total_chars} chars)` }],
-        };
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: "text" as const, text: `Ingest failed: ${msg}` }] };
       }
     },
   );
@@ -758,7 +1402,107 @@ export function createMcpServer(deps?: McpServerDeps): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ task_id: result.task_id }) }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
+        // Quick 260511-pw3 — surface the target's accepted schemas on
+        // unknown_schema rejections. IpcError.data carries
+        // {reason, schema, target, acceptedSchemas} for this branch.
+        const errData = (error as { data?: unknown }).data;
+        if (
+          errData !== null &&
+          typeof errData === "object" &&
+          "reason" in errData &&
+          (errData as { reason: unknown }).reason === "unknown_schema"
+        ) {
+          const d = errData as {
+            reason: string;
+            schema?: string;
+            target?: string;
+            acceptedSchemas?: readonly string[];
+          };
+          const accepted = d.acceptedSchemas ?? [];
+          const acceptedList = accepted.length > 0
+            ? accepted.join(", ")
+            : "(none — target agent has not declared any acceptsTasks schemas, or the registry has none of them)";
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Delegate failed: schema '${d.schema ?? schema}' is not accepted by '${d.target ?? target}'. ` +
+                  `Accepted schemas: ${acceptedList}. ` +
+                  `Call list_agent_schemas(caller, target) to inspect each schema's callerAllowed flag.`,
+              },
+            ],
+          };
+        }
         return { content: [{ type: "text" as const, text: `Delegate failed: ${msg}` }] };
+      }
+    },
+  );
+
+  // Quick 260511-pw3 — list_agent_schemas tool. Auto-injected for every
+  // agent (the clawcode MCP server is itself auto-injected). Senders call
+  // this BEFORE delegate_task to introspect what schemas the target
+  // accepts — same auto-inject pattern as `clawcode_fetch_discord_messages`.
+  server.tool(
+    "list_agent_schemas",
+    "List the task schemas a target agent accepts via delegate_task. Returns " +
+      "an array of { name, callerAllowed, registered }. Both flags must be " +
+      "true for delegate_task to succeed. Call this BEFORE delegate_task to " +
+      "pick a valid schema instead of taking a blind shot.",
+    {
+      caller: z.string().describe("Your agent name"),
+      target: z.string().describe("Target agent to introspect"),
+    },
+    async ({ caller, target }) => {
+      try {
+        const result = (await sendIpcRequest(SOCKET_PATH, "list-agent-schemas", {
+          caller,
+          target,
+        })) as {
+          target: string;
+          caller: string;
+          schemas: ReadonlyArray<{
+            name: string;
+            callerAllowed: boolean;
+            registered: boolean;
+          }>;
+        };
+        if (result.schemas.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Agent '${target}' declares NO accepted schemas. ` +
+                  `delegate_task will be rejected for every schema. ` +
+                  `The operator must add an \`acceptsTasks\` block to ${target}'s ` +
+                  `clawcode.yaml entry. See docs/cross-agent-schemas.md.`,
+              },
+            ],
+          };
+        }
+        // Render as a stable table the LLM can scan.
+        const lines = result.schemas.map(
+          (s) =>
+            `  - ${s.name}` +
+            ` (callerAllowed=${s.callerAllowed}, registered=${s.registered})`,
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Schemas declared by '${target}' (from clawcode.yaml acceptsTasks):\n` +
+                lines.join("\n") +
+                `\n\nNote: BOTH callerAllowed=true AND registered=true are required ` +
+                `for delegate_task to succeed. Schemas with registered=false exist in ` +
+                `${target}'s config but lack a YAML file in ~/.clawcode/task-schemas/.`,
+            },
+          ],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: "text" as const, text: `list_agent_schemas failed: ${msg}` }] };
       }
     },
   );

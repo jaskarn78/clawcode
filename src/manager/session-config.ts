@@ -12,7 +12,20 @@ import {
 import type { BootstrapStatus } from "../bootstrap/types.js";
 import { buildBootstrapPrompt } from "../bootstrap/prompt-builder.js";
 import { extractFingerprint, formatFingerprint } from "../memory/fingerprint.js";
-import { assembleContext, DEFAULT_BUDGETS } from "./context-assembler.js";
+// Phase 100 follow-up — capability manifest. Pure read of resolved config;
+// emitted into the stable prefix after identity so the LLM has its enabled
+// features in context (root cause of the "I don't dream" failure mode).
+import { buildCapabilityManifest } from "./capability-manifest.js";
+import {
+  assembleContext,
+  assembleContextTraced,
+  DEFAULT_BUDGETS,
+  INJECTED_MEMORY_MAX_CHARS,
+} from "./context-assembler.js";
+// Phase 999.7 — TraceCollector wired through deps for context-audit pipeline
+// restoration. Without it, the per-section section_tokens metadata is never
+// written to traces.db and `clawcode context-audit` reports sampledTurns: 0.
+import type { TraceCollector } from "../performance/trace-collector.js";
 import type {
   ContextSources,
   BudgetWarningEvent,
@@ -48,8 +61,27 @@ import {
   filterToolsByCapabilityProbe,
   type FlapHistoryEntry,
 } from "./filter-tools-by-capability-probe.js";
-// Phase 90 MEM-01 — 50KB hard cap on MEMORY.md auto-inject (D-17).
-import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
+// Phase 115 Plan 03 sub-scope 1 — MEMORY.md auto-load cap upgraded from
+// the 50KB byte cap to the 16K char cap (`INJECTED_MEMORY_MAX_CHARS`).
+// The legacy `MEMORY_AUTOLOAD_MAX_BYTES` constant remains exported from
+// `config/schema.ts` for back-compat with the schema test that pins it
+// (`src/config/__tests__/schema.test.ts:1672+`); this assembly path no
+// longer references it. Char-cap import is folded into the
+// context-assembler import block above.
+
+// Phase 999.13 DELEG-02 — per-agent specialist delegate map renderer.
+import { renderDelegatesBlock } from "../config/loader.js";
+// Phase 117 Plan 04 T05 — advisor backend + model resolvers (config + SDK alias).
+// `resolveAdvisorBackend` and `resolveAdvisorModel` in `config/loader.ts`
+// implement the per-agent → defaults → baseline fall-through; the SDK
+// alias map in `manager/model-resolver.ts` canonicalises `"opus"` →
+// `"claude-opus-4-7"` before the value reaches the SDK Options surface.
+// Both are pure functions — safe to call inside buildSessionConfig.
+import {
+  resolveAdvisorBackend as resolveAdvisorBackendConfig,
+  resolveAdvisorModel as resolveAdvisorModelConfig,
+} from "../config/loader.js";
+import { resolveAdvisorModel as resolveAdvisorModelAlias } from "./model-resolver.js";
 // Phase 94 Plan 05 — TOOL-08 / TOOL-09 auto-injected built-in tools.
 // Tool DEFs (no mcpServer attribution) are appended to the LLM-visible
 // tool block in every agent's stable prefix. Plan 94-02's filter sees no
@@ -57,6 +89,20 @@ import { MEMORY_AUTOLOAD_MAX_BYTES } from "../config/schema.js";
 // built-in helpers, not MCP-backed.
 import { CLAWCODE_FETCH_DISCORD_MESSAGES_DEF } from "./tools/clawcode-fetch-discord-messages.js";
 import { CLAWCODE_SHARE_FILE_DEF } from "./tools/clawcode-share-file.js";
+// Phase 96 Plan 02 — D-02 filesystem-capability block renderer + types.
+// Imported here at session-config (the daemon edge) so the LLM's stable
+// prefix carries the live <filesystem_capability> block alongside the
+// Phase 85 <tool_status> and Phase 95 <dream_log_recent> blocks. The
+// renderer is pure-DI (no fs/SDK reach); the snapshot comes from the
+// fsCapabilitySnapshotProvider deps surface, which SessionManager wires
+// to `this.getFsCapabilitySnapshotForAgent` (parallel to mcpStateProvider).
+import { renderFilesystemCapabilityBlock } from "../prompt/filesystem-capability-block.js";
+import type { FsCapabilitySnapshot } from "./persistent-session-handle.js";
+// Phase 96 Plan 03 — D-07 auto-injected directory listing tool. Same
+// auto-injection site as Phase 94's two helpers; LLMs use this to drill
+// into operator-shared paths the system-prompt block (96-02) advertises
+// at the path-root level. Token-guarded (depth max 3, entries max 500).
+import { CLAWCODE_LIST_FILES_DEF } from "./tools/clawcode-list-files.js";
 
 /**
  * Phase 53 Plan 02 — minimal logger shape accepted by `buildSessionConfig`.
@@ -154,6 +200,131 @@ export type SessionConfigDeps = {
   readonly flapHistoryProvider?: (
     agentName: string,
   ) => Map<string, FlapHistoryEntry>;
+  /**
+   * Phase 96 Plan 02 D-02 — per-agent filesystem-capability snapshot provider.
+   *
+   * When absent (tests, legacy bootstrap paths, first-boot before the
+   * 60s heartbeat tick fires fs-probe), the renderer falls back to an
+   * empty Map and `renderFilesystemCapabilityBlock` returns the empty
+   * string (cache-stability invariant — STRICT no placeholder block per
+   * 96-02 W-4 fix). Production SessionManager wires this to
+   * `this.getFsCapabilitySnapshotForAgent` so the prompt carries the
+   * live capability state.
+   *
+   * Together with the Section 4 mandatory fleet probe in
+   * 96-07-DEPLOY-RUNBOOK.md, this closes the D-01 boot-probe approximation:
+   * (a) operator runs fleet probe immediately after deploy → snapshot
+   * persists → next session-config rebuild reads it; (b) heartbeat tick
+   * (≤60s) refreshes ongoing.
+   */
+  readonly fsCapabilitySnapshotProvider?: (
+    agentName: string,
+  ) => ReadonlyMap<string, FsCapabilitySnapshot>;
+  /**
+   * Phase 100 follow-up — per-agent MCP env override resolver.
+   *
+   * When the agent declares `mcpEnvOverrides`, buildSessionConfig invokes
+   * this resolver to substitute `op://...` URIs with concrete secret values
+   * BEFORE the resulting AgentSessionConfig.mcpServers[].env is handed to
+   * the SDK adapter. Implementation lives in
+   * src/manager/op-env-resolver.ts (`resolveMcpEnvOverrides`); production
+   * SessionManager wires the daemon's clawdbot-token-aware `op read` shell-
+   * out (`defaultOpReadShellOut`).
+   *
+   * Optional — when absent (tests, bootstrap paths), `mcpEnvOverrides` is
+   * silently skipped: the agent inherits the daemon's clawdbot-scoped token
+   * from the shared mcpServers[].env (back-compat with the existing 15-
+   * agent fleet behavior).
+   *
+   * Throws propagate — a bad op:// reference fails the agent start (loud
+   * signal); SessionManager catches at the boundary and routes through the
+   * MCP-failure path. We intentionally do NOT swallow errors here: the
+   * alternative would silently inherit the daemon's full-fleet token,
+   * defeating the entire vault-scoping objective.
+   */
+  readonly opEnvResolver?: (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ) => Promise<Record<string, Record<string, string>>>;
+  /**
+   * Phase 999.7 — per-agent TraceCollector for context-audit telemetry.
+   *
+   * When supplied, buildSessionConfig opens a synthetic `bootstrap:<id>` Turn
+   * around `assembleContextTraced` so the per-section `section_tokens`
+   * metadata lands in traces.db. Without this, the wrapper is a no-op (no
+   * Turn → no span → no metadata write) and `clawcode context-audit`
+   * reports `sampledTurns: 0` for every agent.
+   *
+   * Captures per session-start (NOT per-turn — buildSessionConfig only runs
+   * at agent start + hot-reload). One row per agent restart is enough to
+   * surface the tail-of-context-budget hot spots; per-turn context refresh
+   * is a separate phase.
+   *
+   * Optional — when absent (tests, legacy paths), behavior is unchanged
+   * and `assembleContext` is called with no tracing.
+   */
+  readonly traceCollector?: TraceCollector;
+  /**
+   * Phase 117 Plan 04 T05 — advisor defaults block (`config.defaults.advisor`
+   * from clawcode.yaml) and the daemon-wide AdvisorBudget.
+   *
+   * Together they let `buildSessionConfig` decide whether to spread-
+   * conditionally inject `advisorModel` into `AgentSessionConfig` (which
+   * the SDK adapter then forwards into `Options.advisorModel`). The
+   * gate evaluates two conditions per RESEARCH §6 Pitfall 3 / §13.5:
+   *
+   *   1. `resolveAdvisorBackend(agent, defaults) === "native"` — the
+   *      operator hasn't flipped the agent to the fork rollback path.
+   *   2. `advisorBudget.canCall(agent.name) === true` — the per-agent
+   *      per-day cap (`AdvisorBudget`, 10/day) is not exhausted.
+   *
+   * When EITHER condition is false, `advisorModel` is OMITTED from the
+   * returned `AgentSessionConfig` (spread-conditional pattern; never
+   * `{advisorModel: undefined}`). The adapter then omits the field from
+   * the SDK Options object so the bundled `claude` CLI binary treats
+   * the feature as off for that session.
+   *
+   * Optional — when absent (tests, bootstrap paths, fleet defaults not
+   * loaded yet), buildSessionConfig falls through to the hard-coded
+   * resolver defaults (`"native"` / `"opus"`) and the advisor is
+   * enabled-by-default for the agent. Production daemon wires this in
+   * via `SessionManager.setAdvisorDefaults(config.defaults.advisor)`
+   * + `SessionManager.setAdvisorBudget(...)`.
+   */
+  readonly advisorDefaults?: {
+    advisor?: {
+      backend?: string;
+      model?: string;
+    };
+  };
+  readonly advisorBudget?: {
+    canCall(agent: string): boolean;
+  };
+  /**
+   * Phase 127 Plan 02 — per-agent stream-stall callback factory.
+   *
+   * When supplied, `buildSessionConfig` invokes this with the agent's
+   * resolved `{name, model, effort}` and threads the returned callback
+   * into `AgentSessionConfig.onStreamStall`. Plan 01 declared the hook;
+   * Plan 02 supplies the daemon-side implementation
+   * ({@link src/manager/stream-stall-callback.ts:makeStreamStallCallback})
+   * that fires the Discord webhook notification + JSONL stall row.
+   *
+   * Optional — when absent (tests, bootstrap paths, daemon boot before
+   * WebhookManager + SessionLogger are wired), the callback is OMITTED
+   * (spread-conditional pattern; `{onStreamStall: undefined}` is NEVER
+   * set). The Plan 01 tracker still emits `phase127-stream-stall` log +
+   * aborts via fireInterruptOnce(), so protective behavior holds even
+   * without this hook.
+   */
+  readonly streamStallCallbackFactory?: (args: {
+    readonly agentName: string;
+    readonly model: string;
+    readonly effort: string;
+  }) => (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void;
 };
 
 /**
@@ -194,11 +365,28 @@ export async function buildSessionConfig(
       systemPrompt: systemPrompt.trim(),
       channels,
       contextSummary,
+      // Phase 99 sub-scope N (2026-04-26) — propagate disallowedTools through
+      // the bootstrap-needed path too. Spread-conditional matches the main
+      // return below so the field is OMITTED rather than explicitly undefined
+      // when not set (preserves byte-stable deep-equality regression pins).
+      ...(config.disallowedTools && config.disallowedTools.length > 0
+        ? { disallowedTools: config.disallowedTools }
+        : {}),
+      // Phase 115 sub-scope 2 — propagate excludeDynamicSections through
+      // the bootstrap path too so the SDK strips dynamic sections even on
+      // first-spawn agents (Rule 3 symmetric edit; matches the main return
+      // below). Always populated from ResolvedAgentConfig (default true).
+      excludeDynamicSections: config.excludeDynamicSections,
     };
   }
 
-  // --- Collect identity source ---
-  let identityStr = "";
+  // --- Collect identity sources ---
+  //
+  // Phase 115 Plan 03 sub-scope 1 — carved into FOUR sub-source fields so
+  // the assembler can budget each independently via
+  // `enforceDropLowestImportance` (T02). The legacy single `identityStr`
+  // is also kept (composed at the end) for back-compat with any consumer
+  // still reading `sources.identity`.
 
   // Phase 78 CONF-01 — Read SOUL content via 3-branch precedence:
   //   config.soulFile (absolute path, lazy-read) → <workspace>/SOUL.md → inline config.soul.
@@ -224,9 +412,10 @@ export async function buildSessionConfig(
   }
   if (!soulContent) soulContent = config.soul ?? "";
 
+  let identitySoulFingerprint = "";
   if (soulContent) {
     const fingerprint = extractFingerprint(soulContent);
-    identityStr += formatFingerprint(fingerprint) + "\n\n";
+    identitySoulFingerprint = formatFingerprint(fingerprint);
   }
 
   // Phase 78 CONF-01 — Read IDENTITY content via 3-branch precedence:
@@ -253,40 +442,132 @@ export async function buildSessionConfig(
   }
   if (!identityContent) identityContent = config.identity ?? "";
 
-  if (identityContent) {
-    identityStr += identityContent;
-  }
+  const identityFile = identityContent;
 
   // Inject agent name and memory_lookup guidance (LOAD-01)
-  identityStr += `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
+  // Phase 115 Plan 03 sub-scope 1 — agent-name line + capability manifest
+  // are composed into a single sub-source field so the assembler treats
+  // them as one budget-able unit (mid-low importance — bullet-truncated).
+  let identityCapabilityManifest =
+    `Your name is ${config.name}. When using memory_lookup, pass '${config.name}' as the agent parameter.\n`;
 
-  // Phase 90 MEM-01 — MEMORY.md auto-load into stable prefix, AFTER
-  // SOUL+IDENTITY and BEFORE MCP status (per D-18). 50KB hard cap
-  // (MEMORY_AUTOLOAD_MAX_BYTES) with truncation marker per D-17.
+  // Phase 100 follow-up — capability manifest (after identity, before
+  // MEMORY.md auto-load and MCP block). Sits in the cached stable prefix
+  // so the LLM has its enabled-feature list in context every turn
+  // without paying re-render cost. Returns "" for minimal agents (no
+  // dream, no schedules, no subagent-thread skill, no GSD) — we only
+  // pay the prompt cost for agents with notable opt-ins. Root cause:
+  // fin-acquisition claimed it didn't dream while dreams were being
+  // persisted under memory/dreams/ (2026-04-27 operator surface).
+  const capabilityManifest = buildCapabilityManifest(config);
+  if (capabilityManifest.length > 0) {
+    identityCapabilityManifest += "\n" + capabilityManifest;
+  }
+
+  // Phase 90 MEM-01 + Phase 115 Plan 03 sub-scope 1 — MEMORY.md auto-load
+  // into stable prefix, AFTER SOUL+IDENTITY and BEFORE MCP status (per D-18).
+  //
+  // Phase 115 D-01 lock — char cap of `INJECTED_MEMORY_MAX_CHARS = 16,000`
+  // REPLACES the legacy 50KB byte cap. When over cap, head-tail truncate
+  // (70/20 — Hermes precedent) with a marker between head and tail:
+  //
+  //   [TRUNCATED — N chars dropped, dream-pass priority requested]
+  //
+  // The marker text is intentionally agent-actionable: when the agent reads
+  // its own MEMORY.md and sees this, it understands that a priority dream-pass
+  // has been requested at the daemon side (D-05 — Plan 115-05 wires the
+  // consumer-side dream-cron re-schedule).
+  //
+  // Daemon-side: emit `[diag] tier1-truncation` warn (sub-scope 13c upgrade
+  // from `memory-md-truncation` — preserves the same warn channel pattern
+  // shipped in 115-02 but tags this as a TIER-1 event, distinct from random
+  // file truncation). Best-effort `recordTier1TruncationEvent` on the
+  // TraceCollector — the column slot is open in 115-00 but the method
+  // landing here defensively guards against absence (typeof check).
+  //
   // Silent fall-through on missing file (same semantics as SOUL/IDENTITY
-  // branches above — configured-but-unreadable must not crash session
-  // boot). Opt-out via config.memoryAutoLoad === false; override path via
-  // config.memoryAutoLoadPath (absolute, loader expanded ~/...).
+  // branches above). Opt-out via config.memoryAutoLoad === false; override
+  // path via config.memoryAutoLoadPath (absolute, loader expanded ~/...).
+  let identityMemoryAutoload = "";
   if (config.memoryAutoLoad !== false) {
     const memoryPath =
       config.memoryAutoLoadPath ?? join(config.workspace, "MEMORY.md");
     try {
       const raw = await readFile(memoryPath, "utf-8");
       let body = raw;
-      if (Buffer.byteLength(body, "utf8") > MEMORY_AUTOLOAD_MAX_BYTES) {
-        // Byte-level truncation (UTF-8 safe via Buffer slice + toString).
-        // Mid-multibyte-codepoint truncation is a theoretical concern but
-        // acceptable: MEMORY.md is markdown prose (mostly ASCII), and the
-        // assembler downstream treats the payload as opaque text.
-        const buf = Buffer.from(body, "utf8");
-        body = buf.slice(0, MEMORY_AUTOLOAD_MAX_BYTES).toString("utf8");
-        body += "\n\n…(truncated at 50KB cap)\n";
+      if (body.length > INJECTED_MEMORY_MAX_CHARS) {
+        // Phase 115 D-01 + D-04 — Hermes 70/20 head-tail truncation. 10%
+        // dropped from the middle. Marker is agent-actionable: it requests
+        // a priority dream-pass (D-05 trigger).
+        const headLen = Math.floor(INJECTED_MEMORY_MAX_CHARS * 0.7);
+        const tailLen = Math.floor(INJECTED_MEMORY_MAX_CHARS * 0.2);
+        const originalChars = body.length;
+        const dropped = originalChars - headLen - tailLen;
+        const head = body.slice(0, headLen);
+        const tail = body.slice(-tailLen);
+        body = `${head}\n\n[TRUNCATED — ${dropped} chars dropped, dream-pass priority requested]\n\n${tail}`;
+
+        // Phase 115 sub-scope 13(c) upgrade — daemon-side warn. Action label
+        // upgraded `memory-md-truncation` → `tier1-truncation` to distinguish
+        // tier-1-level events (Phase 115 enforcement) from earlier 50KB-byte
+        // truncation events (Phase 90 era). Operator-grep-friendly.
+        if (deps.log) {
+          deps.log.warn(
+            {
+              agent: config.name,
+              originalChars,
+              capChars: INJECTED_MEMORY_MAX_CHARS,
+              droppedChars: dropped,
+              file: "MEMORY.md",
+              action: "tier1-truncation",
+            },
+            "[diag] tier1-truncation",
+          );
+        }
+
+        // Phase 115 D-05 + cross-plan defensive wiring — record the event
+        // on TraceCollector so Plan 115-05's dream-cron consumer can read
+        // the count and trip a per-agent priority dream-pass when the
+        // 2-in-24h trigger fires. Method may not yet exist on the
+        // collector (115-00 opened the column slot but consumers add their
+        // own write methods). Same `typeof === "function"` guard pattern
+        // as 115-02 used for `incrementPromptBloatWarning`.
+        const tc = deps.traceCollector as
+          | (TraceCollector & {
+              recordTier1TruncationEvent?: (agent: string) => void;
+            })
+          | undefined;
+        if (tc && typeof tc.recordTier1TruncationEvent === "function") {
+          try {
+            tc.recordTier1TruncationEvent(config.name);
+          } catch {
+            // never let observability block startup
+          }
+        }
       }
-      identityStr += "\n## Long-term memory (MEMORY.md)\n\n" + body + "\n";
+      identityMemoryAutoload = body;
     } catch {
       // MEMORY.md not present OR override path unreadable — silently skip.
       // No warn log: absence is the common case on first-boot agents.
     }
+  }
+
+  // Phase 115 Plan 03 sub-scope 1 — also build the legacy compound
+  // `identityStr` so the rendered stable-prefix preserves byte-compat
+  // with pre-115 sessions for agents whose sub-sources are unchanged.
+  // The assembler now prefers the four carved fields when present (T01)
+  // and falls back to this string for tests that pass only `identity`.
+  let identityStr = "";
+  if (identitySoulFingerprint) {
+    identityStr += identitySoulFingerprint + "\n\n";
+  }
+  if (identityFile) {
+    identityStr += identityFile;
+  }
+  identityStr += identityCapabilityManifest;
+  if (identityMemoryAutoload) {
+    identityStr +=
+      "\n## Long-term memory (MEMORY.md)\n\n" + identityMemoryAutoload + "\n";
   }
 
   // --- Collect hot memories source ---
@@ -434,6 +715,12 @@ export async function buildSessionConfig(
   toolDefinitionsStr += "## Built-in Discord helpers (auto-injected)\n";
   toolDefinitionsStr += `- **${CLAWCODE_FETCH_DISCORD_MESSAGES_DEF.name}**: ${CLAWCODE_FETCH_DISCORD_MESSAGES_DEF.description}\n`;
   toolDefinitionsStr += `- **${CLAWCODE_SHARE_FILE_DEF.name}**: ${CLAWCODE_SHARE_FILE_DEF.description}\n`;
+  // Phase 96 Plan 03 — D-07 auto-injected directory listing tool. Built-in
+  // (no mcpServer attribution); the Plan 94-02 capability-probe filter
+  // never removes it. Boundary-checked through 96-01 checkFsCapability;
+  // out-of-allowlist refusals carry alternatives via D-08
+  // findAlternativeFsAgents.
+  toolDefinitionsStr += `- **${CLAWCODE_LIST_FILES_DEF.name}**: ${CLAWCODE_LIST_FILES_DEF.description}\n`;
 
   // Admin agent information (per D-11, D-12)
   if (config.admin && deps.allAgentConfigs.length > 0) {
@@ -561,6 +848,21 @@ export async function buildSessionConfig(
     }
   }
 
+  // Phase 96 Plan 02 D-02 — render <filesystem_capability> block at the
+  // daemon edge using the live snapshot from the fs-probe heartbeat (96-07)
+  // + boot-approximation fleet probe (96-07-DEPLOY-RUNBOOK Section 4).
+  // Empty snapshot → STRICT empty string (cache-stability invariant for
+  // v2.5 fixtures without fileAccess). The assembler inserts this block
+  // BETWEEN Phase 94 <tool_status> and Phase 95 <dream_log_recent> when
+  // non-empty (verified by grep pin in 96-02 Task 3 acceptance_criteria).
+  const fsSnapshot =
+    deps.fsCapabilitySnapshotProvider?.(config.name) ??
+    new Map<string, FsCapabilitySnapshot>();
+  const filesystemCapabilityBlockStr = renderFilesystemCapabilityBlock(
+    fsSnapshot,
+    config.workspace,
+  );
+
   // --- Assemble with budgets ---
   const budgets = config.contextBudgets ?? DEFAULT_BUDGETS;
 
@@ -578,7 +880,20 @@ export async function buildSessionConfig(
       : undefined;
 
   const sources: ContextSources = {
+    // Legacy compound identity (kept for back-compat with consumers that
+    // read `sources.identity` directly). The four carved fields below
+    // take precedence at the assembler when any are non-undefined
+    // (Phase 115 Plan 03 sub-scope 1 / T01).
     identity: identityStr,
+    // Phase 115 Plan 03 sub-scope 1 — four carved sub-source fields. The
+    // assembler composes them into the same compound identity rendering
+    // (byte-compatible with `identityStr` above) but treats them as separate
+    // budget-able units when over the per-section budget triggers
+    // `enforceDropLowestImportance` (T02).
+    identitySoulFingerprint,
+    identityFile,
+    identityCapabilityManifest,
+    identityMemoryAutoload,
     // Phase 53 Plan 02: SOUL.md body is currently folded into `identityStr`
     // by the fingerprint+identity concatenation above. We leave `soul: ""`
     // here so section_tokens.soul reports 0 for this agent — accurate given
@@ -615,6 +930,12 @@ export async function buildSessionConfig(
     // Phase 67 — conversation brief threaded into the MUTABLE SUFFIX.
     // Empty string when stores are not wired or gap-skip fired.
     conversationContext: conversationContextStr,
+    // Phase 96 Plan 02 D-02 — <filesystem_capability> block (rendered above).
+    // Empty string when no fs snapshot is available (cache-stability path).
+    filesystemCapabilityBlock: filesystemCapabilityBlockStr,
+    // Phase 999.13 DELEG-02 — per-agent delegate directive; empty when
+    // delegates unset OR `{}` (byte-identical to no-delegates baseline).
+    delegatesBlock: renderDelegatesBlock(config.delegates),
   };
 
   // Phase 52 Plan 02 — two-block assembly for prompt caching.
@@ -644,12 +965,129 @@ export async function buildSessionConfig(
       }
     : undefined;
 
-  const assembled = assembleContext(sources, budgets, {
-    priorHotStableToken: deps.priorHotStableToken,
-    memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
-    onBudgetWarning,
-  });
+  // Phase 999.7 — when a TraceCollector is wired, capture per-section token
+  // counts via a synthetic bootstrap Turn. The Turn is opened, the assembler
+  // emits metadata onto its `context_assemble` span, and the Turn is ended
+  // immediately so the row commits to traces.db. Status is "ok" on success,
+  // "error" if assembly throws. Best-effort — failures here are observability,
+  // never block agent startup.
+  const traceCollector = deps.traceCollector;
+  let bootstrapTurn:
+    | ReturnType<TraceCollector["startTurn"]>
+    | undefined;
+  if (traceCollector) {
+    try {
+      const bootstrapId = `bootstrap:${config.name}:${Date.now()}`;
+      bootstrapTurn = traceCollector.startTurn(bootstrapId, config.name, null);
+    } catch {
+      bootstrapTurn = undefined; /* never let tracing block startup */
+    }
+  }
+  // Phase 115 Plan 03 sub-scope 1 / T02 — D-02 outer-cap fallback log sink.
+  // Adapter that forwards `error` calls to the structured pino logger.
+  // Optional — if `deps.log` lacks `error`, the cap fallback still runs but
+  // emits no log line.
+  const capFallbackLog = deps.log
+    ? {
+        error: (obj: Record<string, unknown>, msg?: string) => {
+          // SessionConfigLoggerLike narrows to {warn}; callers pass full pino
+          // loggers in production where `.error` does exist. Cast through
+          // unknown for the optional method probe.
+          const fullLog = deps.log as unknown as {
+            error?: (o: Record<string, unknown>, m?: string) => void;
+          };
+          if (typeof fullLog.error === "function") {
+            fullLog.error(obj, msg);
+          } else {
+            // Fallback: use warn at higher verbosity if error isn't available.
+            deps.log?.warn(obj, msg);
+          }
+        },
+      }
+    : undefined;
+
+  let assembled;
+  try {
+    assembled = bootstrapTurn
+      ? assembleContextTraced(
+          sources,
+          budgets,
+          {
+            priorHotStableToken: deps.priorHotStableToken,
+            memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
+            onBudgetWarning,
+            agentName: config.name,
+            log: capFallbackLog,
+            // Phase 115 Plan 04 sub-scope 5 — thread the resolved
+            // cacheBreakpointPlacement through to the assembler so the
+            // operator-controlled config flag is actually consumed. Default
+            // is "static-first" (zod default in defaultsSchema); operators
+            // can flip per-agent or fleet-wide via clawcode.yaml. The flag
+            // is captured into systemPrompt.append at session create/resume
+            // (NON_RELOADABLE_FIELDS) — agent restart required to take effect.
+            cacheBreakpointPlacement: config.cacheBreakpointPlacement,
+          },
+          bootstrapTurn,
+        )
+      : assembleContext(sources, budgets, {
+          priorHotStableToken: deps.priorHotStableToken,
+          memoryAssemblyBudgets: config.perf?.memoryAssemblyBudgets,
+          onBudgetWarning,
+          agentName: config.name,
+          log: capFallbackLog,
+          // Phase 115 Plan 04 sub-scope 5 — see assembleContextTraced branch
+          // above for rationale. Symmetric edit (same pattern as
+          // excludeDynamicSections wiring further down at line ~1052).
+          cacheBreakpointPlacement: config.cacheBreakpointPlacement,
+        });
+    bootstrapTurn?.end("success");
+  } catch (err) {
+    bootstrapTurn?.end("error");
+    throw err;
+  }
   const trimmedMutable = assembled.mutableSuffix.trim();
+
+  // Phase 100 follow-up — apply per-agent MCP env overrides (op:// resolution)
+  // BEFORE assembling AgentSessionConfig.mcpServers. Resolved values OVERWRITE
+  // the env entries from the shared mcpServers[].env block (loaded with the
+  // daemon's clawdbot full-fleet token). For finmentum agents this swaps
+  // OP_SERVICE_ACCOUNT_TOKEN from the clawdbot-scoped token to the
+  // Finmentum-vault-scoped token before the SDK spawns the MCP subprocess.
+  //
+  // Skipped when:
+  //   - config.mcpEnvOverrides is undefined (existing 15-agent fleet)
+  //   - deps.opEnvResolver is undefined (test paths, bootstrap)
+  //   - config.mcpServers is empty (no servers to override)
+  //
+  // Throws propagate — see SessionConfigDeps.opEnvResolver doc for rationale.
+  const overrideMap = config.mcpEnvOverrides;
+  let resolvedOverrides:
+    | Record<string, Record<string, string>>
+    | undefined;
+  if (overrideMap && deps.opEnvResolver && (config.mcpServers ?? []).length > 0) {
+    // Convert the readonly-Record shape on the resolved config back to a
+    // mutable plain Record for the resolver call (resolver returns a fresh
+    // mutable copy — we never write back to the input).
+    const mutableInput: Record<string, Record<string, string>> = {};
+    for (const [serverName, envMap] of Object.entries(overrideMap)) {
+      mutableInput[serverName] = { ...envMap };
+    }
+    resolvedOverrides = await deps.opEnvResolver(mutableInput, config.name);
+  }
+
+  // Build the effective mcpServers list with per-agent env overrides merged
+  // in last-wins. Each server's env starts from the shared block (which has
+  // the daemon's clawdbot-resolved values via config/loader.ts), then any
+  // per-agent override key replaces it. Servers WITHOUT a matching override
+  // entry pass through unchanged.
+  const baseMcpServers = config.mcpServers ?? [];
+  const effectiveMcpServers = resolvedOverrides
+    ? baseMcpServers.map((s) => {
+        const override = resolvedOverrides![s.name];
+        if (!override) return s;
+        return { ...s, env: { ...s.env, ...override } };
+      })
+    : baseMcpServers;
 
   return {
     name: config.name,
@@ -661,6 +1099,146 @@ export async function buildSessionConfig(
     hotStableToken: assembled.hotStableToken,
     channels,
     contextSummary,
-    mcpServers: config.mcpServers ?? [],
+    mcpServers: effectiveMcpServers,
+    // Phase 100 GSD-02 / GSD-04 — propagate settingSources + gsd from
+    // ResolvedAgentConfig (Plan 01) into AgentSessionConfig so the SDK
+    // adapter (Plan 02) receives the per-agent values. The spread-conditional
+    // pattern (matching the existing mutableSuffix pattern above) keeps the
+    // AgentSessionConfig field OMITTED rather than explicitly `undefined`
+    // when the resolved config doesn't carry them — preserves byte-stable
+    // deep-equality in regression tests (SA10 cascade).
+    ...(config.settingSources ? { settingSources: config.settingSources } : {}),
+    ...(config.gsd ? { gsd: config.gsd } : {}),
+    // Phase 99 sub-scope N (2026-04-26) — propagate disallowedTools through
+    // ResolvedAgentConfig → AgentSessionConfig so the SDK adapter receives
+    // the per-agent SDK deny-list. SubagentThreadSpawner injects this on
+    // subagent configs to physically block `mcp__clawcode__spawn_subagent_thread`.
+    // Spread-conditional pattern (matching settingSources/gsd above) keeps
+    // the field OMITTED rather than explicitly undefined when not set so the
+    // existing 15+ agent fleet stays byte-identical (SA10-style cascade).
+    ...(config.disallowedTools && config.disallowedTools.length > 0
+      ? { disallowedTools: config.disallowedTools }
+      : {}),
+    // Phase 115 sub-scope 14 — propagate `debug` block from ResolvedAgentConfig
+    // → AgentSessionConfig so the SDK adapter (session-adapter.ts) reads the
+    // operator-toggle for the diagnostic baseopts dump. Spread-conditional so
+    // the field is OMITTED for fleet agents that don't set `debug:` in yaml
+    // (preserves byte-stable equality in regression tests; matches the
+    // settingSources / gsd / disallowedTools pattern above). T03 of this plan
+    // makes this the SOLE gate after removing the hardcoded allowlist.
+    ...(config.debug ? { debug: config.debug } : {}),
+    // Phase 115 sub-scope 2 — propagate `excludeDynamicSections` from
+    // ResolvedAgentConfig (always populated by loader, default true) into
+    // AgentSessionConfig so session-adapter's buildSystemPromptOption can
+    // forward it to the SDK. Pass through verbatim — the SDK ignores this
+    // flag when systemPrompt is a string (custom prompt), but our preset
+    // shape ({type:"preset",preset:"claude_code",append:...}) honors it.
+    excludeDynamicSections: config.excludeDynamicSections,
+    // Phase 127 — propagate stream-stall supervisor threshold from
+    // ResolvedAgentConfig (loader cascade: agent → modelOverrides →
+    // defaults → 180_000 baseline) into AgentSessionConfig so the SDK
+    // adapter threads it into per-handle baseOptions. Spread-conditional
+    // OMIT when undefined preserves byte-stable equality with legacy
+    // builders. Consumers default to 180_000ms.
+    ...(typeof config.streamStallTimeoutMs === "number"
+      ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+      : {}),
+    // Phase 127 Plan 02 — onStreamStall callback (Discord webhook +
+    // sessionLog.recordStall). Spread-conditional OMIT when the factory
+    // is absent (tests, bootstrap paths) — the Plan 01 tracker still
+    // emits the structured log + aborts, so the protective surface
+    // works without the daemon-side wiring. Production SessionManager
+    // wires the factory in `configDeps()`.
+    ...(deps.streamStallCallbackFactory !== undefined
+      ? {
+          onStreamStall: deps.streamStallCallbackFactory({
+            agentName: config.name,
+            model: config.model,
+            effort: config.effort,
+          }),
+        }
+      : {}),
+    // Phase 117 Plan 04 T05 — advisor model passthrough.
+    //
+    // Spread-conditional pattern (RESEARCH §6 Pitfall 3): the field is
+    // OMITTED — never `{advisorModel: undefined}` — when the gate says
+    // the advisor should be off. The session-adapter then propagates
+    // the same omission into the SDK Options so the bundled CLI binary
+    // does not enable the `advisor_20260301` server tool for this
+    // session.
+    //
+    // Gate (`shouldEnableAdvisor`):
+    //   1. `resolveAdvisorBackend(agent, defaults) === "native"`
+    //      — the operator hasn't flipped to the fork rollback path.
+    //   2. `advisorBudget.canCall(agent) !== false`
+    //      — the per-day cap is not exhausted (RESEARCH §13.5
+    //      mitigation B: omit advisorModel on exhaustion). When the
+    //      budget is undefined (tests, bootstrap), this leg is
+    //      treated as PASS so default-configured agents in test
+    //      paths still get the field — production wires the budget
+    //      via `SessionManager.setAdvisorBudget` so this is safe.
+    //
+    // The resolved value is run through the SDK alias resolver
+    // (`resolveAdvisorModelAlias`) so the config-level `"opus"`
+    // becomes the canonical `"claude-opus-4-7"` before reaching the
+    // SDK (RESEARCH §13.7 — Anthropic's docs name this exact alias).
+    ...(shouldEnableAdvisor(config, deps)
+      ? {
+          advisorModel: resolveAdvisorModelAlias(
+            resolveAdvisorModelConfig(
+              config as unknown as { advisor?: { model?: string } },
+              deps.advisorDefaults,
+            ),
+          ),
+        }
+      : {}),
   };
+}
+
+/**
+ * Phase 117 Plan 04 T05 — should we hand `advisorModel` to the SDK?
+ *
+ * Two gates evaluated, both must pass:
+ *
+ *   (a) **Backend = native.** When `resolveAdvisorBackend(agent, defaults)`
+ *       returns `"fork"`, the agent's `ask_advisor` invocations route
+ *       through `LegacyForkAdvisor` (Plan 117-03) instead — the native
+ *       SDK server tool MUST NOT also be enabled or the model would
+ *       have two parallel advisor surfaces. Defaults to `"native"`
+ *       when neither side specifies (loader baseline).
+ *
+ *   (b) **Budget not exhausted.** If `AdvisorBudget.canCall(agent)`
+ *       returns `false`, the daily cap is hit; omit `advisorModel` on
+ *       the next session reload so the SDK does not re-fire the
+ *       server tool. Per RESEARCH §13.5: this is mitigation B (omit
+ *       advisorModel) — the cheap mitigation. The risk that prior
+ *       `advisor_tool_result` blocks remaining in history could
+ *       produce a `400 invalid_request_error` is the documented
+ *       soft-cap acceptance (RESEARCH §13.5 paragraph ending
+ *       "accept the daily-cap-soft-limit risk").
+ *
+ * When `advisorBudget` is undefined (tests, bootstrap paths before
+ * daemon DI fires), this leg defaults to PASS — agents with budget
+ * not yet wired get the advisor by default, matching the production
+ * fleet default of `defaults.advisor.backend: native`.
+ */
+function shouldEnableAdvisor(
+  config: ResolvedAgentConfig,
+  deps: SessionConfigDeps,
+): boolean {
+  // Loader resolvers accept structural types — `config as unknown as ...`
+  // is the minimum-coupling cast since `ResolvedAgentConfig` does not
+  // currently expose the `advisor?` field on its type (Plan 117-06 only
+  // adds it to the raw schema, not the resolved-type alias). The runtime
+  // value is read off `config.advisor` if operator set it; otherwise the
+  // resolver falls back through `deps.advisorDefaults?.advisor`.
+  const backend = resolveAdvisorBackendConfig(
+    config as unknown as { advisor?: { backend?: string } },
+    deps.advisorDefaults,
+  );
+  if (backend !== "native") return false;
+  if (deps.advisorBudget && !deps.advisorBudget.canCall(config.name)) {
+    return false;
+  }
+  return true;
 }

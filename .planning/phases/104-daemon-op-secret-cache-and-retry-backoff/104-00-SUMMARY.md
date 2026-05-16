@@ -1,0 +1,148 @@
+---
+phase: 104-daemon-op-secret-cache-and-retry-backoff
+plan: "00"
+subsystem: infra
+tags: [secrets, 1password, retry, caching, p-retry, vitest, scaffolding]
+
+requires: []
+provides:
+  - p-retry@^8.0.0 runtime dependency installed (ESM, zero transitive deps)
+  - vitest scaffolds for SecretsResolver behaviors RES-01..RES-09
+  - vitest scaffold for ConfigWatcher invalidation hook (WATCH-01/02)
+  - vitest scaffold for SEC-01 callsite grep assertion (CALL-01)
+  - vitest scaffold for daemon-boot graceful degradation (BOOT-DEGRADED-01)
+  - vitest scaffold for secrets-status IPC handler (IPC-SECSTATUS-01..03)
+affects:
+  - 104-01 (Wave 1 — SecretsResolver class + retry/backoff)
+  - 104-02 (Wave 2 — daemon boot pre-resolve + callsite migration)
+  - 104-03 (Wave 3 — ConfigWatcher invalidation + recovery wiring)
+  - 104-04 (Wave 3 — secrets-status IPC handler)
+
+tech-stack:
+  added: ["p-retry@8.0.0"]
+  patterns:
+    - "it.todo scaffolds plant Nyquist spec IDs before implementation"
+    - "Test files import-light by design — no premature module references"
+
+key-files:
+  created:
+    - src/manager/__tests__/secrets-resolver.test.ts
+    - src/manager/__tests__/secrets-resolver-watcher.test.ts
+    - src/manager/__tests__/secrets-resolver-callsites.test.ts
+    - src/manager/__tests__/daemon-boot-secrets-degraded.test.ts
+    - src/ipc/__tests__/secrets-status.test.ts
+  modified:
+    - package.json
+    - package-lock.json
+
+key-decisions:
+  - "p-retry@^8.0.0 chosen over hand-rolled retry loop (jitter + AbortError contract critical against 1P boot-storms)"
+  - "Test scaffolds use it.todo (not it.skip) so vitest reports them as todo, not failures"
+  - "No premature import of ../secrets-resolver.js — Wave 1 creates the production module"
+
+patterns-established:
+  - "Wave 0 plants spec-ID-named todos so downstream waves cannot ship without turning them green"
+  - "describe titles encode RESEARCH.md §Validation Architecture so vitest -t greps line up with requirement IDs"
+
+requirements-completed: [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07]
+
+duration: ~2min
+completed: 2026-04-30
+---
+
+# Phase 104 Plan 00: Wave 0 Scaffolding Summary
+
+**p-retry@8.0.0 installed and 5 vitest test files planted with 16 spec-ID-named it.todo scaffolds covering RES-01..RES-09, WATCH-01/02, CALL-01, BOOT-DEGRADED-01, and IPC-SECSTATUS-01..03 — Wave 1+ now has automated verify command targets without re-bootstrapping tests.**
+
+## Performance
+
+- **Duration:** ~2 min (103s)
+- **Started:** 2026-04-30T15:09:41Z
+- **Completed:** 2026-04-30T15:11:24Z
+- **Tasks:** 3
+- **Files modified:** 7 (2 modified, 5 created)
+
+## Accomplishments
+
+- Installed `p-retry@8.0.0` as a runtime dependency — verified ESM import shape (`pRetry` + `AbortError` both export as functions) under the project's ESM config
+- Planted 9 spec-ID-named `it.todo` scaffolds in `secrets-resolver.test.ts` for RES-01..RES-09 (cache, dedup, retry, rate-limit bail, empty-resolution, preResolveAll, counters, log-leak, error-leak)
+- Planted 7 additional `it.todo` scaffolds across 4 test files for WATCH-01/02 (ConfigWatcher), CALL-01 (callsites grep), BOOT-DEGRADED-01 (daemon boot integration), and IPC-SECSTATUS-01..03 (zod-validated IPC handler + invalidate)
+- vitest reports 5 files / 16 todos / 0 failures across the new scaffolds
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Add p-retry@^8.0.0 dependency** — `c0f224a` (chore)
+2. **Task 2: Scaffold src/manager/__tests__/secrets-resolver.test.ts (RES-01..RES-09)** — `3297c76` (test)
+3. **Task 3: Scaffold remaining four test files (watcher, callsites, daemon-boot-degraded, secrets-status IPC)** — `d403770` (test)
+
+## Files Created/Modified
+
+- `package.json` — added `"p-retry": "^8.0.0"` to dependencies (only line added)
+- `package-lock.json` — regenerated with `node_modules/p-retry@8.0.0` entry + integrity hash
+- `src/manager/__tests__/secrets-resolver.test.ts` — 9 it.todo placeholders for RES-01..RES-09 (covers SEC-02/03/06/07 unit behaviors)
+- `src/manager/__tests__/secrets-resolver-watcher.test.ts` — 2 it.todo placeholders for SEC-05 (WATCH-01/02)
+- `src/manager/__tests__/secrets-resolver-callsites.test.ts` — 1 it.todo placeholder for SEC-01 (CALL-01: callsites grep assertion)
+- `src/manager/__tests__/daemon-boot-secrets-degraded.test.ts` — 1 it.todo placeholder for SEC-04 (BOOT-DEGRADED-01: integration test)
+- `src/ipc/__tests__/secrets-status.test.ts` — 3 it.todo placeholders for SEC-06 (IPC-SECSTATUS-01..03)
+
+## Decisions Made
+
+- **p-retry@8.0.0 (not hand-rolled retry):** RESEARCH.md §"Don't Hand-Roll" called this out — jitter + AbortError + onFailedAttempt hook are exactly what's hardest to get right. 10kB dep with zero transitive deps.
+- **`it.todo` (not `it.skip` or stubbed `it`):** vitest reports todo tests as todos, not failures. Wave 1+ executors replace each `it.todo` with a real `it`. No false-green from skipped tests; no false-red from missing implementations.
+- **Import-light scaffolds:** None of the 5 files reference `../secrets-resolver.js` (which doesn't exist yet). Wave 1 creates the production module; the scaffolds parse + pass today without it.
+- **vitest 4.x reporter compat:** Plan called for `--reporter=basic` flag, but vitest 4.x's basic reporter is unavailable as a CLI flag. Used the default reporter — same outcome (5 files / 16 todos / 0 failures), no functional impact.
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] vitest 4.x dropped `--reporter=basic` CLI flag**
+- **Found during:** Task 2 (verify command)
+- **Issue:** Plan's `<automated>` verify command used `npx vitest run ... --reporter=basic`. vitest 4.x errors with `ERR_LOAD_URL` because the basic reporter is no longer exposed as a CLI value.
+- **Fix:** Ran without the flag; default reporter shows the same `Tests  N todo` / `Tests  N skipped` / `Tests  0 failed` summary that the verify automation needed.
+- **Files modified:** None (verify-command-only deviation; plan markdown unchanged — Wave 1+ executors will hit the same vitest version and use the default reporter automatically).
+- **Verification:** `npx vitest run src/manager/__tests__/secrets-resolver.test.ts` reports `Tests  9 todo (9)` with exit 0.
+- **Committed in:** N/A (no source change required — only the local execution command differed from plan text)
+
+---
+
+**Total deviations:** 1 auto-fixed (1 blocking — tooling version drift)
+**Impact on plan:** No scope creep. The plan's intent (vitest reports todos, 0 failures) is satisfied; the specific CLI flag in the verify text is informational and Wave 1+ executors will adapt automatically.
+
+## Issues Encountered
+
+- `npm audit` reports 5 pre-existing vulnerabilities in the lockfile (4 moderate, 1 critical). NOT introduced by p-retry — these are inherited from upstream packages and predate this plan. Out of scope per the deviation rules' "scope boundary" guard. Logged here for awareness; not blocking.
+
+## User Setup Required
+
+None — no external service configuration required. p-retry is a pure-JS library with zero runtime config.
+
+## Next Phase Readiness
+
+- **Wave 1 (Plan 01) ready:** All 5 test files exist with the spec IDs Wave 1 needs to turn green. Wave 1's executor only writes the production `src/manager/secrets-resolver.ts` module + replaces `it.todo` with real `it` blocks.
+- **No blockers.** p-retry resolves; vitest sees the new files; no premature imports.
+- **Validation chain intact:** Per `104-VALIDATION.md`, every requirement (SEC-01..SEC-07) now has at least one automated verify command pointing at a real test file (todo today, real assertion in Wave 1+).
+
+## Self-Check
+
+Created files exist:
+- FOUND: package.json (modified, p-retry@^8.0.0 in dependencies)
+- FOUND: package-lock.json (regenerated)
+- FOUND: src/manager/__tests__/secrets-resolver.test.ts
+- FOUND: src/manager/__tests__/secrets-resolver-watcher.test.ts
+- FOUND: src/manager/__tests__/secrets-resolver-callsites.test.ts
+- FOUND: src/manager/__tests__/daemon-boot-secrets-degraded.test.ts
+- FOUND: src/ipc/__tests__/secrets-status.test.ts
+
+Commits exist:
+- FOUND: c0f224a (Task 1 — p-retry dep)
+- FOUND: 3297c76 (Task 2 — secrets-resolver scaffold)
+- FOUND: d403770 (Task 3 — remaining 4 scaffolds)
+
+## Self-Check: PASSED
+
+---
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
+*Completed: 2026-04-30*

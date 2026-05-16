@@ -190,3 +190,101 @@ describe("buildDreamPrompt — D-02 context assembler", () => {
     expect(estimatedInputTokens).toBeLessThanOrEqual(DREAM_PROMPT_INPUT_TOKEN_BUDGET);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 107 DREAM-OUT-01 — fallback envelope rule (rule 6)
+//
+// Pin the schema-correct fallback envelope contract: when the LLM cannot
+// produce valid JSON, it must output the exact 4-field empty envelope
+// matching dreamResultSchema. Existing rules 1-5 must remain unchanged
+// (Phase 95 static-grep regression rules).
+// ---------------------------------------------------------------------------
+describe("Phase 107 DREAM-OUT-01 fallback envelope rule", () => {
+  const baseInput: DreamPromptInput = {
+    agentName: "clawdy",
+    recentChunks: [],
+    memoryMd: "",
+    recentSummaries: [],
+    graphEdges: "",
+  };
+
+  it("rule 6 present in system prompt", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toMatch(/6\.\s+If you cannot produce valid JSON/);
+  });
+
+  it("schema-correct fallback envelope literal embedded verbatim", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toContain(
+      '{"newWikilinks":[],"promotionCandidates":[],"themedReflection":"","suggestedConsolidations":[]}',
+    );
+  });
+
+  it("fallback envelope keys exactly match dreamResultSchema", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    // All 4 schema keys appear in the fallback envelope literal.
+    expect(systemPrompt).toMatch(
+      /newWikilinks.*promotionCandidates.*themedReflection.*suggestedConsolidations/,
+    );
+  });
+
+  it("forbidden-preamble examples include 'Noted'", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toMatch(/Noted/);
+  });
+
+  it("existing rules 1-5 preserved (Phase 95 regression pin)", () => {
+    const { systemPrompt } = buildDreamPrompt(baseInput);
+    expect(systemPrompt).toMatch(
+      /1\.\s+Your response MUST be valid JSON, parseable by JSON\.parse/,
+    );
+    expect(systemPrompt).toMatch(/2\.\s+The FIRST character MUST be '\{'/);
+    expect(systemPrompt).toMatch(/3\.\s+The LAST character MUST be '\}'/);
+    expect(systemPrompt).toMatch(/4\.\s+NO markdown code fences/);
+    expect(systemPrompt).toMatch(
+      /5\.\s+NO explanation text before or after the JSON object/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ-04: dream prompt timestamps (chunk lastModified + summary endedAt)
+//
+// Open Question 2 LOCKED YES — Plan 02 must convert renderChunk (line 115)
+// and renderSummary (line 122) to TZ-aware timestamps when threaded an
+// agentTz. The dream-pass agent reads these prompts as agent-visible
+// context.
+//
+// Wave 0 RED: on main, both lines emit ISO UTC via toISOString(). After
+// Plan 02, threading agentTz produces "YYYY-MM-DD HH:mm:ss ZZZ".
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ-04: dream prompt TZ-aware timestamps", () => {
+  it("dream-prompt-tz-timestamps: chunk lastModified + summary endedAt render in canonical TZ-aware format when agentTz threaded", () => {
+    const input: DreamPromptInput = {
+      agentName: "fin-acquisition",
+      recentChunks: [
+        chunk("c1", "chunk body", "2026-04-30T18:32:51.000Z"),
+      ],
+      memoryMd: "",
+      recentSummaries: [
+        {
+          sessionId: "s1",
+          summary: "summary body",
+          endedAt: new Date("2026-04-30T18:32:51.000Z"),
+        },
+      ],
+      graphEdges: "",
+    };
+    // Phase 999.13 TZ-04 (Q2=YES) — DreamPromptInput.agentTz threads through
+    // renderChunk + renderSummary to produce TZ-aware timestamps.
+    const { userPrompt } = buildDreamPrompt({
+      ...input,
+      agentTz: "America/Los_Angeles",
+    });
+    // Canonical TZ-aware timestamp must appear (renderChunk + renderSummary).
+    // With agentTz=America/Los_Angeles, 2026-04-30T18:32:51Z → 2026-04-30 11:32:51 PDT
+    expect(userPrompt).toContain("2026-04-30 11:32:51 PDT");
+    // Negative assertion: ISO UTC literal must NOT appear.
+    expect(userPrompt).not.toContain("2026-04-30T18:32:51.000Z");
+  });
+});

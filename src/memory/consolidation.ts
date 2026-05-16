@@ -10,8 +10,36 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync, copyFileSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, basename } from "node:path";
 import { logger } from "../shared/logger.js";
+// Phase 115 sub-scope 13(b) — consolidation run-log writer.
+// Cross-agent transactional integrity surface; foundation for plan 115-09.
+import {
+  appendConsolidationRun,
+  type ConsolidationRunRow,
+} from "../manager/consolidation-run-log.js";
+// Phase 115 Plan 09 T02 — sub-scope 12 cross-agent consolidation
+// transactionality. The coordinator wraps fleet-level multi-agent
+// memory writes with `consolidation:<runId>` tagging + rollback. The
+// per-agent `runConsolidation` below stays the primary surface for
+// the cron handler in daemon.ts; the coordinator is the abstraction
+// the daemon will compose with when a future caller needs the
+// multi-agent atomic-batch semantic (e.g., a fleet-wide priority
+// dream-pass per CONTEXT D-05). Re-exporting here keeps the cross-
+// agent surface co-located with the per-agent surface so callers
+// that want either path import from one module.
+export {
+  CrossAgentCoordinator,
+  consolidationRunTag,
+  type CrossAgentCoordinatorDeps,
+} from "../manager/cross-agent-coordinator.js";
+export {
+  CONSOLIDATION_RUN_TAG_PREFIX,
+  type CrossAgentBatch,
+  type CrossAgentBatchStatus,
+  type CrossAgentBatchWrite,
+} from "../manager/cross-agent-coordinator.types.js";
 import {
   getISOWeek,
   getISOWeekYear,
@@ -30,6 +58,7 @@ import type {
   MonthlyDigest,
   ConsolidationResult,
 } from "./consolidation.types.js";
+import { isErrorSummary } from "./error-guard.js";
 
 /** Maximum combined character length before truncation of daily logs. */
 const MAX_PROMPT_CHARS = 30000;
@@ -56,6 +85,20 @@ export type ConsolidationDeps = {
   readonly memoryStore: MemoryStore;
   readonly embedder: EmbeddingService;
   readonly summarize: (prompt: string) => Promise<string>;
+  /**
+   * Phase 115 sub-scope 13(b) — optional agent label threaded into the
+   * consolidation run-log JSONL row's `target_agents` field. The daemon
+   * passes `agentConfig.name`; tests may omit it (the runner emits an
+   * empty `target_agents: []` array in that case so log readers can
+   * still distinguish "ran for unknown agent" from "ran for X" via the
+   * presence/contents of the array).
+   */
+  readonly runLabel?: string;
+  /**
+   * Phase 115 sub-scope 13(b) — optional override for the consolidation
+   * run-log directory. Tests can redirect away from `~/.clawcode/manager/`.
+   */
+  readonly runLogDirOverride?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -483,13 +526,22 @@ export async function archiveWeeklyDigests(
 // ---------------------------------------------------------------------------
 
 /**
- * Run the full consolidation pipeline:
+ * Run the full consolidation pipeline (PER-AGENT — single-agent surface):
  * 1. Detect unconsolidated weeks -> summarize -> write weekly digests -> archive dailies
  * 2. Detect unconsolidated months -> summarize -> write monthly digests -> archive weeklies
  *
  * Order matters: weekly BEFORE monthly (weekly digests are input to monthly).
  * Archive LAST after confirming digest write + SQLite insert succeeded.
  * Collects errors without stopping -- partial consolidation is better than none.
+ *
+ * Cross-agent fleet-level invocation (Phase 115 Plan 09 T02 / sub-scope 12):
+ * the daemon's cron handler (src/manager/daemon.ts) calls this function
+ * once PER agent — there is no fleet-level loop here. For multi-agent
+ * atomic-batch semantics (e.g., a future fleet-wide priority dream-pass
+ * per CONTEXT D-05), wrap with `CrossAgentCoordinator` exported above —
+ * the coordinator's `coordinator.runBatch(batch)` provides
+ * `consolidation:<runId>` tagging + rollback semantics across multiple
+ * per-agent stores. See src/manager/cross-agent-coordinator.ts.
  */
 export async function runConsolidation(
   deps: ConsolidationDeps,
@@ -507,6 +559,38 @@ export async function runConsolidation(
       filesArchived: 0,
       errors: Object.freeze([]),
     });
+  }
+
+  // Phase 115 sub-scope 13(b) — consolidation run-log started row.
+  // run_id is stable across the started → completed/failed transitions so
+  // reducers can compute the latest state per run. Wrapped in try/catch so
+  // a log-write failure NEVER aborts the consolidation runner.
+  const runId = randomBytes(8).toString("hex"); // 16-char URL-safe-ish id
+  const startedAt = new Date().toISOString();
+  const targetAgents: readonly string[] = deps.runLabel ? [deps.runLabel] : [];
+  try {
+    await appendConsolidationRun(
+      {
+        run_id: runId,
+        target_agents: targetAgents,
+        memories_added: 0,
+        status: "started",
+        errors: [],
+        started_at: startedAt,
+      },
+      deps.runLogDirOverride,
+    );
+  } catch (err) {
+    // Log write failure must NEVER break consolidation. The daemon log
+    // surfaces the issue; the runner still proceeds.
+    logger.warn(
+      {
+        action: "consolidation-run-log-append-failed",
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "[diag] consolidation-run-log unwriteable (non-fatal)",
+    );
   }
 
   // --- Phase 1: Weekly consolidation ---
@@ -527,6 +611,13 @@ export async function runConsolidation(
       // Build prompt and summarize
       const prompt = buildWeeklySummarizationPrompt(dailyLogs);
       const llmContent = await deps.summarize(prompt);
+
+      if (isErrorSummary(llmContent)) {
+        errors.push(
+          `Weekly consolidation skipped for ${weekGroup.year}-W${weekGroup.week}: summarize returned error response — ${llmContent.slice(0, 200)}`,
+        );
+        continue;
+      }
 
       // Write digest (markdown + SQLite)
       await writeWeeklyDigest(deps, weekGroup, llmContent);
@@ -563,6 +654,13 @@ export async function runConsolidation(
       const prompt = buildMonthlySummarizationPrompt(weeklyDigests);
       const llmContent = await deps.summarize(prompt);
 
+      if (isErrorSummary(llmContent)) {
+        errors.push(
+          `Monthly consolidation skipped for ${monthGroup.year}-${String(monthGroup.month).padStart(2, "0")}: summarize returned error response — ${llmContent.slice(0, 200)}`,
+        );
+        continue;
+      }
+
       // Write digest (markdown + SQLite)
       await writeMonthlyDigest(deps, monthGroup, llmContent);
       monthlyDigestsCreated += 1;
@@ -575,6 +673,38 @@ export async function runConsolidation(
       const msg = error instanceof Error ? error.message : "Unknown error";
       errors.push(`Monthly consolidation failed for ${monthGroup.year}-${monthGroup.month}: ${msg}`);
     }
+  }
+
+  // Phase 115 sub-scope 13(b) — consolidation run-log terminal row.
+  // Status: `completed` when the runner reached this point with no
+  // collected errors; `failed` when at least one weekly/monthly cycle
+  // accumulated an error in the `errors[]` array. Wrapped in its own
+  // try/catch so log failure NEVER mutates the returned ConsolidationResult.
+  const memoriesAdded = weeklyDigestsCreated + monthlyDigestsCreated;
+  const terminalStatus: ConsolidationRunRow["status"] =
+    errors.length > 0 ? "failed" : "completed";
+  try {
+    await appendConsolidationRun(
+      {
+        run_id: runId,
+        target_agents: targetAgents,
+        memories_added: memoriesAdded,
+        status: terminalStatus,
+        errors: errors.map((e) => (e.length > 200 ? e.slice(0, 200) : e)),
+        started_at: startedAt,
+        completed_at: new Date().toISOString(),
+      },
+      deps.runLogDirOverride,
+    );
+  } catch (err) {
+    logger.warn(
+      {
+        action: "consolidation-run-log-append-failed",
+        runId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      "[diag] consolidation-run-log unwriteable on terminal (non-fatal)",
+    );
   }
 
   return Object.freeze({

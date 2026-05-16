@@ -64,6 +64,14 @@ export const opRefreshHandler: RecoveryHandler = {
         // shapes).
         let resolved = value;
         for (const ref of refs) {
+          // Phase 999.10 plan 03 (SEC-05) — drop the cached value FIRST.
+          // The whole reason this handler is firing is that the value the
+          // MCP child received was stale (auth-error). If deps.opRead is
+          // backed by SecretsResolver (production wiring), it would
+          // otherwise hit the cache and serve back the same stale value.
+          // The optional `?.` keeps pre-999.10 deps (without invalidate)
+          // working unchanged — see REC-OP-REFRESH-INV-02 back-compat test.
+          deps.invalidate?.(ref);
           const fresh = await deps.opRead(ref);
           resolved = resolved.replace(ref, fresh);
           resolvedCount++;

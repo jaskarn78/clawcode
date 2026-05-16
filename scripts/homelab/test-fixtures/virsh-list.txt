@@ -1,0 +1,7 @@
+ Id   Name             State
+------------------------------------
+ 1    WebServer        running
+ 2    Windows11-Min    running
+ -    Moltbot-VM       shut off
+ 3    HomeAssistant    running
+ 4    WildcatVM-NEW    running

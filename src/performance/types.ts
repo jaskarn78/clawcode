@@ -97,6 +97,66 @@ export type TurnRecord = {
    * Plan 57-03 migrates DiscordBridge + TaskScheduler to provide it.
    */
   readonly turnOrigin?: TurnOrigin;
+  /**
+   * Phase 115 Plan 00 — slot for the bounded-tier injected chars (sub-scope 1).
+   * Wired by Plan 115-02 once the Tier 1 enforcement lands. NULL on legacy turns.
+   */
+  readonly tier1InjectChars?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the bounded-tier budget utilization ratio
+   * (sub-scope 1). Wired by Plan 115-02. NULL on legacy turns.
+   */
+  readonly tier1BudgetPct?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the per-turn MCP tool-cache hit rate
+   * (sub-scope 15). Wired by Plan 115-07. NULL on legacy turns.
+   */
+  readonly toolCacheHitRate?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the cumulative tool-cache size in MB
+   * (sub-scope 15). Wired by Plan 115-07. NULL on legacy turns.
+   */
+  readonly toolCacheSizeMb?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the count of `clawcode_memory_*` lazy-recall
+   * tool calls in this turn (sub-scope 7). Wired by Plan 115-05. NULL on legacy turns.
+   */
+  readonly lazyRecallCallCount?: number | null;
+  /**
+   * Phase 115 Plan 00 — slot for the rolling-24h count of prompt-bloat warnings
+   * for this agent (sub-scope 13). Wired by Plan 115-02. NULL on legacy turns.
+   */
+  readonly promptBloatWarnings24h?: number | null;
+  /**
+   * Phase 115 Plan 08 T01 — sum of pure-execution durations for every
+   * `tool_call.<name>` span in this turn (sub-scope 17a). Each span at
+   * session-adapter.ts:1419-1514 measures `tool_use_emitted →
+   * tool_result_arrived` — the SDK dispatch + actual tool runtime, NOT the
+   * LLM resume that follows. Aggregated per-turn so the dashboard can
+   * render execution-side latency distinct from the wall-clock roundtrip
+   * column below. NULL on turns with no tool_use blocks.
+   */
+  readonly toolExecutionMs?: number | null;
+  /**
+   * Phase 115 Plan 08 T01 — sum of per-batch roundtrip durations for every
+   * tool_use batch in this turn (sub-scope 17a). Each roundtrip opens when
+   * the first tool_use block appears in a parent assistant message and
+   * closes when the NEXT parent assistant message arrives — i.e., the
+   * full wall-clock between "LLM emitted tool_use" and "LLM resumed
+   * generation". Difference (roundtrip - execution) is the prompt-bloat
+   * tax / LLM-resume cost — the headline 60-700s p95 numbers are this
+   * column, not toolExecutionMs. NULL on turns with no tool_use blocks.
+   */
+  readonly toolRoundtripMs?: number | null;
+  /**
+   * Phase 115 Plan 08 T01 — MAX parallel batch size across all parent
+   * assistant messages in this turn (sub-scope 17b). 1 for sequential-only
+   * turns; N for any turn that emitted ≥1 batch with N tool_use blocks.
+   * Subsumes the `> 0` "had any tool" check used by T02's
+   * tool_use_rate_per_turn computation. NULL on turns with no tool_use
+   * blocks.
+   */
+  readonly parallelToolCallCount?: number | null;
 };
 
 /**

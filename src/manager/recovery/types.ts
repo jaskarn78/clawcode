@@ -65,6 +65,16 @@ export interface RecoveryDeps {
   readonly writeEnvForServer: (serverName: string, env: Record<string, string>) => Promise<void>;
   readonly now?: () => Date;
   readonly log: Logger;
+  /**
+   * Phase 999.10 plan 03 (SEC-05) — invalidate the SecretsResolver cache for
+   * a given op:// URI before re-resolving. Optional for back-compat with
+   * pre-999.10 tests / deps that don't have a cache to invalidate.
+   *
+   * The op-refresh handler calls this BEFORE deps.opRead(ref) so that a
+   * cached stale value (which is what triggered the auth-error in the
+   * first place) cannot be returned by opRead's underlying SecretsResolver.
+   */
+  readonly invalidate?: (reference: string) => void;
 }
 
 /**

@@ -1,0 +1,32 @@
+{
+  "Self": {
+    "HostName": "clawdy",
+    "DNSName": "clawdy.example.ts.net.",
+    "TailscaleIPs": ["100.98.211.108"],
+    "OS": "linux",
+    "LastSeen": "2026-05-15T22:00:00Z"
+  },
+  "Peer": {
+    "n1": {
+      "HostName": "unraid",
+      "DNSName": "unraid.example.ts.net.",
+      "TailscaleIPs": ["100.117.234.17"],
+      "OS": "linux",
+      "LastSeen": "2026-05-15T22:00:00Z"
+    },
+    "n2": {
+      "HostName": "oc-server",
+      "DNSName": "oc-server.example.ts.net.",
+      "TailscaleIPs": ["100.71.14.96"],
+      "OS": "linux",
+      "LastSeen": "2026-05-15T22:00:00Z"
+    },
+    "n3": {
+      "HostName": "jas-mbp",
+      "DNSName": "jas-mbp.example.ts.net.",
+      "TailscaleIPs": ["100.111.222.30"],
+      "OS": "macOS",
+      "LastSeen": "2026-05-15T22:00:00Z"
+    }
+  }
+}

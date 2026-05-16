@@ -1,16 +1,306 @@
 import type { AgentSessionConfig } from "./types.js";
 import type { SdkModule, SdkQueryOptions, SdkQuery, SdkStreamMessage, SlashCommand, PermissionMode } from "./sdk-types.js";
+// Phase 136 T-04 — seam chokepoint for the @anthropic-ai/claude-agent-sdk
+// dynamic import. Replaces the prior inline `await import(...)` in
+// `loadSdk()` below. See `src/llm-runtime/backends/anthropic-agent-sdk.ts`.
+import { loadAnthropicAgentSdkModule } from "../llm-runtime/index.js";
 import { resolveModelId } from "./model-resolver.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 import type { AttemptRecord } from "./recovery/types.js";
+import type { FsCapabilitySnapshot } from "./persistent-session-handle.js";
+import type { RateLimitTracker } from "../usage/rate-limit-tracker.js";
 import {
   type SkillUsageTracker,
   extractSkillMentions,
 } from "../usage/skill-usage-tracker.js";
+// Phase 117 Plan 04 T03/T04 — native advisor budget observer (typed deps).
+// `EventEmitter` is the bus exposed on SessionManager.advisorEvents; the
+// adapter emits the two observational events on it. `AdvisorBudget`
+// receives recordCall per `usage.iterations[].type === "advisor_message"`
+// entry at the terminal `result` event (ground-truth count per RESEARCH §13.6).
+import type { EventEmitter } from "node:events";
+import type { AdvisorBudget } from "../usage/advisor-budget.js";
+import type {
+  AdvisorInvokedEvent,
+  AdvisorResultedEvent,
+} from "../advisor/types.js";
 import { createPersistentSessionHandle } from "./persistent-session-handle.js";
+// Phase 115 sub-scope 14 — fs/os/path imports for the diagnostic baseopts
+// dump helper. T03 collapsed the previous TWO separate imports (a top-of-
+// file standalone writeFile from the 2026-05-07 hotfix + a separate mkdir)
+// into a single combined import. The hardcoded agent-name set that those
+// imports originally enabled has been removed — gating now lives entirely
+// in `agents[*].debug.dumpBaseOptionsOnSpawn`.
+import { writeFile, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join as pathJoin } from "node:path";
+
+/**
+ * Phase 127 — adapter-only fields carried alongside SdkQueryOptions on
+ * the per-handle baseOptions bag. `stripHandleOnlyFields` removes these
+ * before forwarding to `sdk.query` so the SDK never sees unknown keys.
+ *
+ * `mutableSuffix` predates Phase 127 (Phase 52 Plan 02) but is captured
+ * here as a single source of truth for the bag's full shape.
+ *   - mutableSuffix: per-turn prompt-prepend string carried OUTSIDE the
+ *     cached stable prefix (Phase 52 cache hygiene).
+ *   - streamStallTimeoutMs: stream-stall supervisor threshold (Phase
+ *     127). Read by persistent-session-handle.ts + wrapSdkQuery to
+ *     construct a `StreamStallTracker` per turn. Optional — when
+ *     undefined, the tracker defaults to 180_000ms (matches the
+ *     loader cascade default).
+ *   - onStreamStall: callback invoked on stall trip. Plan 02 wires the
+ *     Discord notification + session-log row here; Plan 01 keeps it
+ *     undefined and the production wiring still emits the structured
+ *     `phase127-stream-stall` log line + aborts the SDK query so the
+ *     protective behavior works even without the side-effect surface.
+ */
+export type AdapterBaseOptions = SdkQueryOptions & {
+  readonly mutableSuffix?: string;
+  readonly streamStallTimeoutMs?: number;
+  readonly onStreamStall?: (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void;
+};
+
+/**
+ * Phase 115 sub-scope 14 — secret redaction helper for diagnostic dumps.
+ *
+ * Walks a value structurally; for any object key matching the secret-key
+ * regex, replaces its value with "<REDACTED>". For string leaves whose
+ * content begins with a known secret value-prefix (sk-ant-, Bearer , etc.),
+ * also replaces with "<REDACTED>". Circular references emit "<CIRCULAR>"
+ * exactly once and do not loop.
+ *
+ * Permanent (kept after T03 removes the hardcoded allowlist) — every dump
+ * call routes through this helper before serialization.
+ */
+function redactSecrets<T>(value: T): T {
+  // REDACTED targets per Phase 115 threat model: ANTHROPIC_API_KEY (env var), OAuth bearer (Bearer prefix), Discord token (*_TOKEN/DISCORD_TOKEN key match).
+  // Each is HIGH severity in the 115-02 threat-model table; tests assert redaction for all three.
+  const SECRET_KEYS =
+    /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|DISCORD_TOKEN|DISCORD_BOT_TOKEN|GITHUB_TOKEN|.*_TOKEN|.*_KEY|.*_SECRET|password|credentials)$/i;
+  const SECRET_VALUE_PREFIXES = [
+    "sk-ant-", // Anthropic API key
+    "sk-", // OpenAI / generic API key
+    "ghp_", // GitHub personal access token
+    "ghs_", // GitHub server token
+    "Bearer ", // OAuth bearer literal (e.g. ~/.claude/.credentials.json)
+  ];
+
+  const seen = new WeakSet<object>();
+
+  function recurse(node: unknown): unknown {
+    if (node === null || node === undefined) return node;
+    if (typeof node === "string") {
+      for (const prefix of SECRET_VALUE_PREFIXES) {
+        if (node.startsWith(prefix)) return "<REDACTED>";
+      }
+      return node;
+    }
+    if (typeof node !== "object") return node;
+    if (seen.has(node as object)) return "<CIRCULAR>";
+    seen.add(node as object);
+    if (Array.isArray(node)) return node.map(recurse);
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (SECRET_KEYS.test(k)) {
+        out[k] = "<REDACTED>";
+      } else {
+        out[k] = recurse(v);
+      }
+    }
+    return out;
+  }
+
+  return recurse(value) as T;
+}
+
+/**
+ * Phase 115 sub-scope 14 — debug dump baseopts on agent spawn.
+ *
+ * **History.** Pre-Phase-115: a hardcoded set of two production agent
+ * names plus a top-of-file standalone writeFile import, deployed during
+ * the 2026-05-07 incident response.
+ * **Phase 115 sub-scope 14 (this plan).** Replaced with config flag
+ * `agents[*].debug.dumpBaseOptionsOnSpawn` (default false). T01 plumbed
+ * the flag alongside the agent-name set (transition state). T03 removed
+ * the agent-name set + collapsed the duplicate writeFile import — the
+ * flag is now the SOLE gate.
+ *
+ * **To enable for an agent**: set `debug: { dumpBaseOptionsOnSpawn: true }`
+ * in `clawcode.yaml` under that agent's entry, then deploy. No code
+ * change required.
+ *
+ * **Output**: per-agent under
+ * `~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json`
+ * (slugified agent name, ts in unix-epoch milliseconds). Operator-
+ * readable; never written to /tmp (the original 2026-05-07 path was
+ * /tmp — Phase 115 moves it under the daemon's home tree for easier
+ * cleanup + permission isolation).
+ *
+ * **Redaction**: secrets are stripped via `redactSecrets` (regex-match on
+ * key names + value-prefix detection — ANTHROPIC_API_KEY, OAuth bearer,
+ * Discord token; threat-model HIGH severity for each). Defense-in-depth:
+ * env + mcpServers[].env are wholesale-stripped (set to "<stripped>")
+ * BEFORE redactSecrets walks the rest of the structure, so unknown env
+ * vars still get blanked even when the regex doesn't match.
+ *
+ * **Failure semantics**: failures are silenced — diagnostic capture MUST
+ * NEVER break session boot. The catch swallows mkdir / write errors.
+ */
+async function debugDumpBaseOptions(
+  flow: "create" | "resume",
+  agentName: string,
+  baseOptions: AdapterBaseOptions,
+  dumpEnabled: boolean,
+): Promise<void> {
+  // T03 final state — flag is the SOLE gate. The hardcoded agent-name set
+  // that previously fell through this branch has been removed; an operator
+  // who wants the dump for any agent (the two previously-special-cased
+  // production agents included) sets `debug.dumpBaseOptionsOnSpawn: true`
+  // in clawcode.yaml and redeploys.
+  if (!dumpEnabled) return;
+  try {
+    // Wholesale strip env + mcpServers[].env BEFORE redactSecrets walks the
+    // rest. Defense-in-depth: regex catches known secret-key patterns; the
+    // wholesale strip catches everything else in the env namespace.
+    const sanitizedMcp = Array.isArray(baseOptions.mcpServers)
+      ? baseOptions.mcpServers.map((s) => ({ ...s, env: "<stripped>" }))
+      : Object.fromEntries(
+          Object.entries(baseOptions.mcpServers ?? {}).map(([k, v]) => [
+            k,
+            { ...(v as object), env: "<stripped>" },
+          ]),
+        );
+    const dumpInput = {
+      ts: new Date().toISOString(),
+      flow,
+      agent: agentName,
+      baseOptions: {
+        ...baseOptions,
+        env: "<stripped>",
+        mcpServers: sanitizedMcp,
+      },
+    };
+    // Apply redactSecrets to catch any remaining secret-shaped values
+    // anywhere in the structure (e.g., a stray Bearer token in headers,
+    // an ANTHROPIC_API_KEY captured in a comment, etc.).
+    const redacted = redactSecrets(dumpInput);
+    const slug = agentName.replace(/\s+/g, "_");
+    const dirPath = pathJoin(
+      homedir(),
+      ".clawcode",
+      "agents",
+      slug,
+      "diagnostics",
+    );
+    await mkdir(dirPath, { recursive: true });
+    const filePath = pathJoin(
+      dirPath,
+      `baseopts-${flow}-${Date.now()}.json`,
+    );
+    await writeFile(filePath, JSON.stringify(redacted, null, 2));
+  } catch {
+    /* non-fatal — diagnostic capture MUST NEVER break session boot */
+  }
+}
+
+/**
+ * Phase 115 sub-scope 13(a) — `prompt-bloat-suspected` classifier.
+ *
+ * Pure function: callers supply the SDK error + the latest known stable-
+ * prefix length for the agent + a logger; the classifier decides whether
+ * to emit a `[diag] likely-prompt-bloat` warn line. Threshold 20,000 chars
+ * is initial; future plans (115-08) may refine based on observed false-
+ * positive rate.
+ *
+ * The daemon-side log line is the operator-visible contract — it surfaces
+ * in the `clawcode-status` slash command + dashboard via TraceCollector
+ * counter (when wired by 115-00-T02; until then the counter is best-effort
+ * and silently no-ops on missing column).
+ *
+ * Trigger conditions (BOTH must hold):
+ *   1. Error message contains "invalid_request_error" OR "400"
+ *   2. latestStablePrefixChars > PROMPT_BLOAT_THRESHOLD
+ *
+ * Returns `true` when the classifier fires (test-friendly handle), `false`
+ * when the error doesn't match either condition.
+ */
+export const PROMPT_BLOAT_THRESHOLD = 20_000; // chars — D-04 baseline
+
+export interface PromptBloatLogger {
+  warn(obj: Record<string, unknown>, msg?: string): void;
+}
+
+export interface PromptBloatTraceSink {
+  /**
+   * Best-effort counter increment. Implementations MUST swallow internal
+   * errors (e.g. missing `prompt_bloat_warnings_24h` column when 115-00-T02
+   * has not landed yet). Classifier is operator-visibility-first; the trace
+   * counter is a follow-on metric, not a correctness invariant.
+   */
+  incrementPromptBloatWarning(agentName: string): void;
+}
+
+export function classifyPromptBloat(
+  error: unknown,
+  latestStablePrefixChars: number,
+  agentName: string,
+  log: PromptBloatLogger,
+  traceSink?: PromptBloatTraceSink,
+): boolean {
+  const msg = (error as { message?: string } | null)?.message ?? "";
+  const isInvalidReq =
+    msg.includes("invalid_request_error") || msg.includes("400");
+  if (!isInvalidReq) return false;
+  if (latestStablePrefixChars <= PROMPT_BLOAT_THRESHOLD) return false;
+
+  log.warn(
+    {
+      agent: agentName,
+      promptChars: latestStablePrefixChars,
+      threshold: PROMPT_BLOAT_THRESHOLD,
+      action: "prompt-bloat-suspected",
+    },
+    "[diag] likely-prompt-bloat",
+  );
+
+  if (traceSink) {
+    try {
+      traceSink.incrementPromptBloatWarning(agentName);
+    } catch {
+      /*
+       * Phase 115 dependency note: traces.db.prompt_bloat_warnings_24h
+       * column is added by 115-00-T02 (separate plan, possibly different
+       * worktree/wave). Until that DDL lands, the increment may throw
+       * SQLITE_ERROR "no such column". The classifier's primary contract
+       * is the operator-visible log line above; the counter is a follow-
+       * on metric, so a missing column degrades gracefully without
+       * breaking the warn path.
+       */
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Phase 115 sub-scope 14 — exported for unit testing (redaction + gate
+ * behaviour). Production code calls `debugDumpBaseOptions` above.
+ *
+ * T03 dropped the previously-exported agent-name set from this bundle —
+ * the hardcoded allowlist no longer exists and the test surface no
+ * longer needs it.
+ */
+export const _internal_phase115 = {
+  redactSecrets,
+  debugDumpBaseOptions,
+} as const;
 
 /**
  * Phase 52 Plan 02 — per-turn prefixHash provider contract.
@@ -49,6 +339,53 @@ export type SkillTrackingConfig = {
   readonly skillUsageTracker: SkillUsageTracker;
   readonly agentName: string;
   readonly skillCatalogNames: readonly string[];
+};
+
+/**
+ * Phase 117 Plan 04 T03/T04 — native advisor observer wiring.
+ *
+ * Threaded into the adapter so `iterateWithTracing` can:
+ *
+ *   1. Scan each parent assistant message's `content[]` for the pair
+ *      `server_tool_use{name:"advisor"}` + `advisor_tool_result` and
+ *      emit `advisor:invoked` / `advisor:resulted` on `advisorEvents`
+ *      (RESEARCH §13.1 — `server_tool_use.input` is always empty `{}`;
+ *      §13.3 — both blocks arrive in the SAME assistant message's
+ *      `content[]`; §13.4 — three result-content variants).
+ *
+ *   2. At the terminal `result` event, count
+ *      `usage.iterations[].type === "advisor_message"` entries and call
+ *      `advisorBudget.recordCall(agentName)` ONCE PER ITERATION (ground-
+ *      truth count per RESEARCH §13.6). The per-block scan in step 1 is
+ *      the EARLY signal for Discord visibility; only the terminal event
+ *      charges the budget — they must NOT double-record (RESEARCH §6
+ *      Pitfall 4 boundary). The block scan emits events; the result
+ *      iteration parser records the call. Different responsibilities.
+ *
+ * Observational ONLY (RESEARCH §6 Pitfall 1 + Pitfall 7 invariant):
+ * every emit and recordCall is wrapped in try/catch in the adapter so a
+ * listener throw or a DB write failure cannot break the parent message
+ * path. The adapter mirrors the existing `skillTracking` observational
+ * contract — same fail-silent guardrails (line 1722 in this file).
+ *
+ * Optional throughout — when absent (test paths, agents with the fork
+ * backend, agents that explicitly disabled the advisor in config), the
+ * observer is a no-op. Production SessionManager threads this in via
+ * `makeAdvisorObserver(agentName)` once `advisorBudget` is wired through
+ * `SessionManagerOptions` (daemon edge).
+ *
+ * See:
+ *   - `src/advisor/types.ts` — `AdvisorInvokedEvent`, `AdvisorResultedEvent`
+ *     event payload shapes.
+ *   - `src/usage/advisor-budget.ts` — `AdvisorBudget.recordCall(agent)`.
+ *   - `.planning/phases/117-claude-code-advisor-pattern-multi-backend-scaffold-anthropic/117-RESEARCH.md`
+ *     §2.1 (parse strategy), §13.1/13.3/13.4 (block shapes), §13.6
+ *     (terminal-event iterations), §13.10 (emitter ownership).
+ */
+export type AdvisorObserverConfig = {
+  readonly agentName: string;
+  readonly advisorEvents: EventEmitter;
+  readonly advisorBudget: AdvisorBudget;
 };
 
 /**
@@ -136,6 +473,20 @@ export type SessionHandle = {
    */
   hasActiveTurn: () => boolean;
   /**
+   * Phase 124 follow-up — ms-epoch timestamp the in-flight turn began.
+   *
+   * Returns null on a fresh handle, between turns, and after close(). Set at
+   * the TOP of the inner turnQueue.run callback inside send / sendAndCollect
+   * / sendAndStream (after the queue picks the turn up — not before, which
+   * would count queue-wait time). Cleared in `finally` so a rejected turn
+   * (AbortError, generator-dead) still releases the slot.
+   *
+   * Optional on the type so legacy mock handles and the v2.0 contract stay
+   * compatible — consumers must null-check (`handle.getTurnStartedAt?.()`).
+   * Read by the `compact-session` IPC handler to enforce ERR_TURN_TOO_LONG.
+   */
+  getTurnStartedAt?: () => number | null;
+  /**
    * Phase 85 Plan 01 TOOL-01 — per-handle MCP server state accessor.
    *
    * Mirrors `SessionManager.getMcpStateForAgent(name)` so TurnDispatcher-
@@ -146,6 +497,32 @@ export type SessionHandle = {
    */
   getMcpState: () => ReadonlyMap<string, McpServerState>;
   setMcpState: (state: ReadonlyMap<string, McpServerState>) => void;
+  /**
+   * Phase 96 Plan 01 D-CONTEXT — per-handle filesystem capability snapshot
+   * accessor. Lazy-init: returns an empty Map until the first runFsProbe
+   * outcome is populated by SessionManager (boot probe + heartbeat tick +
+   * on-demand). Read by Plan 96-02 prompt-builder, Plan 96-03
+   * clawcode_list_files, Plan 96-04 share-file boundary check.
+   *
+   * 6th application of the post-construction DI mirror pattern.
+   */
+  getFsCapabilitySnapshot: () => ReadonlyMap<string, FsCapabilitySnapshot>;
+  setFsCapabilitySnapshot: (snapshot: ReadonlyMap<string, FsCapabilitySnapshot>) => void;
+  /**
+   * Phase 103 OBS-04 / OBS-05 — per-handle RateLimitTracker mirror (DI'd
+   * post-construction by SessionManager so `iterateUntilResult` can dispatch
+   * rate_limit_event messages without reaching into SessionManager's private
+   * maps). 7th application of the post-construction DI mirror pattern (after
+   * McpState, FlapHistory, RecoveryAttemptHistory, SupportedCommands,
+   * ModelMirror, FsCapability).
+   *
+   * `getRateLimitTracker` returns undefined until `setRateLimitTracker` has
+   * been called. The dispatch path uses optional-chaining so the race window
+   * between handle construction and tracker injection silently drops events
+   * (Pitfall 8 — best-effort capture).
+   */
+  getRateLimitTracker: () => RateLimitTracker | undefined;
+  setRateLimitTracker: (tracker: RateLimitTracker) => void;
   /**
    * Phase 94 Plan 02 TOOL-03 — per-handle flap-history Map for the D-12
    * 5min flap-stability window. Stable Map identity across calls (the
@@ -176,6 +553,47 @@ export type SessionHandle = {
    * when the SDK init handshake races the first caller.
    */
   getSupportedCommands: () => Promise<readonly SlashCommand[]>;
+  /**
+   * Phase 124 Plan 05 — live hot-swap to a forked SDK session.
+   *
+   * Closes the current SDK Query and reopens one resumed against
+   * `newSessionId`, preserving handle identity. The daemon's
+   * `sessions` Map and Discord bridge keep their existing reference;
+   * the next `send` dispatches into the new SDK query, writing to
+   * the fork JSONL on disk instead of the original.
+   *
+   * Serialized through the SerialTurnQueue so it cannot interleave
+   * with an in-flight turn. Returns a Promise that resolves AFTER
+   * the underlying SDK rebuild succeeds; rejects (without disturbing
+   * the old epoch) when sdk.query throws on the rebuild path.
+   *
+   * Additive-optional: the legacy wrapSdkQuery handle does NOT
+   * implement this (test-only path; no production caller). The
+   * Phase 124 Plan 01 `daemon-compact-session-ipc.ts` handler treats
+   * a missing `swap` as `swapped_live: false` so backward compat is
+   * preserved end-to-end.
+   */
+  swap?: (newSessionId: string) => Promise<void>;
+  /**
+   * Phase 124 Plan 05 — monotonic epoch counter. Starts at 0;
+   * incremented once per successful swap. Tests + observability
+   * consumers (prefix-hash provider, skill caches) can detect epoch
+   * boundaries by tracking this value across calls.
+   */
+  getEpoch?: () => number;
+  /**
+   * FIND-123-A.next T-02 — live claude subprocess PID captured by the
+   * structural spawn wrapper at the most recent (re-)spawn.
+   *
+   * Additive-optional: the legacy wrapSdkQuery handle (test-only) does
+   * NOT implement this. Daemon shutdown reads via optional-chaining
+   * (`handle.getClaudePid?.() ?? null`) so test fixtures without the
+   * wrapper still close cleanly via the existing backstop reaper.
+   *
+   * Returns null when the sink has not yet been populated, when the
+   * handle is closed, or when the SDK respawn produced no PID.
+   */
+  getClaudePid?: () => number | null;
 };
 
 /**
@@ -193,6 +611,9 @@ export type SessionAdapter = {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    // Phase 117 Plan 04 T03/T04 — native advisor observer. Optional so
+    // mock adapters / test paths / fork-backend agents skip it.
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle>;
   resumeSession(
     sessionId: string,
@@ -200,6 +621,7 @@ export type SessionAdapter = {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle>;
 };
 
@@ -368,6 +790,33 @@ export class MockSessionHandle implements SessionHandle {
   }
 
   /**
+   * Phase 96 Plan 01 D-CONTEXT — test-mock filesystem capability snapshot
+   * accessor. In-memory map, no fs interaction. Tests can drive
+   * setFsCapabilitySnapshot to exercise downstream consumers (Plans
+   * 96-02/03/04 prompt-builder / list-files / share-file).
+   */
+  private fsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> = new Map();
+  getFsCapabilitySnapshot(): ReadonlyMap<string, FsCapabilitySnapshot> {
+    return this.fsCapabilitySnapshot;
+  }
+  setFsCapabilitySnapshot(snapshot: ReadonlyMap<string, FsCapabilitySnapshot>): void {
+    this.fsCapabilitySnapshot = new Map(snapshot);
+  }
+
+  /**
+   * Phase 103 OBS-04 — test-mock RateLimitTracker accessor. Tests can drive
+   * setRateLimitTracker to exercise downstream consumers (Plan 03 IPC +
+   * /clawcode-status / /clawcode-usage renderers).
+   */
+  private rateLimitTracker: RateLimitTracker | undefined = undefined;
+  getRateLimitTracker(): RateLimitTracker | undefined {
+    return this.rateLimitTracker;
+  }
+  setRateLimitTracker(tracker: RateLimitTracker): void {
+    this.rateLimitTracker = tracker;
+  }
+
+  /**
    * Phase 94 Plan 02 TOOL-03 — test-mock flap-history accessor.
    * Stable Map identity across calls (matches the production handle
    * contract); filter mutates in-place per tick.
@@ -414,6 +863,26 @@ export class MockSessionHandle implements SessionHandle {
   }
 
   /**
+   * FIND-123-A.next T-04 — claude subprocess PID returned by the sink in
+   * production. The mock keeps a settable value so SM tests can simulate
+   * the sink's "populated after spawn" semantics with deterministic
+   * timing (no real /proc walk).
+   *
+   * Defaults to null (sink not yet populated). `__testSetClaudePid(n)`
+   * flips it to a positive integer mid-test to mirror the SDK callback
+   * writing into pidSink on spawn.
+   */
+  private claudePidValue: number | null = null;
+
+  getClaudePid(): number | null {
+    return this.claudePidValue;
+  }
+
+  __testSetClaudePid(pid: number | null): void {
+    this.claudePidValue = pid;
+  }
+
+  /**
    * Simulate a session crash. Triggers the onError callback.
    */
   simulateCrash(error?: Error): void {
@@ -440,6 +909,10 @@ export class MockSessionAdapter implements SessionAdapter {
   readonly usageCallbacks: Map<string, UsageCallback> = new Map();
   readonly prefixHashProviders: Map<string, PrefixHashProvider> = new Map();
   readonly skillTrackingConfigs: Map<string, SkillTrackingConfig> = new Map();
+  // Phase 117 Plan 04 T03/T04 — mirror the observer wiring on the mock
+  // so test paths can assert "advisor observer wired" without spinning
+  // up the SDK. Captured per-session for inspection by tests.
+  readonly advisorObservers: Map<string, AdvisorObserverConfig> = new Map();
   private counter = 0;
 
   async createSession(
@@ -447,6 +920,7 @@ export class MockSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     this.counter += 1;
     const sessionId = `mock-${config.name}-${this.counter}`;
@@ -461,6 +935,9 @@ export class MockSessionAdapter implements SessionAdapter {
     if (skillTracking) {
       this.skillTrackingConfigs.set(sessionId, skillTracking);
     }
+    if (advisorObserver) {
+      this.advisorObservers.set(sessionId, advisorObserver);
+    }
     return handle;
   }
 
@@ -470,6 +947,7 @@ export class MockSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     const existing = this.sessions.get(sessionId);
     if (usageCallback) {
@@ -480,6 +958,9 @@ export class MockSessionAdapter implements SessionAdapter {
     }
     if (skillTracking) {
       this.skillTrackingConfigs.set(sessionId, skillTracking);
+    }
+    if (advisorObserver) {
+      this.advisorObservers.set(sessionId, advisorObserver);
     }
     if (existing) {
       return existing;
@@ -524,16 +1005,84 @@ export function buildCleanEnv(): Record<string, string | undefined> {
  * Exported for tests + external callers; internal callers (createSession /
  * resumeSession) use it below. NEVER replace with a raw `string` systemPrompt —
  * that loses the preset's cache scaffolding (CONTEXT D-01 LOCKED).
+ *
+ * # SDK shape invariant (LOCKED — DO NOT MODIFY)
+ *
+ *   { type: "preset",
+ *     preset: "claude_code",
+ *     append: <stablePrefix>,
+ *     excludeDynamicSections: <bool> }
+ *
+ * This shape is locked across phases because the Claude Code CLI subprocess
+ * owns the actual API request; the daemon hands it the preset+append form
+ * as a *routing instruction* — "this stuff is stable, please cache it."
+ * Replacing this with a raw `string` systemPrompt would strip the preset's
+ * cache scaffolding and bypass `excludeDynamicSections`.
+ *
+ * Phase history (lock invariants — each phase only adds bytes / flags
+ * INSIDE the locked shape; none has changed the shape itself):
+ *
+ *   - **Phase 52 Plan 02:** introduced the preset+append separation.
+ *     `append` carries the daemon-assembled stable prefix; mutable
+ *     content goes through the user-message preamble instead.
+ *   - **Phase 115 sub-scope 2 (Plan 115-01):** added the
+ *     `excludeDynamicSections` flag (defaults true). When true, the
+ *     SDK strips per-machine dynamic sections (cwd, auto-memory paths,
+ *     git status) from the cached system prompt and re-injects them
+ *     as the first user message — improves cross-agent prompt-cache
+ *     reuse. Has no effect when systemPrompt is a string (custom
+ *     prompt), but our preset shape honors it. Per Phase 115 D-02 the
+ *     flag is default-on with explicit revert path via per-agent /
+ *     defaults config.
+ *   - **Phase 115 sub-scope 5 (Plan 115-04):** the `append` value now
+ *     contains a `<!-- phase115-cache-breakpoint -->` HTML-comment
+ *     marker between the static and dynamic portions of the stable
+ *     prefix (when `cacheBreakpointPlacement === "static-first"`,
+ *     which is the default). The marker is INSIDE the cached append
+ *     bytes — Anthropic's prompt cache sees it as just bytes; the
+ *     marker's only role is letting downstream observability
+ *     (Plan 115-08) hash-split the static vs dynamic portions for
+ *     diagnostics. The SDK call shape itself is UNCHANGED — only the
+ *     content of `stablePrefix` carries the marker.
+ *
+ * NEVER replace this with a raw `string` systemPrompt — that loses the
+ * preset's cache scaffolding AND silently drops the breakpoint marker.
  */
 export function buildSystemPromptOption(
   stablePrefix: string,
+  excludeDynamicSections?: boolean,
 ):
-  | { readonly type: "preset"; readonly preset: "claude_code"; readonly append: string }
-  | { readonly type: "preset"; readonly preset: "claude_code" } {
+  | {
+      readonly type: "preset";
+      readonly preset: "claude_code";
+      readonly append: string;
+      readonly excludeDynamicSections?: boolean;
+    }
+  | {
+      readonly type: "preset";
+      readonly preset: "claude_code";
+      readonly excludeDynamicSections?: boolean;
+    } {
+  // Spread-conditional: omit excludeDynamicSections when the caller did
+  // not pass a value (legacy callers / tests stay byte-identical to the
+  // pre-115 shape). When passed, forward verbatim — SDK accepts true|false.
+  const dyn =
+    excludeDynamicSections !== undefined
+      ? { excludeDynamicSections }
+      : ({} as Record<string, never>);
   if (stablePrefix.length > 0) {
-    return { type: "preset" as const, preset: "claude_code" as const, append: stablePrefix };
+    return {
+      type: "preset" as const,
+      preset: "claude_code" as const,
+      append: stablePrefix,
+      ...dyn,
+    };
   }
-  return { type: "preset" as const, preset: "claude_code" as const };
+  return {
+    type: "preset" as const,
+    preset: "claude_code" as const,
+    ...dyn,
+  };
 }
 
 /**
@@ -553,21 +1102,129 @@ export class SdkSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
-    const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
+    // Phase 100 GSD-02 + GSD-04 (RESEARCH.md Architecture Pattern 5 —
+    // per-agent cwd plumbing): cwd and settingSources are now config-driven.
+    //   - cwd: config.gsd?.projectDir overrides config.workspace when the
+    //     agent has a gsd block (e.g. Admin Clawdy → /opt/clawcode-projects/sandbox).
+    //     The fleet (no gsd) keeps cwd === config.workspace as before.
+    //   - settingSources: config.settingSources overrides ["project"] when
+    //     set (e.g. Admin Clawdy → ["project","user"] to load
+    //     ~/.claude/commands/ + ~/.claude/skills/). The fleet (no
+    //     settingSources) keeps the ["project"] default.
+    // Symmetric edit pattern: resumeSession (below) MUST receive identical
+    // treatment — Rule 3 (RESEARCH.md Pitfall ordering pin).
+    const baseOptions: AdapterBaseOptions = {
       model: resolveModelId(config.model),
-      effort: config.effort,
-      cwd: config.workspace,
+      // Phase 83 EFFORT-04 — narrow v2.2 EffortLevel ("xhigh"/"auto"/"off")
+      // to the SDK's start-option subset before assignment. Runtime control
+      // for the wider set lives on q.setMaxThinkingTokens.
+      effort: narrowEffortForSdkOption(config.effort),
+      cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
-      systemPrompt: buildSystemPromptOption(config.systemPrompt),
+      // Phase 115 sub-scope 2 — `excludeDynamicSections` forwarded so the SDK
+      // strips per-machine dynamic sections (cwd, auto-memory, git status) out
+      // of the cached system prompt and re-injects them as the first user
+      // message; resumeSession (below) MUST mirror this — Rule 3 symmetric edit.
+      systemPrompt: buildSystemPromptOption(
+        config.systemPrompt,
+        config.excludeDynamicSections,
+      ),
       permissionMode: "bypassPermissions",
-      settingSources: ["project"],
+      settingSources: config.settingSources ?? ["project"],
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
+      // Phase 127 — propagate stream-stall supervisor knobs from
+      // AgentSessionConfig into baseOptions as adapter-only fields.
+      // `stripHandleOnlyFields` removes them before the bag reaches
+      // sdk.query. The persistent-session-handle iteration loop reads
+      // them via closure to construct one `StreamStallTracker` per turn.
+      // Spread-conditional OMIT when undefined preserves byte-stable
+      // equality with legacy AgentSessionConfig builders. Symmetric
+      // edit: resumeSession (below) MUST mirror — Rule 3.
+      ...(typeof config.streamStallTimeoutMs === "number"
+        ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+        : {}),
+      ...(typeof config.onStreamStall === "function"
+        ? { onStreamStall: config.onStreamStall }
+        : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set
+      // (subagent recursion guard injects this in
+      // src/discord/subagent-thread-spawner.ts), the LLM physically cannot
+      // invoke the listed tools. Empty/undefined → field omitted from
+      // baseOptions so the existing 15+ agent fleet stays byte-identical
+      // (matches mutableSuffix / settingSources spread-conditional pattern
+      // above). Symmetric edit: resumeSession (below) MUST receive identical
+      // treatment — Rule 3.
+      ...(config.disallowedTools && config.disallowedTools.length > 0
+        ? { disallowedTools: [...config.disallowedTools] }
+        : {}),
+      // Phase 117 Plan 04 T05 — native advisor model passthrough.
+      //
+      // Spread-conditional pattern matching the surrounding idioms
+      // (settingSources / mutableSuffix / disallowedTools): the field
+      // is OMITTED when AgentSessionConfig.advisorModel is undefined
+      // so the SDK CLI receives nothing rather than an explicit
+      // `advisorModel: undefined` (RESEARCH §6 Pitfall 3 — byte-
+      // stability + implicit-undefined avoidance). When present, the
+      // value is already canonical (`"claude-opus-4-7"` etc — alias
+      // resolution happens upstream in buildSessionConfig).
+      //
+      // Symmetric edit pin (Rule 3): resumeSession (below) MUST mirror
+      // this so a daemon restart cannot drift the resumed session into
+      // a different advisor state than the original create call.
+      //
+      // Phase 117.1 — production smoke proved SDK 0.2.140's sdk.mjs accepts
+      // Options.advisorModel as a typed field but does NOT translate it to
+      // the `--advisor <model>` CLI flag the bundled binary actually reads
+      // (CLI arg-builder in sdk.mjs lists model/effort/agent/betas/etc but
+      // no advisor). The binary also requires CLAUDE_CODE_ENABLE_EXPERIMENTAL_
+      // ADVISOR_TOOL=1 in env to honor advisor at all (set in /etc/clawcode/env
+      // post-117.1). To bridge the SDK gap until upstream wires advisorModel,
+      // pass `extraArgs: { advisor: <model> }` — the SDK's public escape hatch
+      // (sdk.d.ts:1268 — `extraArgs?: Record<string, string | null>`) appends
+      // the bare `--advisor <model>` flag to the spawn args. Direct binary
+      // invocation with this exact flag pair was verified to emit real
+      // advisor_tool_result blocks (test on 2026-05-13 against the worker-pool
+      // prompt — Opus advice with counting-semaphore design landed in stream).
+      //
+      // Keep advisorModel field too so when the SDK eventually wires it
+      // through, no second migration is needed; remove extraArgs at that
+      // point in a follow-up phase.
+      ...(typeof config.advisorModel === "string" &&
+      config.advisorModel.length > 0
+        ? ({
+            advisorModel: config.advisorModel,
+            extraArgs: { advisor: config.advisorModel },
+          })
+        : {}),
     };
+
+    // Phase 115 sub-scope 2 (115-sub2-flag) — diagnostic trace so the first
+    // production deploy can confirm the flag is reaching the SDK. console.info
+    // chosen over pino because session-adapter intentionally has no DI'd
+    // logger (matches the existing PromptBloatLogger interface pattern at
+    // line 192 — adapter stays framework-agnostic). Daemon captures stdout
+    // into structured logs via systemd. Single-line JSON for grep + dashboard.
+    console.info(
+      "phase115-quickwin",
+      JSON.stringify({
+        agent: config.name,
+        excludeDynamicSections: config.excludeDynamicSections,
+        action: "115-sub2-flag",
+        flow: "create",
+      }),
+    );
+
+    // Phase 115 sub-scope 14 — diagnostic baseopts dump (T01 transition state).
+    // Both gates active: hardcoded allowlist OR per-agent flag. T03 removes the
+    // allowlist; flag becomes sole gate. Failure is non-fatal (helper swallows).
+    const dumpEnabled = config.debug?.dumpBaseOptionsOnSpawn ?? false;
+    await debugDumpBaseOptions("create", config.name, baseOptions, dumpEnabled);
 
     // Phase 73 Plan 01 — initial drain establishes the session ID from disk,
     // then the persistent handle owns ONE long-lived sdk.query({ prompt:
@@ -583,6 +1240,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       usageCallback,
       prefixHashProvider,
       skillTracking,
+      advisorObserver,
     );
   }
 
@@ -592,22 +1250,93 @@ export class SdkSessionAdapter implements SessionAdapter {
     usageCallback?: UsageCallback,
     prefixHashProvider?: PrefixHashProvider,
     skillTracking?: SkillTrackingConfig,
+    advisorObserver?: AdvisorObserverConfig,
   ): Promise<SessionHandle> {
     const sdk = await loadSdk();
     const mcpServers = transformMcpServersForSdk(config.mcpServers);
-    const baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string } = {
+    // Phase 100 GSD-02 + GSD-04 (RESEARCH.md Architecture Pattern 5 —
+    // per-agent cwd plumbing): SAME treatment as createSession. Reading cwd
+    // from config.gsd?.projectDir and settingSources from config.settingSources
+    // ensures a resumed session uses the SAME values the original was created
+    // with — no drift on resume. Rule 3 symmetric-edits enforced.
+    const baseOptions: AdapterBaseOptions = {
       model: resolveModelId(config.model),
-      effort: config.effort,
-      cwd: config.workspace,
+      // Phase 83 EFFORT-04 — narrow same as createSession path. Symmetric
+      // edits enforced by RESEARCH.md Pitfall ordering pin.
+      effort: narrowEffortForSdkOption(config.effort),
+      cwd: config.gsd?.projectDir ?? config.workspace,
       // Phase 52 Plan 02: preset+append form — SDK claude_code preset auto-caches.
-      systemPrompt: buildSystemPromptOption(config.systemPrompt),
+      // Phase 115 sub-scope 2 — symmetric mirror of createSession above
+      // (Rule 3 symmetric-edits). A resumed session MUST carry the same
+      // excludeDynamicSections setting as the original create call.
+      systemPrompt: buildSystemPromptOption(
+        config.systemPrompt,
+        config.excludeDynamicSections,
+      ),
       permissionMode: "bypassPermissions",
-      settingSources: ["project"],
+      settingSources: config.settingSources ?? ["project"],
       resume: sessionId,
       env: buildCleanEnv(),
       ...(config.mutableSuffix ? { mutableSuffix: config.mutableSuffix } : {}),
+      // Phase 127 — symmetric mirror of createSession's stream-stall
+      // supervisor wiring above (Rule 3 symmetric-edits). A resumed
+      // session MUST carry the same stall threshold + onStall hook as
+      // the original create call so a daemon restart cannot lose the
+      // protection on a previously-protected session.
+      ...(typeof config.streamStallTimeoutMs === "number"
+        ? { streamStallTimeoutMs: config.streamStallTimeoutMs }
+        : {}),
+      ...(typeof config.onStreamStall === "function"
+        ? { onStreamStall: config.onStreamStall }
+        : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // Phase 99 sub-scope N (2026-04-26) — symmetric mirror of createSession's
+      // disallowedTools wiring above. A resumed session MUST carry the same
+      // SDK deny-list as the original create call so a daemon restart cannot
+      // unlock the recursion tool on a previously-locked subagent. Rule 3
+      // symmetric-edits enforced.
+      ...(config.disallowedTools && config.disallowedTools.length > 0
+        ? { disallowedTools: [...config.disallowedTools] }
+        : {}),
+      // Phase 117 Plan 04 T05 — symmetric mirror of createSession's
+      // advisorModel wiring above (Rule 3 symmetric-edits). A resumed
+      // session MUST carry the same advisor state as the original
+      // create call so a daemon restart cannot toggle the
+      // `advisor_20260301` server tool on or off mid-conversation
+      // without an explicit operator action (`clawcode reload`).
+      //
+      // Phase 117.1 — also pass `extraArgs: { advisor: <model> }` to
+      // bridge the SDK 0.2.140 gap (Options.advisorModel is a typed field
+      // but the SDK doesn't translate it to `--advisor <model>` on the
+      // binary spawn). See createSession comment above for the full
+      // diagnostic trail.
+      ...(typeof config.advisorModel === "string" &&
+      config.advisorModel.length > 0
+        ? ({
+            advisorModel: config.advisorModel,
+            extraArgs: { advisor: config.advisorModel },
+          })
+        : {}),
     };
+
+    // Phase 115 sub-scope 2 (115-sub2-flag) — symmetric diagnostic mirror of
+    // createSession (Rule 3). flow:"resume" so operator can distinguish.
+    console.info(
+      "phase115-quickwin",
+      JSON.stringify({
+        agent: config.name,
+        excludeDynamicSections: config.excludeDynamicSections,
+        action: "115-sub2-flag",
+        flow: "resume",
+      }),
+    );
+
+    // Phase 115 sub-scope 14 — diagnostic baseopts dump on resume (T01
+    // transition state). Symmetric mirror of createSession above — Rule 3
+    // symmetric-edits enforced. Same gate semantics: allowlist OR flag in
+    // T01; flag-only after T03.
+    const dumpEnabled = config.debug?.dumpBaseOptionsOnSpawn ?? false;
+    await debugDumpBaseOptions("resume", config.name, baseOptions, dumpEnabled);
 
     // Phase 73 Plan 01 — persistent handle (no per-turn sdk.query spawn).
     return createPersistentSessionHandle(
@@ -617,6 +1346,7 @@ export class SdkSessionAdapter implements SessionAdapter {
       usageCallback,
       prefixHashProvider,
       skillTracking,
+      advisorObserver,
     );
   }
 }
@@ -629,11 +1359,18 @@ export class SdkSessionAdapter implements SessionAdapter {
  * options to `sdk.query` so the SDK doesn't complain about an unknown key.
  */
 function stripHandleOnlyFields(
-  opts: SdkQueryOptions & { readonly mutableSuffix?: string },
+  opts: AdapterBaseOptions,
 ): SdkQueryOptions {
-  const { mutableSuffix: _mutable, ...rest } = opts as SdkQueryOptions & {
-    mutableSuffix?: string;
-  };
+  // Phase 127 — also strip streamStallTimeoutMs + onStreamStall. The
+  // tracker reads them from the wrapper-level closure, not from the SDK
+  // option bag, so passing them to sdk.query would error with "unknown
+  // option".
+  const {
+    mutableSuffix: _mutable,
+    streamStallTimeoutMs: _stall,
+    onStreamStall: _onStall,
+    ...rest
+  } = opts as AdapterBaseOptions;
   return rest;
 }
 
@@ -642,36 +1379,49 @@ function stripHandleOnlyFields(
  * expected Record format (keyed by server name).
  * Returns undefined if no servers are configured.
  */
-function transformMcpServersForSdk(
-  mcpServers?: readonly { readonly name: string; readonly command: string; readonly args: readonly string[]; readonly env: Readonly<Record<string, string>> }[],
-): Record<string, { command: string; args: string[]; env: Record<string, string> }> | undefined {
+export function transformMcpServersForSdk(
+  mcpServers?: readonly {
+    readonly name: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly env: Readonly<Record<string, string>>;
+    readonly alwaysLoad?: boolean;
+  }[],
+): Record<string, { command: string; args: string[]; env: Record<string, string>; alwaysLoad?: boolean }> | undefined {
   if (!mcpServers || mcpServers.length === 0) {
     return undefined;
   }
   return Object.fromEntries(
-    mcpServers.map((s) => [s.name, { command: s.command, args: [...s.args], env: { ...s.env } }]),
+    mcpServers.map((s) => [
+      s.name,
+      {
+        command: s.command,
+        args: [...s.args],
+        env: { ...s.env },
+        // Phase 999.54 (D-01a) — spread-conditional preserves byte-stable
+        // deep-equality for fleet entries that don't opt in. `=== true` not
+        // truthy-check, matching the `s.optional === true` idiom upstream
+        // at loader.ts. Plan 04 pins both branches (set + omitted).
+        ...(s.alwaysLoad === true ? { alwaysLoad: true as const } : {}),
+      },
+    ]),
   );
 }
 
-let cachedSdk: SdkModule | null = null;
-
 /**
- * Dynamically import the Claude Agent SDK.
- * Caches the module after first load.
+ * Phase 136 T-04 — SDK chokepoint migration.
+ *
+ * The dynamic `await import("@anthropic-ai/claude-agent-sdk")` and its
+ * cache moved into `src/llm-runtime/backends/anthropic-agent-sdk.ts`.
+ * `loadSdk()` is now a thin alias that delegates to the seam's free-
+ * function chokepoint. Behavior is byte-identical: same module cache
+ * semantics, same not-installed error message, same `SdkModule` cast.
+ *
+ * Phase 137 wires `LlmRuntimeService` through DI here so this whole
+ * function disappears in favour of `deps.llmRuntime.loadSdkModule()`.
  */
 async function loadSdk(): Promise<SdkModule> {
-  if (cachedSdk) {
-    return cachedSdk;
-  }
-  try {
-    const sdk = await import("@anthropic-ai/claude-agent-sdk");
-    cachedSdk = sdk as unknown as SdkModule;
-    return cachedSdk;
-  } catch {
-    throw new Error(
-      "Claude Agent SDK is not installed. Run: npm install @anthropic-ai/claude-agent-sdk",
-    );
-  }
+  return loadAnthropicAgentSdkModule();
 }
 
 /**
@@ -699,13 +1449,54 @@ async function drainInitialQuery(
 /**
  * Extract usage data from an SDK result message and invoke the callback.
  * Wrapped in try/catch so extraction failures never break the send flow.
+ *
+ * Phase 117 Plan 04 T04 — ALSO counts `usage.iterations[].type ===
+ * "advisor_message"` entries on the terminal `result` event and calls
+ * `advisorObserver.advisorBudget.recordCall(agent)` once per iteration.
+ * Mirrors the production-path implementation in
+ * `persistent-session-handle.ts:extractUsage` so test-only callers
+ * (`createTracedSessionHandle`) exercise the same budget accounting.
+ * The per-block scan inside `iterateWithTracing` is the early Discord
+ * signal; this is the ground-truth budget charge (RESEARCH §13.6 +
+ * §6 Pitfall 4 — no double-record).
  */
 function extractUsage(
   msg: SdkStreamMessage,
   callback?: UsageCallback,
+  advisorObserver?: AdvisorObserverConfig,
 ): void {
-  if (!callback) return;
   if (msg.type !== "result") return;
+
+  // Advisor iteration counting (observational; same fail-silent
+  // contract as the rest of this function and as the production
+  // implementation in persistent-session-handle.ts).
+  if (advisorObserver) {
+    try {
+      const iterations = (msg as { usage?: { iterations?: unknown[] | null } })
+        .usage?.iterations;
+      if (Array.isArray(iterations)) {
+        for (const entry of iterations) {
+          if (
+            entry !== null &&
+            typeof entry === "object" &&
+            (entry as { type?: unknown }).type === "advisor_message"
+          ) {
+            try {
+              advisorObserver.advisorBudget.recordCall(
+                advisorObserver.agentName,
+              );
+            } catch {
+              // observational — never break message path
+            }
+          }
+        }
+      }
+    } catch {
+      // observational — never break message path
+    }
+  }
+
+  if (!callback) return;
   try {
     const costUsd = typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0;
     const usage = msg.usage;
@@ -772,12 +1563,19 @@ function narrowEffortForSdkOption(
 function wrapSdkQuery(
   _initialQuery: SdkQuery | undefined,
   sdk: SdkModule,
-  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+  baseOptions: AdapterBaseOptions,
   initialSessionId: string,
   usageCallback?: UsageCallback,
   boundTurn?: Turn,
   prefixHashProvider?: PrefixHashProvider,
   skillTracking?: SkillTrackingConfig,
+  // Phase 117 Plan 04 T03/T04 — test-path mirror of the production
+  // observer wiring. `createTracedSessionHandle` accepts this on
+  // TracedSessionHandleOptions and forwards it here; the legacy
+  // iterateWithTracing loop emits the same advisor events + budget
+  // calls as createPersistentSessionHandle so both paths converge.
+  // No production caller reaches wrapSdkQuery (see @deprecated above).
+  advisorObserver?: AdvisorObserverConfig,
 ): SessionHandle {
   let sessionId = initialSessionId;
   // Phase 83 EFFORT-04 — widened to v2.2 EffortLevel set.
@@ -795,6 +1593,12 @@ function wrapSdkQuery(
   const legacyRecoveryAttemptHistory: Map<string, AttemptRecord[]> = new Map();
   // Phase 94 Plan 02 TOOL-03 — legacy flap-history Map (test-only path).
   const legacyFlapHistory: Map<string, FlapHistoryEntry> = new Map();
+  // Phase 96 Plan 01 D-CONTEXT — legacy fs-capability snapshot (test-only).
+  let legacyFsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> = new Map();
+  // Phase 103 OBS-04 — legacy per-turn-query handle carries the same
+  // RateLimitTracker mirror contract as the persistent handle (test-only
+  // path; production routes through createPersistentSessionHandle).
+  let legacyRateLimitTracker: RateLimitTracker | undefined;
 
   /**
    * Build options for a per-turn query, adding resume for session continuity.
@@ -811,7 +1615,7 @@ function wrapSdkQuery(
    */
   function turnOptions(signal?: AbortSignal): SdkQueryOptions {
     const sdkEffort = narrowEffortForSdkOption(currentEffort);
-    const opts: SdkQueryOptions & { readonly mutableSuffix?: string } = {
+    const opts: AdapterBaseOptions = {
       ...baseOptions,
       ...(sdkEffort !== undefined ? { effort: sdkEffort } : {}),
       resume: sessionId,
@@ -890,6 +1694,25 @@ function wrapSdkQuery(
         readonly openedAtMs: number;
       }
     >();
+    /**
+     * Phase 115 Plan 08 T01 — per-batch roundtrip timer for sub-scope 17(a).
+     *
+     * `batchOpenedAtMs` holds the wall-clock instant at which the LATEST
+     * parent assistant message emitted a tool_use block (i.e., the moment
+     * the LLM stopped generating that turn). It is closed when the NEXT
+     * parent assistant message arrives — ANY content (text or new
+     * tool_use), capturing the SDK dispatch + actual tool runtime + result
+     * delivery + LLM resume cost.
+     *
+     * Per-batch (not per-tool) so parallel batches collapse to one
+     * wall-clock interval — the right semantic when 3 tools dispatch in
+     * parallel and `next parent assistant` arrives once after the LAST
+     * tool_result.
+     *
+     * Multi-batch turns (model emits sequential tool_use → tool_result →
+     * tool_use cycles) accumulate via Turn.addToolRoundtripMs sums.
+     */
+    let batchOpenedAtMs: number | null = null;
     const textParts: string[] = [];
     // Phase 53 Plan 03 — per-turn skill-mention capture. We also buffer
     // any block-level text from the SDK's `message.content[]: [{ type: 'text', text }]`
@@ -904,8 +1727,38 @@ function wrapSdkQuery(
     let streamedText = "";
 
     const closeAllSpans = () => {
-      for (const entry of activeTools.values()) entry.span.end();
+      for (const entry of activeTools.values()) {
+        entry.span.end();
+        // Phase 115 Plan 08 T01 — final-batch execution-side fallback. If
+        // the SDK terminated mid-tool (error / abort / timeout) the
+        // user-message tool_result branch never fired, so addToolExecutionMs
+        // would be skipped for these spans. Compute a best-effort duration
+        // from openedAtMs at termination so the column doesn't undercount
+        // pathological turns.
+        try {
+          const executionMs = Date.now() - entry.openedAtMs;
+          (turn as { addToolExecutionMs?: (ms: number) => void })
+            .addToolExecutionMs?.(executionMs);
+        } catch {
+          // Observational only — never break.
+        }
+      }
       activeTools.clear();
+      // Phase 115 Plan 08 T01 — final-batch roundtrip fallback. If the run
+      // terminated before the LLM emitted a "next parent assistant" message
+      // (terminal error, normal completion, or final result-only path), the
+      // currently-open batch timer would otherwise be lost. Close it here
+      // so the column reflects every batch the run observed.
+      try {
+        if (batchOpenedAtMs !== null && turn) {
+          const roundtripMs = Date.now() - batchOpenedAtMs;
+          (turn as { addToolRoundtripMs?: (ms: number) => void })
+            .addToolRoundtripMs?.(roundtripMs);
+          batchOpenedAtMs = null;
+        }
+      } catch {
+        // Observational only — never break.
+      }
       if (!firstTokenEnded) {
         firstToken?.end();
         firstTokenEnded = true;
@@ -934,8 +1787,59 @@ function wrapSdkQuery(
             ).length;
             const isParallelBatch = toolUseCount > 1;
 
+            // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency.
+            //
+            // (1) Close the prior batch's roundtrip timer FIRST. This parent
+            //     assistant message represents the LLM resuming after the
+            //     previous batch's tool_results — exactly the wall-clock
+            //     interval we want to record. Wrapped in try/catch so an
+            //     observability failure cannot break the dispatch path
+            //     (Phase 50 invariant mirrored on every observability hook).
+            try {
+              if (batchOpenedAtMs !== null && turn) {
+                const roundtripMs = Date.now() - batchOpenedAtMs;
+                (turn as { addToolRoundtripMs?: (ms: number) => void })
+                  .addToolRoundtripMs?.(roundtripMs);
+                batchOpenedAtMs = null;
+              }
+            } catch {
+              // Observational only — never break the message path.
+            }
+            // (2) Record the parallel batch size for sub-scope 17(b). Only
+            //     fire when this message HAS tool_use blocks; pure-text
+            //     parent assistant messages don't contribute to the MAX.
+            try {
+              if (toolUseCount > 0 && turn) {
+                (turn as { recordParallelToolCallCount?: (n: number) => void })
+                  .recordParallelToolCallCount?.(toolUseCount);
+                // (3) Open the next batch's roundtrip timer at the moment
+                //     this message was observed — closest available proxy
+                //     for "LLM finished generating tool_use." Will be
+                //     closed when the NEXT parent assistant arrives.
+                batchOpenedAtMs = Date.now();
+              }
+            } catch {
+              // Observational only — never break the message path.
+            }
+
+            // Phase 117 Plan 04 T03 — pending advisor tool_use id, scoped
+            // to THIS assistant message's content[]. See production
+            // mirror in persistent-session-handle.ts and RESEARCH §13.3.
+            let pendingAdvisorToolUseId: string | null = null;
+            const messageUuid =
+              typeof (msg as { uuid?: unknown }).uuid === "string"
+                ? (msg as { uuid: string }).uuid
+                : sessionId;
+
             for (const raw of contentBlocks) {
-              const block = raw as { type?: string; name?: string; id?: string; text?: string };
+              const block = raw as {
+                type?: string;
+                name?: string;
+                id?: string;
+                text?: string;
+                tool_use_id?: string;
+                content?: unknown;
+              };
               if (block.type === "text" && !firstTokenEnded) {
                 firstToken?.end();
                 firstTokenEnded = true;
@@ -969,6 +1873,81 @@ function wrapSdkQuery(
                   });
                 }
               }
+              // Phase 117 Plan 04 T03 — native advisor observation.
+              // Test-path mirror of the production-path implementation
+              // in persistent-session-handle.ts (single source of truth
+              // for the block-shape contract: RESEARCH §13.1 + §13.3 +
+              // §13.4). Both paths emit the same two events on the same
+              // EventEmitter (passed in via advisorObserver) so a test
+              // that uses createTracedSessionHandle exercises the exact
+              // listener wiring production uses.
+              if (
+                advisorObserver &&
+                block.type === "server_tool_use" &&
+                block.name === "advisor" &&
+                typeof block.id === "string"
+              ) {
+                pendingAdvisorToolUseId = block.id;
+                try {
+                  const payload: AdvisorInvokedEvent = {
+                    agent: advisorObserver.agentName,
+                    turnId: messageUuid,
+                    toolUseId: block.id,
+                  };
+                  advisorObserver.advisorEvents.emit(
+                    "advisor:invoked",
+                    payload,
+                  );
+                } catch {
+                  // observational only — never break the message path
+                }
+              }
+              if (
+                advisorObserver &&
+                block.type === "advisor_tool_result" &&
+                typeof block.tool_use_id === "string" &&
+                block.tool_use_id === pendingAdvisorToolUseId
+              ) {
+                try {
+                  const content = block.content as
+                    | { type: "advisor_result"; text: string }
+                    | { type: "advisor_redacted_result"; encrypted_content: string }
+                    | { type: "advisor_tool_result_error"; error_code: string }
+                    | null
+                    | undefined;
+                  const kind =
+                    content && typeof content === "object" && "type" in content
+                      ? content.type
+                      : undefined;
+                  if (
+                    kind === "advisor_result" ||
+                    kind === "advisor_redacted_result" ||
+                    kind === "advisor_tool_result_error"
+                  ) {
+                    const payload: AdvisorResultedEvent = {
+                      agent: advisorObserver.agentName,
+                      turnId: messageUuid,
+                      toolUseId: pendingAdvisorToolUseId,
+                      kind,
+                      text:
+                        kind === "advisor_result"
+                          ? (content as { text: string }).text
+                          : undefined,
+                      errorCode:
+                        kind === "advisor_tool_result_error"
+                          ? (content as { error_code: string }).error_code
+                          : undefined,
+                    };
+                    advisorObserver.advisorEvents.emit(
+                      "advisor:resulted",
+                      payload,
+                    );
+                  }
+                } catch {
+                  // observational only — never break the message path
+                }
+                pendingAdvisorToolUseId = null;
+              }
             }
           }
           // Preserve the narrowed-type text accumulation path used today.
@@ -994,7 +1973,24 @@ function wrapSdkQuery(
           const parentToolUseId =
             (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? null;
           if (parentToolUseId === null) {
-            const event = (msg as { event?: { type?: string; delta?: { type?: string; text?: string } } }).event;
+            // Phase 127 — mirror of the persistent-session-handle predicate.
+            // Test path (wrapSdkQuery) recognises BOTH text_delta and
+            // input_json_delta.partial_json so test fixtures that exercise
+            // the wrapSdkQuery code path see the same useful-token semantics
+            // as production. The tracker itself is not wired into this
+            // legacy test-only path because no production caller reaches
+            // wrapSdkQuery; the synthetic-stream tests exercise the tracker
+            // module directly.
+            const event = (msg as {
+              event?: {
+                type?: string;
+                delta?: {
+                  type?: string;
+                  text?: string;
+                  partial_json?: string;
+                };
+              };
+            }).event;
             if (
               event?.type === "content_block_delta" &&
               event.delta?.type === "text_delta" &&
@@ -1012,7 +2008,12 @@ function wrapSdkQuery(
           }
         }
 
-        if (msg.type === "user") {
+        // Local SdkMessage union narrows away "user" (matches the
+        // stream_event note above) but the runtime SDK does emit user
+        // messages with `parent_tool_use_id` for tool_use_result delivery.
+        // Recover the runtime shape via a string-typed read — same pattern
+        // already used for stream_event handling at line ~1089.
+        if ((msg as { type?: string }).type === "user") {
           // Close the tool_call span when the matching tool_use_result arrives.
           // SDK emits user messages with `parent_tool_use_id` set to the tool_use_id.
           const toolUseId = (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id;
@@ -1040,6 +2041,19 @@ function wrapSdkQuery(
                 // (Phase 50 invariant mirrored on cache telemetry).
               }
               entry.span.end();
+              // Phase 115 Plan 08 T01 — sub-scope 17(a) execution-side
+              // latency aggregation. The span's duration is exactly the
+              // pure-execution interval (tool_use_emitted →
+              // tool_result_arrived) per the audit; sum across every tool
+              // call in the turn. Wrapped in try/catch so observability
+              // never breaks the message path (Phase 50 invariant).
+              try {
+                const executionMs = Date.now() - entry.openedAtMs;
+                (turn as { addToolExecutionMs?: (ms: number) => void })
+                  .addToolExecutionMs?.(executionMs);
+              } catch {
+                // Observational only — never break the message path.
+              }
               activeTools.delete(toolUseId);
             }
           }
@@ -1047,7 +2061,7 @@ function wrapSdkQuery(
 
         if (msg.type === "result") {
           if (msg.session_id) sessionId = msg.session_id;
-          extractUsage(msg, usageCallback);
+          extractUsage(msg, usageCallback, advisorObserver);
           // Phase 52 Plan 01: capture cache telemetry snapshot from msg.usage
           // onto the parent Turn. Caller-owned lifecycle preserved — we call
           // recordCacheUsage, NEVER turn.end() (50-02 invariant).
@@ -1332,6 +2346,29 @@ function wrapSdkQuery(
     },
 
     /**
+     * Phase 96 Plan 01 D-CONTEXT — legacy fs-capability snapshot accessor.
+     * Test-only path; production routes through the persistent handle.
+     */
+    getFsCapabilitySnapshot(): ReadonlyMap<string, FsCapabilitySnapshot> {
+      return legacyFsCapabilitySnapshot;
+    },
+    setFsCapabilitySnapshot(snapshot: ReadonlyMap<string, FsCapabilitySnapshot>): void {
+      legacyFsCapabilitySnapshot = new Map(snapshot);
+    },
+
+    /**
+     * Phase 103 OBS-04 — legacy RateLimitTracker accessor. Test-only path;
+     * production routes through createPersistentSessionHandle where the SDK
+     * rate_limit_event dispatch lives.
+     */
+    getRateLimitTracker(): RateLimitTracker | undefined {
+      return legacyRateLimitTracker;
+    },
+    setRateLimitTracker(tracker: RateLimitTracker): void {
+      legacyRateLimitTracker = tracker;
+    },
+
+    /**
      * Phase 94 Plan 02 TOOL-03 — legacy flap-history accessor (test-only).
      * Stable Map identity matches the persistent-handle contract.
      */
@@ -1375,10 +2412,19 @@ function wrapSdkQuery(
  */
 export type TracedSessionHandleOptions = {
   readonly sdk: SdkModule;
-  readonly baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string };
+  readonly baseOptions: AdapterBaseOptions;
   readonly sessionId: string;
   readonly turn?: Turn;
   readonly usageCallback?: UsageCallback;
+  /**
+   * Phase 117 Plan 04 T03/T04 — native advisor observer for the test
+   * path. Forwarded into wrapSdkQuery so the legacy `iterateWithTracing`
+   * loop fires the SAME `advisor:invoked` / `advisor:resulted` events
+   * AND records the SAME budget calls as the production
+   * `createPersistentSessionHandle` path. Tests can subscribe to
+   * `advisorObserver.advisorEvents` directly to assert observer behavior.
+   */
+  readonly advisorObserver?: AdvisorObserverConfig;
   /**
    * Phase 52 Plan 02 — optional per-turn prefixHash provider.
    *
@@ -1419,5 +2465,6 @@ export function createTracedSessionHandle(opts: TracedSessionHandleOptions): Ses
     opts.turn,
     opts.prefixHashProvider,
     opts.skillTracking,
+    opts.advisorObserver,
   );
 }

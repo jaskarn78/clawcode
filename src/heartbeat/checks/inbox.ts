@@ -45,6 +45,19 @@ const inboxCheck: CheckModule = {
   async execute(context): Promise<CheckResult> {
     const { agentName, sessionManager } = context;
 
+    // Phase 999.12 HB-02 — short-circuit when a turn is in flight. Mid-turn
+    // the inbox is in active drain by design; running the check here only
+    // manufactures false-positive timeout alerts. Best-effort heuristic
+    // (Pitfall 3): a turn started immediately after this check returns
+    // healthy is harmless — failed dispatches are retried next tick.
+    if (sessionManager.hasActiveTurn(agentName)) {
+      return {
+        status: "healthy",
+        message: "skipped: turn in flight",
+        metadata: { skipped: true, reason: "active-turn" },
+      };
+    }
+
     // 1. Get agent config from sessionManager to find workspace path
     const agentConfig = sessionManager.getAgentConfig(agentName);
     if (!agentConfig) {
@@ -79,7 +92,7 @@ const inboxCheck: CheckModule = {
       };
     }
 
-    // 6. For each message, deliver to agent via sendToAgent (per D-07)
+    // 6. For each message, deliver to agent via dispatchTurn (per D-07)
     //    Format: "[Message from {from}]: {content}"
     //    After successful delivery, markProcessed (per D-08)
     let delivered = 0;
@@ -87,7 +100,7 @@ const inboxCheck: CheckModule = {
     for (const msg of messages) {
       try {
         const formatted = `[Message from ${msg.from}]: ${msg.content}`;
-        await sessionManager.sendToAgent(agentName, formatted);
+        await sessionManager.dispatchTurn(agentName, formatted);
         await markProcessed(inboxDir, msg.id);
         delivered++;
       } catch {

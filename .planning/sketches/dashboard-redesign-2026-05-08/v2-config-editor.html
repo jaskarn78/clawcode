@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode — Config Editor: fin-acquisition</title>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,600,700,800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        display:['"Cabinet Grotesk"','sans-serif'],
+        sans:['Geist','sans-serif'],
+        mono:['"JetBrains Mono"','monospace'],
+      },
+      colors: {
+        bg:{base:'#0e0e12',s1:'#16161c',s2:'#1c1c24',s3:'#252530'},
+        fg:{1:'#f4f4f5',2:'#a1a1aa',3:'#71717a'},
+        accent:{green:'#10b981',blue:'#3b82f6',amber:'#f59e0b',red:'#ef4444',gold:'#eab308',pink:'#ff3366'},
+      },
+    },
+  },
+};
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{font-family:'Geist',sans-serif;background:#0e0e12;color:#f4f4f5;}
+  .font-display{font-family:'Cabinet Grotesk',sans-serif;}
+  .font-mono{font-family:'JetBrains Mono',monospace;}
+  .tab-sidebar-item{padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;transition:all 120ms ease;color:#71717a;display:flex;align-items:center;gap:8px;}
+  .tab-sidebar-item:hover{background:rgba(255,255,255,0.04);color:#a1a1aa;}
+  .tab-sidebar-item.active{background:rgba(255,255,255,0.08);color:#f4f4f5;}
+  .input-field{width:100%;background:#1c1c24;border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 14px;font-size:14px;color:#f4f4f5;outline:none;transition:border-color 150ms ease;font-family:'Geist',sans-serif;}
+  .input-field:focus{border-color:rgba(59,130,246,0.5);}
+  .select-field{width:100%;background:#1c1c24;border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 14px;font-size:14px;color:#f4f4f5;outline:none;cursor:pointer;font-family:'Geist',sans-serif;appearance:none;}
+  .label{display:block;font-size:13px;font-weight:500;color:#a1a1aa;margin-bottom:6px;}
+  .toggle-chip{padding:6px 14px;border-radius:8px;font-size:12px;font-family:'JetBrains Mono',monospace;border:1px solid rgba(255,255,255,0.08);color:#71717a;cursor:pointer;transition:all 120ms ease;}
+  .toggle-chip.on{background:rgba(16,185,129,0.1);border-color:rgba(16,185,129,0.3);color:#10b981;}
+  .toggle-chip:hover:not(.on){background:rgba(255,255,255,0.04);}
+  .diff-line{padding:3px 12px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;}
+  .diff-line.added{background:rgba(16,185,129,0.08);color:#10b981;}
+  .diff-line.removed{background:rgba(239,68,68,0.08);color:#ef4444;text-decoration:line-through;}
+  .diff-line.ctx{color:#71717a;}
+  .modal-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px);}
+  .modal-overlay.open{display:flex;}
+  .modal-box{width:min(480px,100%);background:#16161c;border:1px solid rgba(255,255,255,0.08);border-radius:16px;box-shadow:0 24px 48px rgba(0,0,0,0.6);animation:fadeUp 180ms ease;}
+  .palette-overlay{position:fixed;inset:0;z-index:600;background:rgba(0,0,0,0.55);display:none;backdrop-filter:blur(6px);}
+  .palette-overlay.open{display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;}
+  .palette-box{width:min(560px,calc(100vw - 32px));background:#1c1c24;border:1px solid rgba(255,255,255,0.1);border-radius:12px;box-shadow:0 32px 64px rgba(0,0,0,0.7);overflow:hidden;animation:fadeUp 180ms ease;}
+  .p-item{transition:background 80ms ease;cursor:pointer;}
+  .p-item:hover,.p-item.sel{background:rgba(255,255,255,0.05);}
+  .mode-pill{display:flex;background:rgba(255,255,255,0.05);border-radius:8px;padding:3px;gap:2px;}
+  .mode-btn{padding:5px 14px;border-radius:6px;font-size:13px;font-weight:500;transition:all 150ms ease;color:#71717a;}
+  .mode-btn.active{background:rgba(255,255,255,0.08);color:#f4f4f5;}
+  .bottom-nav{display:none;}
+  @media(max-width:767px){.bottom-nav{display:flex !important;}.sidebar{display:none !important;}.config-layout{flex-direction:column !important;}.tab-list{flex-direction:row !important;overflow-x:auto;border-right:none !important;border-bottom:1px solid rgba(255,255,255,0.05) !important;padding-bottom:0 !important;width:100% !important;}body{padding-bottom:72px;}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .fade-in{animation:fadeUp 200ms ease both;}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- COMMAND PALETTE -->
+<div class="palette-overlay" id="palette" onclick="if(event.target===this)closePalette()">
+  <div class="palette-box" onclick="event.stopPropagation()">
+    <div class="flex items-center gap-3 px-4 py-3.5 border-b border-white/5">
+      <i data-lucide="search" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+      <input id="palette-input" placeholder="Search agents, actions..." autocomplete="off"
+        class="flex-1 bg-transparent text-fg-1 text-[15px] outline-none placeholder-fg-3"
+        oninput="filterPalette(this.value)" onkeydown="paletteKey(event)">
+      <span class="font-mono text-xs text-fg-3 bg-bg-s3 px-1.5 py-0.5 rounded">ESC</span>
+    </div>
+    <div id="p-list" class="py-1.5 max-h-72 overflow-y-auto"></div>
+  </div>
+</div>
+
+<!-- RESTART CONFIRM MODAL -->
+<div class="modal-overlay" id="restart-modal" onclick="if(event.target===this)closeRestartModal()">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="px-6 py-5 border-b border-white/5">
+      <div class="flex items-center gap-3 mb-2">
+        <div class="w-8 h-8 rounded-lg bg-accent-amber/10 flex items-center justify-center">
+          <i data-lucide="refresh-cw" class="w-4 h-4 text-accent-amber"></i>
+        </div>
+        <h3 class="font-display text-[17px] font-bold">Confirm Restart</h3>
+      </div>
+      <p class="text-[14px] text-fg-2 leading-relaxed">
+        <strong class="text-fg-1">fin-acquisition</strong> will restart with the new config. Active conversations will resume from the latest snapshot. Ramy's active thread will be preserved.
+      </p>
+      <div class="mt-4 bg-bg-s2 border border-white/6 rounded-xl p-4 text-[13px] space-y-1.5">
+        <div class="flex justify-between"><span class="text-fg-3">Estimated downtime</span><span class="font-mono text-fg-1">~8s</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">Snapshot available</span><span class="font-mono text-accent-green">yes · 2m ago</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">Changes</span><span class="font-mono text-fg-2">model, debug.dumpBaseOptions</span></div>
+      </div>
+    </div>
+    <div class="flex items-center justify-end gap-3 px-6 py-4">
+      <button onclick="closeRestartModal()" class="px-4 py-2 text-[14px] text-fg-2 hover:text-fg-1 transition-colors">Cancel</button>
+      <button onclick="confirmRestart()" class="px-5 py-2.5 bg-accent-amber text-white text-[14px] font-medium rounded-xl hover:bg-amber-400 transition-colors flex items-center gap-2">
+        <i data-lucide="refresh-cw" class="w-4 h-4"></i> Confirm restart
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="flex min-h-screen">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar hidden md:flex flex-col w-[220px] flex-shrink-0 bg-bg-s1 border-r border-white/5 sticky top-0 h-screen">
+    <div class="px-5 py-4 border-b border-white/5">
+      <div class="flex items-center gap-2">
+        <span class="font-mono font-semibold text-accent-pink text-[17px]">{/}</span>
+        <span class="font-display font-bold text-fg-1 text-[15px] tracking-tight">ClawCode</span>
+      </div>
+      <div class="flex items-center gap-2 mt-1.5">
+        <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+        <span class="text-[11px] text-fg-3 font-mono">clawdy · live</span>
+      </div>
+    </div>
+    <nav class="flex-1 py-3 px-2">
+      <a href="v2-fleet-advanced.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="layout-grid" class="w-4 h-4"></i> Fleet
+      </a>
+      <a href="v2-conversations.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="message-square" class="w-4 h-4"></i> Conversations
+      </a>
+      <a href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-1 bg-white/5 mb-0.5">
+        <i data-lucide="settings" class="w-4 h-4 text-accent-green"></i> Config
+      </a>
+      <a href="v2-tasks.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="check-square" class="w-4 h-4"></i> Tasks
+      </a>
+    </nav>
+  </aside>
+
+  <!-- CONTENT -->
+  <div class="flex-1 flex flex-col min-w-0">
+
+    <!-- HEADER -->
+    <header class="bg-bg-s1/90 backdrop-blur border-b border-white/5 px-4 md:px-6 h-14 flex items-center justify-between sticky top-0 z-50">
+      <div class="flex items-center gap-2 text-[13px]">
+        <a href="v2-fleet-advanced.html" class="text-fg-3 hover:text-fg-1 transition-colors">Fleet</a>
+        <span class="text-fg-3/40">/</span>
+        <span class="text-fg-3">Config</span>
+        <span class="text-fg-3/40">/</span>
+        <span class="text-fg-1 font-medium">fin-acquisition</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="mode-pill">
+          <button class="mode-btn" onclick="location.href='v2-fleet-basic.html'">Basic</button>
+          <button class="mode-btn active">Advanced</button>
+        </div>
+        <button onclick="openPalette()" class="hidden sm:flex items-center gap-2 text-[12px] text-fg-3 bg-bg-s3 border border-white/5 rounded-lg px-3 py-1.5 hover:border-white/10 transition-colors">
+          <i data-lucide="search" class="w-3 h-3"></i><kbd class="font-mono">⌘K</kbd>
+        </button>
+        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-accent-blue to-accent-green flex items-center justify-center text-[11px] font-mono font-semibold text-white">J</div>
+      </div>
+    </header>
+
+    <!-- EDITOR TOOLBAR -->
+    <div class="px-4 md:px-6 py-3 border-b border-white/5 flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-3">
+        <div>
+          <span class="text-[13px] text-fg-3">Editing config:</span>
+          <span class="text-[14px] font-display font-bold text-fg-1 ml-2">fin-acquisition</span>
+          <span class="text-accent-gold text-[13px] ml-1">★</span>
+        </div>
+        <span id="unsaved-badge" class="hidden text-[11px] font-mono text-accent-amber bg-accent-amber/10 border border-accent-amber/25 px-2 py-0.5 rounded">unsaved changes</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="hotReload()" class="flex items-center gap-2 text-[13px] text-fg-2 bg-bg-s2 border border-white/8 rounded-lg px-4 py-2 hover:border-white/15 hover:text-fg-1 transition-colors">
+          <i data-lucide="zap" class="w-3.5 h-3.5 text-accent-green"></i> Save hot-reload
+        </button>
+        <button onclick="openRestartModal()" class="flex items-center gap-2 text-[13px] text-white bg-accent-amber hover:bg-amber-400 rounded-lg px-4 py-2 transition-colors">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Save + restart
+        </button>
+        <button class="text-[13px] text-fg-3 hover:text-fg-1 transition-colors px-3 py-2">Cancel</button>
+      </div>
+    </div>
+
+    <!-- EDITOR BODY -->
+    <div class="flex-1 flex config-layout overflow-hidden">
+
+      <!-- TAB LIST -->
+      <div class="tab-list w-52 flex-shrink-0 border-r border-white/5 py-4 px-3 space-y-0.5" id="tab-list">
+        <div class="text-[10px] font-mono text-fg-3 uppercase tracking-widest px-3 mb-2">Agent</div>
+        <div class="tab-sidebar-item active" onclick="switchTab('identity')" id="tab-identity">
+          <i data-lucide="user" class="w-3.5 h-3.5"></i> Identity
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('model')" id="tab-model">
+          <i data-lucide="cpu" class="w-3.5 h-3.5"></i> Model + Tier
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('channels')" id="tab-channels">
+          <i data-lucide="hash" class="w-3.5 h-3.5"></i> Channels
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('tools')" id="tab-tools">
+          <i data-lucide="wrench" class="w-3.5 h-3.5"></i> Tools
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('mcp')" id="tab-mcp">
+          <i data-lucide="plug" class="w-3.5 h-3.5"></i> MCP Servers
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('memory')" id="tab-memory">
+          <i data-lucide="brain" class="w-3.5 h-3.5"></i> Memory
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('debug')" id="tab-debug">
+          <i data-lucide="bug" class="w-3.5 h-3.5"></i> Debug
+        </div>
+        <div class="tab-sidebar-item" onclick="switchTab('workspace')" id="tab-workspace">
+          <i data-lucide="folder" class="w-3.5 h-3.5"></i> Workspace
+        </div>
+      </div>
+
+      <!-- FORM PANEL -->
+      <div class="flex-1 overflow-y-auto flex flex-col">
+        <div class="flex-1 p-6" id="form-panel">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- YAML DIFF PREVIEW -->
+        <div class="border-t border-white/5">
+          <button onclick="toggleDiff()" class="w-full flex items-center justify-between px-6 py-3 hover:bg-white/2 transition-colors">
+            <div class="flex items-center gap-2">
+              <i data-lucide="git-diff" class="w-4 h-4 text-fg-3"></i>
+              <span class="text-[13px] text-fg-2">YAML diff preview</span>
+              <span class="text-[11px] font-mono text-accent-amber bg-accent-amber/8 px-1.5 py-0.5 rounded">2 changes</span>
+            </div>
+            <i data-lucide="chevron-up" class="w-4 h-4 text-fg-3" id="diff-chevron"></i>
+          </button>
+          <div id="diff-panel" class="border-t border-white/5 bg-bg-s2/30">
+            <div class="py-2">
+              <div class="diff-line ctx">  fin-acquisition:</div>
+              <div class="diff-line ctx">    name: fin-acquisition</div>
+              <div class="diff-line removed">    model: sonnet</div>
+              <div class="diff-line added">    model: opus</div>
+              <div class="diff-line ctx">    tier: low</div>
+              <div class="diff-line ctx">    ...</div>
+              <div class="diff-line ctx">    debug:</div>
+              <div class="diff-line removed">      dumpBaseOptionsOnSpawn: false</div>
+              <div class="diff-line added">      dumpBaseOptionsOnSpawn: true</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MOBILE BOTTOM NAV -->
+<nav class="bottom-nav fixed bottom-0 left-0 right-0 bg-bg-s1/95 backdrop-blur border-t border-white/5 px-2 py-2 z-40">
+  <div class="flex">
+    <a href="v2-fleet-basic.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="layout-grid" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Fleet</span>
+    </a>
+    <a href="v2-conversations.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="message-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Convos</span>
+    </a>
+    <a href="v2-tasks.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="check-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Tasks</span>
+    </a>
+    <a href="#" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg bg-white/5">
+      <i data-lucide="settings" class="w-4 h-4 text-accent-green"></i>
+      <span class="text-[10px] text-accent-green font-medium">Config</span>
+    </a>
+  </div>
+</nav>
+
+<script>
+let diffOpen = true;
+const tabs = {
+  identity: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Identity</h2><p class="text-[14px] text-fg-3">Display name, soul, and identity files for this agent.</p></div>
+    <div><label class="label">Display name</label><input class="input-field" value="fin-acquisition" oninput="markUnsaved()"></div>
+    <div><label class="label">Emoji</label><input class="input-field" value="💼" oninput="markUnsaved()"></div>
+    <div><label class="label">SOUL.md path</label><input class="input-field" value="/opt/workspaces/fin-acquisition/SOUL.md" oninput="markUnsaved()"></div>
+    <div><label class="label">IDENTITY.md path</label><input class="input-field" value="/opt/workspaces/fin-acquisition/IDENTITY.md" oninput="markUnsaved()"></div>
+    <div><label class="label">Description</label><textarea class="input-field h-24 resize-none" oninput="markUnsaved()">Financial acquisition advisor for Ramy. Specializes in retail investment accounts, AIP management, and portfolio analysis using finmentum-db.</textarea></div>
+  </div>`,
+  model: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Model + Tier</h2><p class="text-[14px] text-fg-3">Model selection affects cost, latency, and capability. Tier controls escalation behavior.</p></div>
+    <div>
+      <label class="label">Model <span class="text-accent-amber font-mono text-[11px] ml-2">changed</span></label>
+      <select class="select-field" oninput="markUnsaved()">
+        <option>sonnet</option>
+        <option selected>opus</option>
+        <option>haiku</option>
+      </select>
+      <p class="text-[12px] text-fg-3 mt-2">Opus SLO threshold: first_token p50 ≤ 4,500ms (model-aware, F02). Current sonnet threshold was 2,000ms.</p>
+    </div>
+    <div>
+      <label class="label">Escalation tier</label>
+      <select class="select-field" oninput="markUnsaved()"><option>low</option><option>mid</option><option>high</option></select>
+    </div>
+    <div>
+      <label class="label">Daily token budget</label>
+      <input class="input-field" value="500000" oninput="markUnsaved()">
+      <p class="text-[12px] text-fg-3 mt-1.5 font-mono">Current utilization: 84,200 / 500,000 tokens today</p>
+    </div>
+    <div>
+      <label class="label">Daily cost budget</label>
+      <input class="input-field" value="2.00" oninput="markUnsaved()">
+    </div>
+    <div class="bg-accent-amber/5 border border-accent-amber/15 rounded-xl p-4">
+      <div class="flex items-start gap-3">
+        <i data-lucide="alert-triangle" class="w-4 h-4 text-accent-amber flex-shrink-0 mt-0.5"></i>
+        <div>
+          <p class="text-[13px] font-medium text-fg-1 mb-1">Model change requires restart</p>
+          <p class="text-[12px] text-fg-3">Changing from sonnet to opus will update the Claude Code spawn arguments. A restart is required. Use "Save + restart" to apply.</p>
+        </div>
+      </div>
+    </div>
+  </div>`,
+  channels: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Channel Bindings</h2><p class="text-[14px] text-fg-3">Discord channels this agent responds in.</p></div>
+    <div>
+      <label class="label">Primary channel</label>
+      <div class="flex gap-2">
+        <input class="input-field flex-1" value="#fin-acquisition" oninput="markUnsaved()">
+        <button class="bg-bg-s2 border border-white/8 rounded-xl px-4 text-[13px] text-fg-2 hover:border-white/15 hover:text-fg-1 transition-colors">Browse</button>
+      </div>
+      <p class="text-[12px] text-fg-3 mt-1.5">Last message: <span class="font-mono">2m ago</span> · 12,447 total messages</p>
+    </div>
+    <div>
+      <label class="label">Additional channels</label>
+      <div class="space-y-2">
+        <div class="flex gap-2 items-center">
+          <input class="input-field flex-1" value="#fin-research" oninput="markUnsaved()">
+          <button class="p-2 text-fg-3 hover:text-accent-red transition-colors"><i data-lucide="x" class="w-4 h-4"></i></button>
+        </div>
+        <button class="flex items-center gap-2 text-[13px] text-fg-3 hover:text-fg-1 transition-colors px-2 py-1">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add channel
+        </button>
+      </div>
+    </div>
+    <div>
+      <label class="label">Mention-only channels</label>
+      <p class="text-[12px] text-fg-3">Only responds when directly mentioned (@fin-acquisition)</p>
+      <input class="input-field mt-2" placeholder="e.g. #general" oninput="markUnsaved()">
+    </div>
+  </div>`,
+  tools: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Allowed Tools</h2><p class="text-[14px] text-fg-3">Toggle which Claude Code built-in tools this agent can use.</p></div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">Read</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">Write</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">Bash</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">WebSearch</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">WebFetch</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">send_to_agent</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">query_memory</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">store_memory</button>
+      <button class="toggle-chip" onclick="this.classList.toggle('on');markUnsaved()">Glob</button>
+      <button class="toggle-chip" onclick="this.classList.toggle('on');markUnsaved()">Task</button>
+      <button class="toggle-chip" onclick="this.classList.toggle('on');markUnsaved()">TodoWrite</button>
+      <button class="toggle-chip on" onclick="this.classList.toggle('on');markUnsaved()">Edit</button>
+    </div>
+    <div class="pt-4 border-t border-white/5">
+      <label class="label">Custom tool allowlist override</label>
+      <textarea class="input-field h-20 resize-none font-mono text-[12px]" placeholder="One tool per line to explicitly allow..." oninput="markUnsaved()"></textarea>
+    </div>
+  </div>`,
+  mcp: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">MCP Servers</h2><p class="text-[14px] text-fg-3">External tool providers connected to this agent.</p></div>
+    <div class="space-y-3">
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full bg-accent-green"></div>
+          <div><div class="text-[14px] font-medium text-fg-1">finmentum-db</div><div class="text-[12px] text-fg-3 font-mono">8 tools · last ping 12s ago</div></div>
+        </div>
+        <button class="text-[12px] font-mono text-accent-red border border-accent-red/25 px-2.5 py-1 rounded-lg hover:bg-accent-red/8 transition-colors">Remove</button>
+      </div>
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full bg-accent-green"></div>
+          <div><div class="text-[14px] font-medium text-fg-1">1password</div><div class="text-[12px] text-fg-3 font-mono">4 tools · last ping 8s ago</div></div>
+        </div>
+        <button class="text-[12px] font-mono text-accent-red border border-accent-red/25 px-2.5 py-1 rounded-lg hover:bg-accent-red/8 transition-colors">Remove</button>
+      </div>
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full bg-accent-green"></div>
+          <div><div class="text-[14px] font-medium text-fg-1">search</div><div class="text-[12px] text-fg-3 font-mono">2 tools · static</div></div>
+        </div>
+        <button class="text-[12px] font-mono text-accent-red border border-accent-red/25 px-2.5 py-1 rounded-lg hover:bg-accent-red/8 transition-colors">Remove</button>
+      </div>
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full bg-accent-green"></div>
+          <div><div class="text-[14px] font-medium text-fg-1">google-workspace</div><div class="text-[12px] text-fg-3 font-mono">12 tools · last ping 5s ago</div></div>
+        </div>
+        <button class="text-[12px] font-mono text-accent-red border border-accent-red/25 px-2.5 py-1 rounded-lg hover:bg-accent-red/8 transition-colors">Remove</button>
+      </div>
+      <button class="w-full flex items-center justify-center gap-2 text-[13px] text-fg-3 border border-dashed border-white/10 rounded-xl py-3 hover:border-white/20 hover:text-fg-1 transition-colors">
+        <i data-lucide="plus" class="w-4 h-4"></i> Add MCP server
+      </button>
+    </div>
+  </div>`,
+  memory: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Memory</h2><p class="text-[14px] text-fg-3">Memory paths and consolidation settings.</p></div>
+    <div><label class="label">Memory path</label><input class="input-field font-mono text-[13px]" value="/opt/workspaces/fin-acquisition/memory/" oninput="markUnsaved()"></div>
+    <div><label class="label">MEMORY.md path</label><input class="input-field font-mono text-[13px]" value="/opt/workspaces/fin-acquisition/MEMORY.md" oninput="markUnsaved()"></div>
+    <div><label class="label">Tier-1 inject cap (chars)</label><input class="input-field" value="16000" oninput="markUnsaved()"></div>
+    <div><label class="label">Daily consolidation time</label><input class="input-field" value="02:00" type="time" oninput="markUnsaved()"></div>
+    <div>
+      <label class="label">Dream-pass schedule</label>
+      <input class="input-field font-mono text-[13px]" value="0 */6 * * *" oninput="markUnsaved()">
+      <p class="text-[12px] text-fg-3 mt-1.5">Every 6 hours. Next: in 3h 40m</p>
+    </div>
+    <div>
+      <label class="label">Shared workspace (override)</label>
+      <input class="input-field font-mono text-[13px]" placeholder="Leave empty to use agent's own workspace" oninput="markUnsaved()">
+    </div>
+  </div>`,
+  debug: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Debug</h2><p class="text-[14px] text-fg-3">Diagnostic flags. Changes here require restart.</p></div>
+    <div class="space-y-4">
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div>
+          <div class="text-[14px] font-medium text-fg-1">dumpBaseOptionsOnSpawn <span class="text-accent-amber text-[11px] font-mono ml-2">changed</span></div>
+          <div class="text-[12px] text-fg-3 mt-0.5">Log full base options object when agent spawns. Useful for debugging env mismatches.</div>
+        </div>
+        <div onclick="this.classList.toggle('enabled');markUnsaved()" class="w-11 h-6 rounded-full bg-accent-green cursor-pointer relative enabled" id="dump-toggle" style="transition:background 150ms">
+          <div class="absolute right-1 top-1 w-4 h-4 bg-white rounded-full transition-all" style="transform:translateX(0)"></div>
+        </div>
+      </div>
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div>
+          <div class="text-[14px] font-medium text-fg-1">verboseToolLogs</div>
+          <div class="text-[12px] text-fg-3 mt-0.5">Log full tool call inputs and outputs to pino (warning: high volume).</div>
+        </div>
+        <div onclick="markUnsaved()" class="w-11 h-6 rounded-full bg-bg-s3 cursor-pointer relative" style="transition:background 150ms">
+          <div class="absolute left-1 top-1 w-4 h-4 bg-white/30 rounded-full"></div>
+        </div>
+      </div>
+      <div class="flex items-center justify-between bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <div>
+          <div class="text-[14px] font-medium text-fg-1">traceAllSpans</div>
+          <div class="text-[12px] text-fg-3 mt-0.5">Write every span to traces.db (vs sampling). High disk usage.</div>
+        </div>
+        <div onclick="markUnsaved()" class="w-11 h-6 rounded-full bg-bg-s3 cursor-pointer relative" style="transition:background 150ms">
+          <div class="absolute left-1 top-1 w-4 h-4 bg-white/30 rounded-full"></div>
+        </div>
+      </div>
+    </div>
+  </div>`,
+  workspace: `<div class="space-y-5 fade-in">
+    <div><h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">Workspace</h2><p class="text-[14px] text-fg-3">Agent file system paths. Most are read-only — contact ops to relocate.</p></div>
+    <div><label class="label">Agent workspace (read-only)</label><input class="input-field font-mono text-[13px] opacity-50" value="/opt/workspaces/fin-acquisition/" readonly></div>
+    <div><label class="label">Install path (read-only)</label><input class="input-field font-mono text-[13px] opacity-50" value="/opt/clawcode/" readonly></div>
+    <div><label class="label">Log path</label><input class="input-field font-mono text-[13px]" value="/var/log/clawcode/fin-acquisition.log" oninput="markUnsaved()"></div>
+    <div><label class="label">SQLite DB path (read-only)</label><input class="input-field font-mono text-[13px] opacity-50" value="/opt/workspaces/fin-acquisition/memory.db" readonly></div>
+    <div><label class="label">Temp path</label><input class="input-field font-mono text-[13px]" value="/tmp/clawcode/fin-acquisition/" oninput="markUnsaved()"></div>
+  </div>`,
+};
+
+let activeTab = 'identity';
+function switchTab(tab) {
+  document.getElementById('tab-' + activeTab).classList.remove('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  activeTab = tab;
+  document.getElementById('form-panel').innerHTML = tabs[tab];
+  lucide.createIcons();
+}
+
+function markUnsaved() {
+  document.getElementById('unsaved-badge').classList.remove('hidden');
+}
+
+function toggleDiff() {
+  const panel = document.getElementById('diff-panel');
+  const ch = document.getElementById('diff-chevron');
+  diffOpen = !diffOpen;
+  panel.style.display = diffOpen ? '' : 'none';
+  ch.style.transform = diffOpen ? '' : 'rotate(180deg)';
+}
+
+function openRestartModal() {
+  document.getElementById('restart-modal').classList.add('open');
+  lucide.createIcons();
+}
+function closeRestartModal() {
+  document.getElementById('restart-modal').classList.remove('open');
+}
+function confirmRestart() {
+  closeRestartModal();
+  document.getElementById('unsaved-badge').classList.add('hidden');
+  // show toast
+  const toast = document.createElement('div');
+  toast.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 bg-bg-s1 border border-white/10 rounded-xl px-4 py-3 text-[13px] text-fg-1 flex items-center gap-3 shadow-2xl z-[500]';
+  toast.innerHTML = '<i data-lucide="refresh-cw" class="w-4 h-4 text-accent-amber"></i> fin-acquisition restarting — ETA 8s';
+  document.body.appendChild(toast);
+  lucide.createIcons();
+  setTimeout(() => toast.remove(), 5000);
+}
+
+function hotReload() {
+  document.getElementById('unsaved-badge').classList.add('hidden');
+  const toast = document.createElement('div');
+  toast.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 bg-bg-s1 border border-white/10 rounded-xl px-4 py-3 text-[13px] text-fg-1 flex items-center gap-3 shadow-2xl z-[500]';
+  toast.innerHTML = '<i data-lucide="zap" class="w-4 h-4 text-accent-green"></i> Config hot-reloaded — no restart needed';
+  document.body.appendChild(toast);
+  lucide.createIcons();
+  setTimeout(() => toast.remove(), 4000);
+}
+
+// Palette
+const pItems = [{icon:'layout-grid',label:'Go to Fleet overview',fn:()=>location.href='v2-fleet-advanced.html'},{icon:'bot',label:'View fin-acquisition detail',fn:()=>location.href='v2-agent-detail.html'},{icon:'message-square',label:'View conversations',fn:()=>location.href='v2-conversations.html'}];
+let pSel=0,pFil=[];
+function openPalette(){document.getElementById('palette').classList.add('open');setTimeout(()=>document.getElementById('palette-input').focus(),50);filterPalette('');}
+function closePalette(){document.getElementById('palette').classList.remove('open');}
+function filterPalette(q){pFil=pItems.filter(i=>i.label.toLowerCase().includes(q.toLowerCase()));pSel=0;renderPalette();}
+function renderPalette(){document.getElementById('p-list').innerHTML=pFil.map((item,i)=>`<div class="p-item flex items-center gap-3 px-4 py-2.5 ${i===pSel?'sel':''}" onclick="selPItem(${i})"><i data-lucide="${item.icon}" class="w-4 h-4 text-fg-3 flex-shrink-0"></i><span class="text-[14px] text-fg-1">${item.label}</span></div>`).join('');lucide.createIcons();}
+function selPItem(i){const item=pFil[i];if(!item)return;closePalette();if(item.fn)item.fn();}
+function paletteKey(e){if(e.key==='Escape')closePalette();else if(e.key==='ArrowDown'){pSel=Math.min(pSel+1,pFil.length-1);renderPalette();}else if(e.key==='ArrowUp'){pSel=Math.max(pSel-1,0);renderPalette();}else if(e.key==='Enter')selPItem(pSel);}
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openPalette();}if(e.key==='Escape')closePalette();});
+
+// Init
+switchTab('model'); // Show the changed tab by default
+</script>
+</body>
+</html>

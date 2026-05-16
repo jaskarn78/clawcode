@@ -566,6 +566,153 @@ function renderCachePanel(body, report) {
       ? "Cache effect: insufficient data (< 20 turns)"
       : `Cache effect: ${Math.round(report.cache_effect_ms)} ms faster first-token on hits`;
 
+  // Phase 115 Plan 07 T04 (sub-scope 16(c)) — tool cache metrics rendered
+  // alongside prompt_cache_hit_rate. Both signals live in the same panel
+  // so operators can compare LLM prompt-cache health against MCP
+  // tool-response cache health at a glance.
+  //
+  // The daemon's case "cache" augmented report includes:
+  //   tool_cache_hit_rate (number|null) — rolling avg over the window
+  //   tool_cache_size_mb  (number|null) — fleet-wide cache size sample
+  //   tool_cache_turns    (number)      — turns with ≥1 cache event
+  //
+  // Rendered as a single `tool cache` subtitle line (intentionally tucked
+  // below the prompt-cache row to keep the existing layout intact).
+  const toolCacheHitRate =
+    report && typeof report.tool_cache_hit_rate === "number"
+      ? report.tool_cache_hit_rate
+      : null;
+  const toolCacheSizeMb =
+    report && typeof report.tool_cache_size_mb === "number"
+      ? report.tool_cache_size_mb
+      : report && typeof report.tool_cache_size_mb_live === "number"
+        ? report.tool_cache_size_mb_live
+        : null;
+  const toolCacheTurns =
+    report && typeof report.tool_cache_turns === "number"
+      ? report.tool_cache_turns
+      : 0;
+  let toolCacheSubtitle;
+  if (toolCacheHitRate === null && toolCacheTurns === 0) {
+    toolCacheSubtitle = "tool cache: no events yet";
+  } else {
+    const hitRateText =
+      toolCacheHitRate === null ? "—" : formatPercent(toolCacheHitRate);
+    const sizeText =
+      toolCacheSizeMb === null ? "—" : `${toolCacheSizeMb.toFixed(1)} MB`;
+    toolCacheSubtitle = `tool cache: ${hitRateText} · ${sizeText} (${toolCacheTurns} turn${toolCacheTurns === 1 ? "" : "s"})`;
+  }
+
+  // Phase 115 Plan 08 T03 (sub-scope 17 a/b/c + 6-A) — tool-latency audit
+  // metrics rendered alongside the cache panel. The four subtitle lines
+  // surface the per-turn split-latency columns landed in T01 + the
+  // tool_use_rate measurement landed in T02. Operator can compare
+  // "tool itself slow" (tool_execution_ms_p50) vs "prompt-bloat-tax slow"
+  // (tool_roundtrip_ms_p50) at a glance, and see the parallel rate that
+  // the PARALLEL-TOOL-01 directive (sub-scope 17c) is intended to lift.
+  //
+  // The metrics travel on the same `report` object — the daemon's case
+  // "cache" handler (src/manager/daemon.ts) folds them in via
+  // `computeSplitLatencyFields(agentName, sinceIso)` next to the
+  // tool_cache_size_mb_live field already added by Plan 115-07. When
+  // the underlying agent has no signal (e.g., no in-window turns), the
+  // four fields are absent on `report` and the render falls back to "—".
+  const toolExecP50 =
+    report && typeof report.tool_execution_ms_p50 === "number"
+      ? report.tool_execution_ms_p50
+      : null;
+  const toolRoundtripP50 =
+    report && typeof report.tool_roundtrip_ms_p50 === "number"
+      ? report.tool_roundtrip_ms_p50
+      : null;
+  const parallelToolCallRate =
+    report && typeof report.parallel_tool_call_rate === "number"
+      ? report.parallel_tool_call_rate
+      : null;
+  const toolUseRate =
+    report && typeof report.tool_use_rate === "number"
+      ? report.tool_use_rate
+      : null;
+  const splitLatencyText =
+    toolExecP50 === null && toolRoundtripP50 === null
+      ? "split latency: no signal"
+      : `split latency: exec p50 ${toolExecP50 === null ? "—" : `${toolExecP50} ms`} · roundtrip p50 ${toolRoundtripP50 === null ? "—" : `${(toolRoundtripP50 / 1000).toFixed(1)} s`}`;
+  const useRateText =
+    toolUseRate === null
+      ? "tool_use_rate: no signal"
+      : `tool_use_rate: ${formatPercent(toolUseRate)} (sub-scope 6-A gate · 30% threshold)`;
+  const parallelRateText =
+    parallelToolCallRate === null
+      ? "parallel_tool_call_rate: no signal"
+      : `parallel_tool_call_rate: ${formatPercent(parallelToolCallRate)} (turns with batch ≥ 2)`;
+
+  // Phase 115 Plan 09 T04 (sub-scope 16(c)) — four new dashboard metric
+  // subtitle lines for the per-agent cache panel. Surfaces:
+  //   - tier1_inject_chars + tier1_budget_pct (115-02 sub-scope 1 cap)
+  //   - lazy_recall_call_count (115-05 sub-scope 7 lazy recall tools)
+  //   - prompt_bloat_warnings_24h (115-02 sub-scope 13 observability)
+  //
+  // Trace segments stay byte-identical (per ROADMAP line 877) — this
+  // adds new SUBTITLE lines alongside the existing layout, doesn't
+  // rename anything. tier1_budget_pct over 90% renders as a warning
+  // ("near cap") so operators see truncation pressure before it fires.
+  // tier1-truncation event count would be a 7th subtitle line; today
+  // the count is implicit in tier1_budget_pct — when truncation fires,
+  // the budget pct stays pinned at 100%, which the warning surface
+  // catches.
+  const tier1InjectChars =
+    report && typeof report.tier1_inject_chars === "number"
+      ? report.tier1_inject_chars
+      : null;
+  const tier1BudgetPct =
+    report && typeof report.tier1_budget_pct === "number"
+      ? report.tier1_budget_pct
+      : null;
+  let tier1Subtitle;
+  if (tier1InjectChars === null && tier1BudgetPct === null) {
+    tier1Subtitle = "tier 1: no signal yet (115-02 writes pending)";
+  } else {
+    const charsText =
+      tier1InjectChars === null
+        ? "—"
+        : `${tier1InjectChars.toLocaleString()} chars`;
+    const pctText =
+      tier1BudgetPct === null
+        ? "—"
+        : `${formatPercent(tier1BudgetPct)} of 16K cap`;
+    const nearCap = tier1BudgetPct !== null && tier1BudgetPct > 0.9;
+    tier1Subtitle = `tier 1: ${charsText} (${pctText})${nearCap ? " · near cap" : ""}`;
+  }
+
+  // tier1-truncation event count over 24h — defensive read of optional field
+  // that 115-02 may surface in a follow-on patch. Today daemon doesn't
+  // populate it; render only when present.
+  const tier1TruncationCount =
+    report && typeof report.tier1_truncation_count_24h === "number"
+      ? report.tier1_truncation_count_24h
+      : null;
+  if (tier1TruncationCount !== null && tier1TruncationCount > 0) {
+    tier1Subtitle += ` · ${tier1TruncationCount} truncations/24h`;
+  }
+
+  const lazyRecallCalls =
+    report && typeof report.lazy_recall_call_count === "number"
+      ? report.lazy_recall_call_count
+      : null;
+  const lazyRecallSubtitle =
+    lazyRecallCalls === null
+      ? "lazy recall (24h): no signal yet (115-05 writes pending)"
+      : `lazy recall (24h): ${lazyRecallCalls.toLocaleString()} tool call${lazyRecallCalls === 1 ? "" : "s"}`;
+
+  const promptBloatWarnings =
+    report && typeof report.prompt_bloat_warnings_24h === "number"
+      ? report.prompt_bloat_warnings_24h
+      : null;
+  const promptBloatSubtitle =
+    promptBloatWarnings === null
+      ? "prompt bloat warnings (24h): no signal yet (115-02 writes pending)"
+      : `prompt bloat warnings (24h): ${promptBloatWarnings}${promptBloatWarnings > 0 ? " · classifier-triggered" : ""}`;
+
   body.classList.remove("panel-placeholder");
   body.innerHTML = `<table class="cache-table">
     <thead><tr><th>Hit Rate</th><th>Cache Reads</th><th>Cache Writes</th><th>Input Tokens</th><th>Turns</th></tr></thead>
@@ -579,7 +726,14 @@ function renderCachePanel(body, report) {
   </table>
   <div class="cache-subtitle">Hit rate = cache reads / (cache reads + cache writes + input tokens)</div>
   <div class="cache-subtitle">SLO: healthy &ge; 60%, breach &lt; 30% · p50 ${escapeHtml(p50Text)} · p95 ${escapeHtml(p95Text)}</div>
-  <div class="cache-subtitle">${escapeHtml(effectSubtitle)}</div>`;
+  <div class="cache-subtitle">${escapeHtml(effectSubtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(toolCacheSubtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(splitLatencyText)}</div>
+  <div class="cache-subtitle">${escapeHtml(useRateText)}</div>
+  <div class="cache-subtitle">${escapeHtml(parallelRateText)}</div>
+  <div class="cache-subtitle">${escapeHtml(tier1Subtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(lazyRecallSubtitle)}</div>
+  <div class="cache-subtitle">${escapeHtml(promptBloatSubtitle)}</div>`;
 }
 
 /**

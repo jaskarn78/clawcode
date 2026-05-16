@@ -91,7 +91,10 @@ export type BackoffConfig = {
 export type AgentSessionConfig = {
   readonly name: string;
   readonly model: "sonnet" | "opus" | "haiku";
-  readonly effort: "low" | "medium" | "high" | "max";
+  // Mirrors `effortSchema` in config/schema.ts and ResolvedAgentConfig.effort
+  // — the canonical 7-value union. Was previously narrowed to 4 values which
+  // diverged from the schema after `xhigh`/`auto`/`off` were added.
+  readonly effort: "low" | "medium" | "high" | "xhigh" | "max" | "auto" | "off";
   readonly workspace: string;
   readonly systemPrompt: string;
   readonly mutableSuffix?: string;
@@ -108,7 +111,131 @@ export type AgentSessionConfig = {
      * Defaults to false (mandatory) at the config/loader layer.
      */
     readonly optional: boolean;
+    /**
+     * Phase 999.54 (D-01a) — mirrors ResolvedAgentConfig.mcpServers[].alwaysLoad.
+     * This field is the actual contract for what reaches transformMcpServersForSdk
+     * (session-adapter.ts:1317). Without this widening here, the transform
+     * function's inline param type silently strips the field (RESEARCH.md Pitfall 2).
+     */
+    readonly alwaysLoad?: boolean;
   }[];
+  /**
+   * Phase 100 GSD-02 — per-agent SDK settingSources passthrough. When omitted
+   * (existing fleet, all 15+ agents), session-adapter applies the
+   * ['project'] default at lines 592/631. When set (Admin Clawdy + future
+   * GSD-enabled agents), passes through verbatim. Mirrors
+   * ResolvedAgentConfig.settingSources but stays optional at this boundary
+   * so existing call sites that build AgentSessionConfig don't need updates
+   * until they choose to opt in. See RESEARCH.md Architecture Pattern 5.
+   */
+  readonly settingSources?: readonly ("project" | "user" | "local")[];
+  /**
+   * Phase 100 GSD-04 — per-agent gsd block. UNDEFINED when not set (existing
+   * fleet). When set, session-adapter uses gsd.projectDir as the SDK cwd
+   * instead of config.workspace at lines 588/627. Mirrors
+   * ResolvedAgentConfig.gsd verbatim.
+   */
+  readonly gsd?: { readonly projectDir: string };
+  /**
+   * Phase 99 sub-scope N (2026-04-26) — SDK-level deny-list. When set, the
+   * LLM physically cannot invoke any tool whose name matches an entry. Used
+   * for the subagent recursion guard: subagent sessions disallow
+   * `mcp__clawcode__spawn_subagent_thread` so they cannot chain further
+   * subagents (subagents inherit the parent's "delegate, don't execute"
+   * soul and would otherwise loop indefinitely). Forwarded verbatim into
+   * the SDK's `disallowedTools` option in both `createSession` and
+   * `resumeSession` (symmetric-edits Rule 3). Empty/undefined → omitted
+   * from baseOptions so the existing 15+ agent fleet is unaffected.
+   */
+  readonly disallowedTools?: readonly string[];
+  /**
+   * Phase 115 sub-scope 14 — operator-toggle for the diagnostic baseopts
+   * dump. UNDEFINED for the existing fleet (no behavior change). When set,
+   * `dumpBaseOptionsOnSpawn === true` enables the per-agent baseopts dump
+   * to ~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-<ts>.json on
+   * every createSession/resumeSession (secrets redacted via redactSecrets
+   * in session-adapter.ts). Replaces the temporary hardcoded fin-acquisition
+   * + Admin Clawdy allowlist. Mirrors `ResolvedAgentConfig.debug` verbatim
+   * but stays optional at this boundary so existing call sites that build
+   * AgentSessionConfig don't need updates until they choose to opt in.
+   */
+  readonly debug?: {
+    readonly dumpBaseOptionsOnSpawn: boolean;
+  };
+  /**
+   * Phase 115 sub-scope 2 — operator-toggle for the SDK
+   * `systemPrompt.excludeDynamicSections` flag. UNDEFINED for legacy call
+   * sites; when set, session-adapter passes it through verbatim to the SDK.
+   * Down-stream of buildSessionConfig which resolves it from
+   * ResolvedAgentConfig (always populated, default true). Stays optional
+   * here for back-compat with existing AgentSessionConfig builders (e.g. the
+   * bootstrap path in session-config.ts which has a different return shape).
+   */
+  readonly excludeDynamicSections?: boolean;
+  /**
+   * Phase 117 Plan 04 T05 — native advisor model passthrough.
+   *
+   * When SET, the SDK adapter spread-conditionally adds
+   * `advisorModel: <value>` to the `Options` object handed to
+   * `sdk.query`, enabling the `advisor_20260301` server tool inside
+   * the agent's own turn (the bundled `claude` CLI binary handles the
+   * `advisor-tool-2026-03-01` beta header injection automatically per
+   * RESEARCH §6 Pitfall 2).
+   *
+   * When UNDEFINED, the adapter OMITS the field entirely (NEVER
+   * passes `{advisorModel: undefined}` — the spread-conditional idiom
+   * preserves byte-stable equality and avoids implicit-undefined
+   * surprises per RESEARCH §6 Pitfall 3).
+   *
+   * Value is the SDK-canonical model id (e.g. `"claude-opus-4-7"`),
+   * already resolved through the alias map in
+   * `src/manager/model-resolver.ts` before reaching this field. Raw
+   * operator aliases (`"opus"`) are NEVER written here.
+   *
+   * The gate that decides set-vs-omit lives in
+   * `src/manager/session-config.ts:shouldEnableAdvisor` and evaluates
+   * `(a) backend === "native"` AND `(b) AdvisorBudget.canCall(agent)`.
+   * Both conditions must pass per RESEARCH §6 Pitfall 4 + §13.5.
+   */
+  readonly advisorModel?: string;
+  /**
+   * Phase 127 — stream-stall supervisor threshold (ms). When set, the SDK
+   * adapter (session-adapter.ts createSession/resumeSession) threads it
+   * into the per-handle baseOptions as an adapter-only field; the
+   * persistent-session-handle iteration loop constructs one
+   * `createStreamStallTracker` per turn that aborts the in-flight query
+   * when `Date.now() - lastUsefulTokenAt > streamStallTimeoutMs`.
+   *
+   * UNDEFINED for legacy call sites; consumers default to 180_000ms
+   * (matches `defaults.streamStallTimeoutMs`). Populated by
+   * `session-config.ts:buildSessionConfig` from
+   * `ResolvedAgentConfig.streamStallTimeoutMs` (loader cascade).
+   *
+   * Optional at this boundary mirrors the
+   * `memoryRetrievalTokenBudget?: number` precedent — back-compat with
+   * existing AgentSessionConfig builders (the bootstrap path has a
+   * different return shape).
+   */
+  readonly streamStallTimeoutMs?: number;
+  /**
+   * Phase 127 — operator-injected callback fired on stall trip. Receives
+   * the structured payload (lastUsefulTokenAgeMs, thresholdMs) that the
+   * production wiring also emits via `phase127-stream-stall` log. The
+   * daemon-side wiring (Plan 02) hangs Discord notification + session-log
+   * persistence on this hook; Plan 01 keeps the field type-level only so
+   * the chokepoint is testable in isolation.
+   *
+   * UNDEFINED in this plan — Plan 02 wires the daemon-side
+   * implementation. Production code MUST handle undefined gracefully:
+   * the tracker still emits `phase127-stream-stall` to console.info AND
+   * still aborts the SDK query via the per-handle AbortController, so
+   * the protective behavior works in Plan 01 even before Plan 02 lands
+   * the side-effect surface.
+   */
+  readonly onStreamStall?: (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void;
 };
 
 /**

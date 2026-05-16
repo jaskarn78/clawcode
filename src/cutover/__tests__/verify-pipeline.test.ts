@@ -121,7 +121,11 @@ async function makeHappyDeps(
     runCanaryOnReady: true,
     outputDir,
     stagingDir,
-    ingestDiscordHistory: vi.fn(async () => ({
+    // vitest 4 infers `kind: string` from object literals; the deps type
+    // expects the precise discriminant ("ingested" | "ingest-failed" | ...).
+    // Pin each vi.fn to its corresponding deps function signature so the
+    // returned Mock is assignable to the deps slot directly.
+    ingestDiscordHistory: vi.fn<VerifyPipelineDeps["ingestDiscordHistory"]>(async () => ({
       kind: "ingested",
       agent: "fin-acquisition",
       channelsProcessed: 1,
@@ -130,7 +134,7 @@ async function makeHappyDeps(
       durationMs: 10,
       jsonlPath: join(stagingDir, "discord-history.jsonl"),
     })),
-    runSourceProfiler: vi.fn(async () => ({
+    runSourceProfiler: vi.fn<VerifyPipelineDeps["runSourceProfiler"]>(async () => ({
       kind: "profiled",
       agent: "fin-acquisition",
       chunksProcessed: 1,
@@ -138,26 +142,26 @@ async function makeHappyDeps(
       profilePath,
       durationMs: 10,
     })),
-    probeTargetCapability: vi.fn(async () => ({
+    probeTargetCapability: vi.fn<VerifyPipelineDeps["probeTargetCapability"]>(async () => ({
       kind: "probed",
       agent: "fin-acquisition",
       capabilityPath,
       durationMs: 10,
     })),
-    diffAgentVsTarget: vi.fn(() => [] as readonly CutoverGap[]),
-    applyAdditiveFixes: vi.fn(async () => ({
+    diffAgentVsTarget: vi.fn<VerifyPipelineDeps["diffAgentVsTarget"]>(() => [] as readonly CutoverGap[]),
+    applyAdditiveFixes: vi.fn<VerifyPipelineDeps["applyAdditiveFixes"]>(async () => ({
       kind: "dry-run",
       agent: "fin-acquisition",
       plannedAdditive: 0,
       destructiveDeferred: 0,
     })),
-    synthesizeCanaryPrompts: vi.fn(async () => ({
+    synthesizeCanaryPrompts: vi.fn<VerifyPipelineDeps["synthesizeCanaryPrompts"]>(async () => ({
       kind: "synthesized",
       agent: "fin-acquisition",
       prompts: [{ intent: "summarize-pdf", prompt: "Summarize the attached PDF." }],
       durationMs: 50,
     })),
-    runCanary: vi.fn(async () => ({
+    runCanary: vi.fn<VerifyPipelineDeps["runCanary"]>(async () => ({
       kind: "ran",
       agent: "fin-acquisition",
       results: makeCanaryResults(40, 40),
@@ -165,7 +169,7 @@ async function makeHappyDeps(
       reportPath: join(outputDir, "CANARY-REPORT.md"),
       durationMs: 100,
     })),
-    writeCutoverReport: vi.fn(async () => ({
+    writeCutoverReport: vi.fn<VerifyPipelineDeps["writeCutoverReport"]>(async () => ({
       kind: "written",
       reportPath: join(outputDir, "CUTOVER-REPORT.md"),
       cutoverReady: true,
@@ -212,8 +216,8 @@ describe("runVerifyPipeline — VP2 only-additive-gaps-applied", () => {
     ];
     const deps = await makeHappyDeps({
       applyAdditive: true,
-      diffAgentVsTarget: vi.fn(() => additiveGaps),
-      applyAdditiveFixes: vi.fn(async () => ({
+      diffAgentVsTarget: vi.fn<VerifyPipelineDeps["diffAgentVsTarget"]>(() => additiveGaps),
+      applyAdditiveFixes: vi.fn<VerifyPipelineDeps["applyAdditiveFixes"]>(async () => ({
         kind: "applied",
         agent: "fin-acquisition",
         gapsApplied: 2,
@@ -244,13 +248,13 @@ describe("runVerifyPipeline — VP3 destructive-gaps-not-ready", () => {
       },
     ];
     const deps = await makeHappyDeps({
-      diffAgentVsTarget: vi.fn(() => destructiveGaps),
-      applyAdditiveFixes: vi.fn(async () => ({
+      diffAgentVsTarget: vi.fn<VerifyPipelineDeps["diffAgentVsTarget"]>(() => destructiveGaps),
+      applyAdditiveFixes: vi.fn<VerifyPipelineDeps["applyAdditiveFixes"]>(async () => ({
         kind: "destructive-gaps-deferred",
         agent: "fin-acquisition",
         destructiveCount: 1,
       })),
-      writeCutoverReport: vi.fn(async () => ({
+      writeCutoverReport: vi.fn<VerifyPipelineDeps["writeCutoverReport"]>(async () => ({
         kind: "written",
         reportPath: join(outputDir, "CUTOVER-REPORT.md"),
         cutoverReady: false,
@@ -268,7 +272,7 @@ describe("runVerifyPipeline — VP3 destructive-gaps-not-ready", () => {
 describe("runVerifyPipeline — VP4 canary-failure", () => {
   it("applyAdditive ok, canary passRate=80 → verified-not-ready", async () => {
     const deps = await makeHappyDeps({
-      runCanary: vi.fn(async () => ({
+      runCanary: vi.fn<VerifyPipelineDeps["runCanary"]>(async () => ({
         kind: "ran",
         agent: "fin-acquisition",
         results: makeCanaryResults(32, 40),
@@ -276,7 +280,7 @@ describe("runVerifyPipeline — VP4 canary-failure", () => {
         reportPath: join(outputDir, "CANARY-REPORT.md"),
         durationMs: 100,
       })),
-      writeCutoverReport: vi.fn(async () => ({
+      writeCutoverReport: vi.fn<VerifyPipelineDeps["writeCutoverReport"]>(async () => ({
         kind: "written",
         reportPath: join(outputDir, "CUTOVER-REPORT.md"),
         cutoverReady: false,
@@ -292,7 +296,7 @@ describe("runVerifyPipeline — VP4 canary-failure", () => {
 describe("runVerifyPipeline — VP5 ingest-failed-bubbles", () => {
   it("ingest fails → outcome.kind=ingest-failed; profile/probe/diff/apply/canary/report NEVER called", async () => {
     const deps = await makeHappyDeps({
-      ingestDiscordHistory: vi.fn(async () => ({
+      ingestDiscordHistory: vi.fn<VerifyPipelineDeps["ingestDiscordHistory"]>(async () => ({
         kind: "discord-fetch-failed",
         agent: "fin-acquisition",
         channelId: "x",

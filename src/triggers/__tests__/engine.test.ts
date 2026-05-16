@@ -19,6 +19,8 @@ import pino from "pino";
 
 import { TriggerSourceRegistry } from "../source-registry.js";
 import { TriggerEngine } from "../engine.js";
+import { PolicyEvaluator } from "../policy-evaluator.js";
+import type { CompiledRule } from "../policy-loader.js";
 import type { TriggerEvent, TriggerSource } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -60,11 +62,19 @@ function makeMockTaskStore(db: DatabaseType) {
 function makeFakeSource(
   sourceId: string,
   opts: { poll?: boolean } = {},
-): TriggerSource & { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; pollFn?: ReturnType<typeof vi.fn> } {
-  const source: TriggerSource & { start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; pollFn?: ReturnType<typeof vi.fn> } = {
+): TriggerSource & {
+  start: ReturnType<typeof vi.fn<() => void>>;
+  stop: ReturnType<typeof vi.fn<() => void>>;
+  pollFn?: ReturnType<typeof vi.fn<(since: string | null) => Promise<readonly never[]>>>;
+} {
+  const source: TriggerSource & {
+    start: ReturnType<typeof vi.fn<() => void>>;
+    stop: ReturnType<typeof vi.fn<() => void>>;
+    pollFn?: ReturnType<typeof vi.fn<(since: string | null) => Promise<readonly never[]>>>;
+  } = {
     sourceId,
-    start: vi.fn(),
-    stop: vi.fn(),
+    start: vi.fn<() => void>(),
+    stop: vi.fn<() => void>(),
   };
   if (opts.poll) {
     const pollFn = vi.fn().mockResolvedValue([]);
@@ -334,5 +344,199 @@ describe("TriggerEngine", () => {
     const event2 = makeEvent({ targetAgent: "new-agent", idempotencyKey: "new-key" });
     await engine.ingest(event2);
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.11 Plan 00 — POLICY default-allow regression locks.
+//
+// These two tests are REGRESSION LOCKS, not driver-RED. POLICY-01 and
+// POLICY-02's actual RED moment is at the daemon boot site (daemon.ts ~2034,
+// which today constructs `new PolicyEvaluator([], configuredAgentNames)` —
+// fail-closed on missing policies.yaml). The engine ternary at engine.ts:130
+// already does the right thing when `evaluator` is undefined: it routes
+// through `evaluatePolicy()` (default-allow for any configured target).
+//
+// These tests pin the engine-side contract so a future refactor cannot
+// silently break the swap mechanism Plan 01 relies on.
+//
+// Failure mode if the engine ternary regresses:
+//   POLICY-01 — would fail with "policy rejected event" / dispatcher not called.
+//   POLICY-02 — would fail because reloadEvaluator(real) wouldn't override the
+//   default-allow path.
+// ---------------------------------------------------------------------------
+
+describe("default-allow when evaluator undefined (POLICY-01)", () => {
+  let db: DatabaseType;
+  let dispatcher: ReturnType<typeof makeMockDispatcher>;
+  let taskStore: ReturnType<typeof makeMockTaskStore>;
+  const configuredAgents = new Set(["fin-acquisition", "finmentum-content-creator"]);
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    dispatcher = makeMockDispatcher();
+    taskStore = makeMockTaskStore(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("dispatches scheduler event when targetAgent is in configuredAgents", async () => {
+    // Reproduces today's clawdy journal: 09:00 fin-acquisition standup
+    // MUST dispatch via the default-allow function-form when evaluator undefined.
+    const engine = new TriggerEngine(
+      {
+        turnDispatcher: dispatcher as any,
+        taskStore: taskStore as any,
+        log: silentLog,
+        config: {
+          replayMaxAgeMs: 86_400_000,
+          dedupLruSize: 100,
+          defaultDebounceMs: 0,
+        },
+      },
+      configuredAgents,
+      undefined, // ← path B: undefined evaluator → engine.ts:130 selects evaluatePolicy()
+    );
+
+    const event: TriggerEvent = {
+      sourceId: "scheduler",
+      sourceKind: "scheduler",
+      idempotencyKey: "sched-0900-fin-acq-standup",
+      targetAgent: "fin-acquisition",
+      payload: "0900 standup",
+      timestamp: Date.now(),
+    };
+
+    await engine.ingest(event);
+
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    const [, agentName, payload] = dispatcher.dispatch.mock.calls[0]!;
+    expect(agentName).toBe("fin-acquisition");
+    // Payload preserved through default-allow path (string passthrough).
+    expect(payload).toBe("0900 standup");
+    engine.stopAll();
+  });
+
+  it("rejects with 'target agent X not configured' (NOT 'no matching rule')", async () => {
+    // Pin the rejection reason from CONTEXT.md <specifics>: when targetAgent
+    // is NOT configured, the failure mode must be the function-form's
+    // "target agent 'X' not configured", NEVER the class-form's
+    // "no matching rule" (which is what fail-closed empty-rules emits today
+    // at the daemon boot site).
+    const engine = new TriggerEngine(
+      {
+        turnDispatcher: dispatcher as any,
+        taskStore: taskStore as any,
+        log: silentLog,
+        config: {
+          replayMaxAgeMs: 86_400_000,
+          dedupLruSize: 100,
+          defaultDebounceMs: 0,
+        },
+      },
+      configuredAgents,
+      undefined,
+    );
+
+    const logSpy = vi.spyOn((engine as any).log, "info");
+
+    const event: TriggerEvent = {
+      sourceId: "scheduler",
+      sourceKind: "scheduler",
+      idempotencyKey: "ghost-evt-1",
+      targetAgent: "ghost-agent",
+      payload: "should not dispatch",
+      timestamp: Date.now(),
+    };
+
+    await engine.ingest(event);
+
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    // Look through the info log calls for the specific rejection reason —
+    // must contain "not configured" (function-form), NOT "no matching rule".
+    const rejectCall = logSpy.mock.calls.find((c) => {
+      const ctx = c[0] as { reason?: string } | undefined;
+      return ctx && typeof ctx.reason === "string" && ctx.reason.includes("not configured");
+    });
+    expect(rejectCall).toBeDefined();
+    // And explicitly NOT the empty-rules failure mode.
+    const emptyRulesCall = logSpy.mock.calls.find((c) => {
+      const ctx = c[0] as { reason?: string } | undefined;
+      return ctx && ctx.reason === "no matching rule";
+    });
+    expect(emptyRulesCall).toBeUndefined();
+    engine.stopAll();
+  });
+});
+
+describe("reloadEvaluator swap (POLICY-02)", () => {
+  let db: DatabaseType;
+  let dispatcher: ReturnType<typeof makeMockDispatcher>;
+  let taskStore: ReturnType<typeof makeMockTaskStore>;
+  const configuredAgents = new Set(["fin-acquisition"]);
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    dispatcher = makeMockDispatcher();
+    taskStore = makeMockTaskStore(db);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("swaps from undefined default-allow to a real evaluator that rejects", async () => {
+    // Phase 999.11 Plan 01 must preserve the back-compat with PolicyWatcher.onReload:
+    // boot with undefined evaluator (default-allow), then reloadEvaluator(real)
+    // must take effect on the very next ingest.
+    const engine = new TriggerEngine(
+      {
+        turnDispatcher: dispatcher as any,
+        taskStore: taskStore as any,
+        log: silentLog,
+        config: {
+          replayMaxAgeMs: 86_400_000,
+          dedupLruSize: 100,
+          defaultDebounceMs: 0,
+        },
+      },
+      configuredAgents,
+      undefined,
+    );
+
+    // Step 1: default-allow path dispatches a configured-target event.
+    const evt1: TriggerEvent = {
+      sourceId: "scheduler",
+      sourceKind: "scheduler",
+      idempotencyKey: "swap-evt-1",
+      targetAgent: "fin-acquisition",
+      payload: "before reload",
+      timestamp: Date.now(),
+    };
+    await engine.ingest(evt1);
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+
+    // Step 2: build a real PolicyEvaluator with ZERO rules (so .evaluate()
+    // returns "no matching rule" — the fail-closed semantic). After
+    // reloadEvaluator(real), the ternary at engine.ts:130 must select the
+    // class form and reject the next event.
+    const realEvaluator = new PolicyEvaluator([] as readonly CompiledRule[], configuredAgents);
+    engine.reloadEvaluator(realEvaluator);
+
+    const evt2: TriggerEvent = {
+      sourceId: "scheduler",
+      sourceKind: "scheduler",
+      idempotencyKey: "swap-evt-2",
+      targetAgent: "fin-acquisition",
+      payload: "after reload",
+      timestamp: Date.now() + 1,
+    };
+    await engine.ingest(evt2);
+
+    // Dispatcher count unchanged — the real evaluator rejected evt2.
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    engine.stopAll();
   });
 });

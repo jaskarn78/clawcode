@@ -1,0 +1,7 @@
+# Transient JSON contract surface read by Plan 02 verify.sh — never commit.
+.refresh-last.json
+
+# Editor + OS noise.
+*.tmp
+*.swp
+.DS_Store

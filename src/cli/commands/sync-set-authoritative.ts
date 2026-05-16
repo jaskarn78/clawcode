@@ -277,6 +277,19 @@ async function executeForwardCutover(
     return 1;
   }
 
+  // Phase 96 D-11 — state-machine guard: cannot forward-cutover from
+  // deprecated state. Operator must first re-enable-timer (within 7-day
+  // window) OR set-authoritative openclaw (Phase 91 revert path) before
+  // initiating a fresh forward cutover.
+  if (state.authoritativeSide === "deprecated") {
+    cliError(
+      "Cannot forward-cutover from deprecated state. " +
+        "First run `clawcode sync re-enable-timer` (within 7-day window of deprecation) " +
+        "or set authoritativeSide back to openclaw via a fresh sync setup.",
+    );
+    return 1;
+  }
+
   if (!args.confirmCutover) {
     cliError(
       "Flipping TO clawcode is destructive — pass --confirm-cutover to proceed.\n" +

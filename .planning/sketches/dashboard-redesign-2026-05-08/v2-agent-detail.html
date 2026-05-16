@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode — Agent Detail: fin-acquisition</title>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,600,700,800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        display:['"Cabinet Grotesk"','sans-serif'],
+        sans:['Geist','sans-serif'],
+        mono:['"JetBrains Mono"','monospace'],
+      },
+      colors: {
+        bg:{base:'#0e0e12',s1:'#16161c',s2:'#1c1c24',s3:'#252530'},
+        fg:{1:'#f4f4f5',2:'#a1a1aa',3:'#71717a'},
+        accent:{green:'#10b981',blue:'#3b82f6',amber:'#f59e0b',red:'#ef4444',gold:'#eab308',pink:'#ff3366'},
+      },
+    },
+  },
+};
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  * { box-sizing:border-box; }
+  body { font-family:'Geist',sans-serif; background:#0e0e12; color:#f4f4f5; }
+  .font-display { font-family:'Cabinet Grotesk',sans-serif; }
+  .font-mono { font-family:'JetBrains Mono',monospace; }
+  .panel { background:#16161c; border:1px solid rgba(255,255,255,0.06); border-radius:14px; }
+  .tab-btn { padding:7px 14px; border-radius:8px; font-size:13px; font-weight:500; color:#71717a; transition:all 120ms ease; cursor:pointer; }
+  .tab-btn.active { background:rgba(255,255,255,0.08); color:#f4f4f5; }
+  .progress-bar { height:4px; background:rgba(255,255,255,0.06); border-radius:2px; overflow:hidden; }
+  .progress-fill { height:100%; border-radius:2px; }
+  .sparkline { display:flex; align-items:flex-end; gap:2px; height:22px; }
+  .spark-bar { flex:1; min-height:2px; border-radius:1px; }
+  .streaming-pulse { width:8px; height:8px; border-radius:50%; background:#ff3366; animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite; display:inline-block; }
+  @keyframes ping { 75%,100%{transform:scale(1.8);opacity:0} }
+  .dot-active { background:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,0.15); }
+  .message-row { transition:background 100ms; }
+  .message-row:hover { background:rgba(255,255,255,0.02); }
+  .tool-pill { font-family:'JetBrains Mono',monospace; font-size:10px; padding:2px 7px; border-radius:4px; border:1px solid rgba(255,255,255,0.08); color:#a1a1aa; background:rgba(255,255,255,0.04); white-space:nowrap; }
+  .slo-gauge { display:flex; align-items:center; gap:8px; }
+  .gauge-bar { flex:1; height:3px; background:rgba(255,255,255,0.06); border-radius:2px; overflow:hidden; }
+  .gauge-fill { height:100%; border-radius:2px; }
+  .palette-overlay { position:fixed; inset:0; z-index:500; background:rgba(0,0,0,0.55); display:none; backdrop-filter:blur(6px); }
+  .palette-overlay.open { display:flex; align-items:flex-start; justify-content:center; padding-top:14vh; }
+  .palette-box { width:min(560px,calc(100vw - 32px)); background:#1c1c24; border:1px solid rgba(255,255,255,0.1); border-radius:12px; box-shadow:0 32px 64px rgba(0,0,0,0.7); overflow:hidden; animation:fadeUp 180ms ease; }
+  .p-item { transition:background 80ms ease; cursor:pointer; }
+  .p-item:hover,.p-item.sel { background:rgba(255,255,255,0.05); }
+  .mode-pill { display:flex; background:rgba(255,255,255,0.05); border-radius:8px; padding:3px; gap:2px; }
+  .mode-btn { padding:5px 14px; border-radius:6px; font-size:13px; font-weight:500; transition:all 150ms ease; color:#71717a; }
+  .mode-btn.active { background:rgba(255,255,255,0.08); color:#f4f4f5; }
+  @media (max-width:767px) { .three-panel { grid-template-columns:1fr !important; } .bottom-nav { display:flex !important; } .sidebar { display:none !important; } body { padding-bottom:72px; } }
+  @media (max-width:1023px) and (min-width:768px) { .three-panel { grid-template-columns:1fr 1fr !important; } }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  .fade-in { animation:fadeUp 200ms ease both; }
+  .bottom-nav { display:none; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- COMMAND PALETTE -->
+<div class="palette-overlay" id="palette" onclick="if(event.target===this)closePalette()">
+  <div class="palette-box" onclick="event.stopPropagation()">
+    <div class="flex items-center gap-3 px-4 py-3.5 border-b border-white/5">
+      <i data-lucide="search" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+      <input id="palette-input" placeholder="Search agents, actions..." autocomplete="off"
+        class="flex-1 bg-transparent text-fg-1 text-[15px] outline-none placeholder-fg-3"
+        oninput="filterPalette(this.value)" onkeydown="paletteKey(event)">
+      <span class="font-mono text-xs text-fg-3 bg-bg-s3 px-1.5 py-0.5 rounded">ESC</span>
+    </div>
+    <div id="p-list" class="py-1.5 max-h-72 overflow-y-auto"></div>
+    <div class="px-4 py-2.5 border-t border-white/5 flex gap-5 text-xs text-fg-3">
+      <span><kbd class="font-mono">↑↓</kbd> navigate</span>
+      <span><kbd class="font-mono">↵</kbd> open</span>
+    </div>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+<div class="flex min-h-screen">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar hidden md:flex flex-col w-[220px] flex-shrink-0 bg-bg-s1 border-r border-white/5 sticky top-0 h-screen">
+    <div class="px-5 py-4 border-b border-white/5">
+      <div class="flex items-center gap-2">
+        <span class="font-mono font-semibold text-accent-pink text-[17px]">{/}</span>
+        <span class="font-display font-bold text-fg-1 text-[15px] tracking-tight">ClawCode</span>
+      </div>
+      <div class="flex items-center gap-2 mt-1.5">
+        <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+        <span class="text-[11px] text-fg-3 font-mono">clawdy · live</span>
+      </div>
+    </div>
+    <nav class="flex-1 py-3 px-2">
+      <a href="v2-fleet-advanced.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="layout-grid" class="w-4 h-4"></i> Fleet
+      </a>
+      <a href="v2-conversations.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="message-square" class="w-4 h-4"></i> Conversations
+      </a>
+      <a href="v2-tasks.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="check-square" class="w-4 h-4"></i> Tasks
+      </a>
+      <a href="v2-config-editor.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-1 bg-white/5 mb-0.5">
+        <i data-lucide="settings" class="w-4 h-4 text-accent-green"></i> Config
+      </a>
+    </nav>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1 flex flex-col min-w-0 min-h-screen">
+
+    <!-- HEADER -->
+    <header class="bg-bg-s1/90 backdrop-blur border-b border-white/5 px-4 md:px-6 h-14 flex items-center justify-between sticky top-0 z-50">
+      <div class="flex items-center gap-2 text-[13px]">
+        <a href="v2-fleet-advanced.html" class="text-fg-3 hover:text-fg-1 transition-colors">Fleet</a>
+        <span class="text-fg-3/40">/</span>
+        <span class="text-fg-1 font-medium">fin-acquisition</span>
+        <span class="text-accent-gold text-[13px] ml-1">★</span>
+        <div class="streaming-pulse ml-2"></div>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="mode-pill">
+          <button class="mode-btn" onclick="location.href='v2-fleet-basic.html'">Basic</button>
+          <button class="mode-btn active">Advanced</button>
+        </div>
+        <button onclick="openPalette()" class="hidden sm:flex items-center gap-2 text-[12px] text-fg-3 bg-bg-s3 border border-white/5 rounded-lg px-3 py-1.5 hover:border-white/10 transition-colors">
+          <i data-lucide="search" class="w-3 h-3"></i>
+          <kbd class="font-mono">⌘K</kbd>
+        </button>
+        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-accent-blue to-accent-green flex items-center justify-center text-[11px] font-mono font-semibold text-white">J</div>
+      </div>
+    </header>
+
+    <!-- AGENT INFO BAR -->
+    <div class="px-4 md:px-6 py-4 border-b border-white/5 flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-4">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-blue/20 to-accent-green/10 border border-white/8 flex items-center justify-center text-[16px] font-mono font-bold text-accent-blue">fin</div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-display text-[18px] font-bold text-fg-1">fin-acquisition</h1>
+            <span class="text-accent-gold text-[14px]">★</span>
+            <span class="text-[11px] font-mono px-1.5 py-0.5 rounded" style="background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.25)">sonnet</span>
+          </div>
+          <div class="flex items-center gap-3 mt-0.5 text-[12px] text-fg-3">
+            <span class="font-mono">uptime 3h 4m</span>
+            <span>·</span><span>#fin-acquisition</span>
+            <span>·</span><span class="font-mono text-accent-green">active 2m ago</span>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="location.href='v2-config-editor.html'" class="flex items-center gap-2 text-[13px] text-fg-2 bg-bg-s2 border border-white/8 rounded-lg px-3 py-2 hover:border-white/15 hover:text-fg-1 transition-colors">
+          <i data-lucide="settings-2" class="w-3.5 h-3.5"></i> Edit config
+        </button>
+        <button class="flex items-center gap-2 text-[13px] text-fg-2 bg-bg-s2 border border-white/8 rounded-lg px-3 py-2 hover:border-white/15 hover:text-fg-1 transition-colors">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Restart
+        </button>
+      </div>
+    </div>
+
+    <!-- THREE-PANEL INSPECTOR -->
+    <div class="flex-1 p-4 md:p-6">
+      <div class="three-panel grid grid-cols-1 lg:grid-cols-3 gap-4 fade-in">
+
+        <!-- LEFT: Config/Meta (F11) -->
+        <div class="panel p-5">
+          <h3 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-4">Agent Config</h3>
+          <div class="space-y-3">
+            <div class="flex justify-between items-center text-[13px]">
+              <span class="text-fg-3">model</span>
+              <span class="font-mono text-accent-blue bg-accent-blue/8 px-2 py-0.5 rounded">sonnet</span>
+            </div>
+            <div class="flex justify-between items-center text-[13px]">
+              <span class="text-fg-3">tier</span><span class="font-mono text-fg-2">low</span>
+            </div>
+            <div class="flex justify-between items-center text-[13px]">
+              <span class="text-fg-3">escalation budget</span><span class="font-mono text-fg-2">$2/day</span>
+            </div>
+            <div class="flex justify-between items-center text-[13px]">
+              <span class="text-fg-3">primary channel</span><span class="font-mono text-fg-2">#fin-acquisition</span>
+            </div>
+            <div class="flex justify-between items-center text-[13px]">
+              <span class="text-fg-3">workspace</span><span class="font-mono text-fg-3 text-[11px]">/opt/workspaces/fin</span>
+            </div>
+          </div>
+
+          <!-- MCP Servers (F10) -->
+          <div class="mt-5 pt-5 border-t border-white/5">
+            <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">MCP Servers</h4>
+            <div class="space-y-2">
+              <div class="flex items-center gap-2 text-[13px]">
+                <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+                <span class="text-fg-2 flex-1">finmentum-db</span>
+                <span class="text-fg-3 text-[11px] font-mono">8 tools</span>
+              </div>
+              <div class="flex items-center gap-2 text-[13px]">
+                <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+                <span class="text-fg-2 flex-1">1password</span>
+                <span class="text-fg-3 text-[11px] font-mono">4 tools</span>
+              </div>
+              <div class="flex items-center gap-2 text-[13px]">
+                <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+                <span class="text-fg-2 flex-1">search</span>
+                <span class="text-fg-3 text-[11px] font-mono">2 tools</span>
+              </div>
+              <div class="flex items-center gap-2 text-[13px]">
+                <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+                <span class="text-fg-2 flex-1">google-workspace</span>
+                <span class="text-fg-3 text-[11px] font-mono">12 tools</span>
+              </div>
+              <div class="flex items-center gap-2 text-[13px]">
+                <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+                <span class="text-fg-2 flex-1">browser</span>
+                <span class="text-fg-3 text-[11px] font-mono">6 tools</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Allowed tools -->
+          <div class="mt-5 pt-5 border-t border-white/5">
+            <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">Tools</h4>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="tool-pill">Read</span>
+              <span class="tool-pill">Write</span>
+              <span class="tool-pill">Bash</span>
+              <span class="tool-pill">WebSearch</span>
+              <span class="tool-pill">WebFetch</span>
+              <span class="tool-pill">send_to_agent</span>
+              <span class="tool-pill">query_memory</span>
+            </div>
+          </div>
+
+          <div class="mt-5 pt-5 border-t border-white/5">
+            <a href="v2-config-editor.html" class="flex items-center gap-2 text-[13px] text-accent-blue hover:text-blue-400 transition-colors">
+              <i data-lucide="settings-2" class="w-4 h-4"></i> Open full config editor →
+            </a>
+          </div>
+        </div>
+
+        <!-- CENTER: Transcript (F11, F12) -->
+        <div class="panel flex flex-col overflow-hidden" style="max-height:min(700px,80vh)">
+          <div class="flex items-center justify-between px-5 py-3 border-b border-white/5 flex-shrink-0">
+            <h3 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider">Live Transcript</h3>
+            <div class="flex items-center gap-2">
+              <div class="streaming-pulse"></div>
+              <span class="text-[11px] font-mono text-accent-pink">streaming</span>
+              <a href="v2-conversations.html?agent=fin-acquisition" class="text-[11px] text-fg-3 hover:text-fg-1 transition-colors ml-2">view all →</a>
+            </div>
+          </div>
+          <div class="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            <div class="message-row rounded-lg p-3">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-[11px] font-mono text-fg-3">10:42 AM</span>
+                <span class="text-[11px] font-mono text-accent-blue bg-accent-blue/8 px-1.5 py-0.5 rounded">Ramy</span>
+              </div>
+              <p class="text-[14px] text-fg-2 leading-relaxed">Can you check what the current AIP restrictions are for Schwab accounts? I want to confirm before I advise the client.</p>
+            </div>
+            <div class="message-row rounded-lg p-3">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-[11px] font-mono text-fg-3">10:42 AM</span>
+                <span class="text-[11px] font-mono text-accent-green bg-accent-green/8 px-1.5 py-0.5 rounded">fin-acquisition</span>
+              </div>
+              <div class="flex flex-wrap gap-1.5 mb-2">
+                <span class="tool-pill">finmentum_db.query_account_restrictions</span>
+                <span class="tool-pill">web_search</span>
+              </div>
+              <p class="text-[14px] text-fg-1 leading-relaxed">On it — checking the finmentum-db for the latest AIP flags and cross-referencing with Schwab's public guidance...</p>
+            </div>
+            <div class="message-row rounded-lg p-3">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-[11px] font-mono text-fg-3">10:43 AM</span>
+                <span class="text-[11px] font-mono text-accent-blue bg-accent-blue/8 px-1.5 py-0.5 rounded">Ramy</span>
+              </div>
+              <p class="text-[14px] text-fg-2 leading-relaxed">Also can you pull the YTD performance for the account? I'll need both for the meeting.</p>
+            </div>
+            <div class="message-row rounded-lg p-3">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-[11px] font-mono text-fg-3">10:43 AM</span>
+                <span class="text-[11px] font-mono text-accent-green bg-accent-green/8 px-1.5 py-0.5 rounded">fin-acquisition</span>
+              </div>
+              <div class="flex flex-wrap gap-1.5 mb-2">
+                <span class="tool-pill">finmentum_db.get_ytd_performance</span>
+              </div>
+              <p class="text-[14px] text-fg-1 leading-relaxed">Pulling YTD performance alongside the AIP check. The account shows AIP flag type-2 (margin restriction) as of March 2026. YTD return: +4.7%...</p>
+            </div>
+            <!-- Streaming turn -->
+            <div class="message-row rounded-lg p-3 border border-accent-pink/15 bg-accent-pink/3">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-[11px] font-mono text-fg-3">10:44 AM</span>
+                <span class="text-[11px] font-mono text-accent-green bg-accent-green/8 px-1.5 py-0.5 rounded">fin-acquisition</span>
+                <div class="streaming-pulse ml-1"></div>
+              </div>
+              <div class="flex flex-wrap gap-1.5 mb-2">
+                <span class="tool-pill">finmentum_db.query_account_restrictions</span>
+                <span class="tool-pill text-accent-amber" style="border-color:rgba(245,158,11,0.25);color:#f59e0b">web_search ⟳</span>
+              </div>
+              <p class="text-[14px] text-fg-1 leading-relaxed">Schwab's current AIP policy (May 2026) restricts accounts with outstanding margin calls from purchasing new positions in leveraged ETFs. Your client's account has a resolved margin call from January — which means<span class="inline-block w-0.5 h-4 bg-fg-1 ml-0.5 animate-pulse"></span></p>
+            </div>
+          </div>
+          <!-- Steer input -->
+          <div class="flex-shrink-0 px-5 py-3 border-t border-white/5">
+            <div class="flex items-center gap-2 bg-bg-s2 border border-white/8 rounded-lg px-3 py-2">
+              <input placeholder="Steer agent..." class="flex-1 bg-transparent text-[13px] text-fg-1 outline-none placeholder-fg-3">
+              <button class="text-[11px] font-mono text-fg-3 hover:text-fg-1 transition-colors">send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Memory + Perf (F11, F14, F15) -->
+        <div class="panel p-5 overflow-y-auto" style="max-height:min(700px,80vh)">
+          <!-- SLO Gauges -->
+          <h3 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-4">SLO Gauges</h3>
+          <div class="space-y-3 mb-5">
+            <div class="slo-gauge">
+              <span class="text-[12px] text-fg-3 w-32">first_token p50</span>
+              <div class="gauge-bar"><div class="gauge-fill bg-accent-green" style="width:92%"></div></div>
+              <span class="text-[12px] font-mono text-accent-green w-20 text-right">1,840ms</span>
+            </div>
+            <div class="slo-gauge">
+              <span class="text-[12px] text-fg-3 w-32">end_to_end p95</span>
+              <div class="gauge-bar"><div class="gauge-fill bg-accent-green" style="width:78%"></div></div>
+              <span class="text-[12px] font-mono text-accent-green w-20 text-right">4,280ms</span>
+            </div>
+            <div class="slo-gauge">
+              <span class="text-[12px] text-fg-3 w-32">tool_call p95</span>
+              <div class="gauge-bar"><div class="gauge-fill bg-accent-amber" style="width:88%"></div></div>
+              <span class="text-[12px] font-mono text-accent-amber w-20 text-right">3,240ms</span>
+            </div>
+            <div class="slo-gauge">
+              <span class="text-[12px] text-fg-3 w-32">ctx_assemble</span>
+              <div class="gauge-bar"><div class="gauge-fill bg-accent-green" style="width:55%"></div></div>
+              <span class="text-[12px] font-mono text-accent-green w-20 text-right">280ms</span>
+            </div>
+          </div>
+
+          <!-- Tier-1 budget (F04) -->
+          <div class="pt-5 border-t border-white/5 mb-5">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider">Context Budget</h4>
+              <span class="text-[12px] font-mono text-accent-amber">77.6% · warn</span>
+            </div>
+            <div class="progress-bar mb-1.5">
+              <div class="progress-fill bg-accent-amber" style="width:77.6%"></div>
+            </div>
+            <div class="flex justify-between text-[11px] text-fg-3 font-mono">
+              <span>12,421 / 16,000 chars</span>
+              <span class="text-accent-amber">⚠ near limit</span>
+            </div>
+            <div class="mt-3 text-[12px] text-fg-3 space-y-1">
+              <div class="flex justify-between"><span>SOUL.md</span><span class="font-mono">1,240 ch</span></div>
+              <div class="flex justify-between"><span>IDENTITY.md</span><span class="font-mono">820 ch</span></div>
+              <div class="flex justify-between"><span>MEMORY.md</span><span class="font-mono">6,140 ch</span></div>
+              <div class="flex justify-between"><span>USER.md</span><span class="font-mono">4,221 ch</span></div>
+            </div>
+          </div>
+
+          <!-- Memory subsystem (F14) -->
+          <div class="pt-5 border-t border-white/5 mb-5">
+            <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">Memory</h4>
+            <div class="space-y-2 text-[12px]">
+              <div class="flex justify-between"><span class="text-fg-3">total entries</span><span class="font-mono text-fg-2">2,847</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">hot tier</span><span class="font-mono text-fg-2">248</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">warm tier</span><span class="font-mono text-fg-2">912</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">cold tier</span><span class="font-mono text-fg-2">1,687</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">last consolidation</span><span class="font-mono text-fg-2">daily · 6h ago</span></div>
+            </div>
+          </div>
+
+          <!-- Dream-pass (F15) -->
+          <div class="pt-5 border-t border-white/5 mb-5">
+            <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">Dream Pass</h4>
+            <div class="space-y-2 text-[12px]">
+              <div class="flex justify-between"><span class="text-fg-3">next scheduled</span><span class="font-mono text-fg-2">in 3h 40m</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">queue depth</span><span class="font-mono text-fg-2">12 items</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">last pass</span><span class="font-mono text-fg-2">3h ago · 8 wikilinks</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">priority triggers 24h</span><span class="font-mono text-accent-amber">2</span></div>
+            </div>
+            <div class="mt-3 pt-3 border-t border-white/5 flex items-center justify-between">
+              <span class="text-[12px] text-fg-3">D-10 veto window</span>
+              <button class="text-[11px] font-mono text-accent-red border border-accent-red/25 px-2 py-1 rounded hover:bg-accent-red/8 transition-colors">Veto</button>
+            </div>
+          </div>
+
+          <!-- Cost 24h -->
+          <div class="pt-5 border-t border-white/5">
+            <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">Cost</h4>
+            <div class="space-y-2 text-[12px]">
+              <div class="flex justify-between"><span class="text-fg-3">today</span><span class="font-mono text-fg-2">$0.84</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">7d avg</span><span class="font-mono text-fg-2">$0.72/day</span></div>
+              <div class="flex justify-between"><span class="text-fg-3">budget</span><span class="font-mono text-accent-green">$2.00/day</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- MOBILE BOTTOM NAV -->
+<nav class="bottom-nav fixed bottom-0 left-0 right-0 bg-bg-s1/95 backdrop-blur border-t border-white/5 px-2 py-2 z-40">
+  <div class="flex">
+    <a href="v2-fleet-basic.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="layout-grid" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Fleet</span>
+    </a>
+    <a href="v2-conversations.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="message-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Convos</span>
+    </a>
+    <a href="v2-tasks.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="check-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Tasks</span>
+    </a>
+    <a href="v2-config-editor.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg bg-white/5">
+      <i data-lucide="settings" class="w-4 h-4 text-accent-green"></i>
+      <span class="text-[10px] text-accent-green font-medium">Config</span>
+    </a>
+  </div>
+</nav>
+
+<script>
+const pItems=[
+  {icon:'layout-grid',label:'Go to Fleet overview',group:'Navigation',fn:()=>location.href='v2-fleet-advanced.html'},
+  {icon:'message-square',label:'View conversations',group:'Navigation',fn:()=>location.href='v2-conversations.html'},
+  {icon:'settings-2',label:'Open config editor',group:'Actions',fn:()=>location.href='v2-config-editor.html'},
+  {icon:'check-square',label:'View task board',group:'Navigation',fn:()=>location.href='v2-tasks.html'},
+];
+let pSel=0,pFil=[];
+function openPalette(){document.getElementById('palette').classList.add('open');setTimeout(()=>document.getElementById('palette-input').focus(),50);filterPalette('');}
+function closePalette(){document.getElementById('palette').classList.remove('open');}
+function filterPalette(q){pFil=pItems.filter(i=>i.label.toLowerCase().includes(q.toLowerCase()));pSel=0;renderPalette();}
+function renderPalette(){document.getElementById('p-list').innerHTML=pFil.map((item,i)=>`<div class="p-item flex items-center gap-3 px-4 py-2.5 ${i===pSel?'sel':''}" onclick="selPItem(${i})"><i data-lucide="${item.icon}" class="w-4 h-4 text-fg-3 flex-shrink-0"></i><span class="text-[14px] text-fg-1">${item.label}</span><span class="ml-auto text-[11px] text-fg-3">${item.group}</span></div>`).join('');lucide.createIcons();}
+function selPItem(i){const item=pFil[i];if(!item)return;closePalette();if(item.fn)item.fn();}
+function paletteKey(e){if(e.key==='Escape')closePalette();else if(e.key==='ArrowDown'){pSel=Math.min(pSel+1,pFil.length-1);renderPalette();}else if(e.key==='ArrowUp'){pSel=Math.max(pSel-1,0);renderPalette();}else if(e.key==='Enter')selPItem(pSel);}
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openPalette();}if(e.key==='Escape')closePalette();});
+</script>
+</body>
+</html>

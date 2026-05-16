@@ -24,6 +24,7 @@ import {
   buildRawTurnFallback,
   DEFAULT_IMPORTANCE,
   DEFAULT_FLUSH_IMPORTANCE,
+  DEFAULT_TIMEOUT_MS,
 } from "../session-summarizer.js";
 import type { ConversationTurn } from "../conversation-types.js";
 
@@ -1119,6 +1120,63 @@ describe("SessionSummarizer", () => {
       );
 
       expect(convStore.getTurnsForSession(sessionId)).toHaveLength(4);
+    });
+  });
+
+  // ── 99-mdrop: Admin Clawdy memory drop fix (audit 2026-04-27) ──────────────
+  // See .planning/phases/99-memory-translator-and-sync-hygiene/
+  //     ADMIN-CLAWDY-MEMORY-DROP-2026-04-27.md
+  //
+  // The summarizer's 10s timeout fired mid-Haiku-call on a 96-turn session,
+  // dropping a 19.6KB raw-turn dump into the next session's resume-brief and
+  // silently truncating it under the 2K token budget. Two changes:
+  //   1. Bump DEFAULT_TIMEOUT_MS from 10_000 → 30_000 (Fix 1).
+  //   2. Confirm the raw-turn fallback memory carries the `raw-fallback` tag
+  //      so the conversation-brief module can downgrade it (Fix 2).
+  describe("99-mdrop: timeout extension + raw-turn tag", () => {
+    it("TIMEOUT-30S — DEFAULT_TIMEOUT_MS is 30_000 (was 10_000 before fix)", () => {
+      expect(DEFAULT_TIMEOUT_MS).toBe(30_000);
+    });
+
+    it("RAW-TAG — fallback memory carries `raw-fallback` tag for downstream detection", async () => {
+      const session = convStore.startSession("agent-a");
+      for (let i = 0; i < 5; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: `turn ${i} body`,
+        });
+      }
+      convStore.endSession(session.id);
+
+      // Force the summarize path to time out so we exercise raw-turn fallback.
+      const mockSummarize: SummarizeFn = (_prompt, opts) =>
+        new Promise((_, reject) => {
+          opts.signal?.addEventListener("abort", () =>
+            reject(new Error("AbortError")),
+          );
+        });
+      const deps: SummarizeSessionDeps = {
+        conversationStore: convStore,
+        memoryStore: memStore,
+        embedder: createMockEmbedder(),
+        summarize: mockSummarize,
+        log: silentLog(),
+        config: { timeoutMs: 25 }, // tiny test-only override
+      };
+
+      const result = await summarizeSession(
+        { agentName: "agent-a", sessionId: session.id },
+        deps,
+      );
+
+      expect("success" in result && result.success).toBe(true);
+      if ("success" in result && result.success) {
+        const entry = memStore.getById(result.memoryId);
+        expect(entry).not.toBeNull();
+        expect(entry!.tags).toContain("raw-fallback");
+        expect(entry!.tags).toContain("session-summary");
+      }
     });
   });
 });

@@ -442,7 +442,7 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
   // T7 — CONTROL_COMMANDS shape + count invariants
   // -------------------------------------------------------------------------
 
-  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 18 (Phase 90 Plan 06 added clawhub-auth)", () => {
+  it("T7: CONTROL_COMMANDS includes clawcode-interrupt + clawcode-steer; total default+control = 23 (Phase 103 Plan 03 added clawcode-usage)", () => {
     const interrupt = CONTROL_COMMANDS.find((c) => c.name === "clawcode-interrupt");
     const steer = CONTROL_COMMANDS.find((c) => c.name === "clawcode-steer");
     expect(interrupt).toBeDefined();
@@ -471,14 +471,20 @@ describe("slash /clawcode-interrupt + /clawcode-steer", () => {
     expect(agentOpt).toBeDefined();
     expect(agentOpt!.required).toBe(false);
 
-    // Combined count = 21 (10 default + 11 control).
+    // Combined count = 23 (10 default + 13 control).
     // Phase 87 CMD-04 removed clawcode-compact + clawcode-usage from defaults.
     // Phase 88 added skills-browse + skills. Phase 90 Plan 05 added
     // plugins-browse. Phase 90 Plan 06 added clawhub-auth.
     // Phase 91 Plan 05 SYNC-08 added clawcode-sync-status → 9 controls.
     // Phase 92 Plan 04 CUT-06 added clawcode-cutover-verify → 10 controls.
     // Phase 95 Plan 03 DREAM-07 added clawcode-dream → 11 controls.
-    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(21);
+    // Phase 96 Plan 05 D-03 added clawcode-probe-fs → 12 controls.
+    // Phase 103 Plan 03 OBS-07 added clawcode-usage → 13 controls.
+    // Phase 999.31 added ultra-plan + ultra-review to defaults → 12 defaults.
+    // Phase 999.32 removed clawcode-probe-fs (operator cleanup) → 12 controls.
+    // Phase 999.32 added gsd-do single-entry to defaults → 13 defaults.
+    // Total: 13 defaults + 12 controls = 25.
+    expect(DEFAULT_SLASH_COMMANDS.length + CONTROL_COMMANDS.length).toBe(25);
 
     // Sanity — makeRootOrigin still accepts 'discord' (used by handleSteerSlash).
     const origin = makeRootOrigin("discord", "chan-xyz");

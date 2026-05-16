@@ -1,0 +1,214 @@
+---
+phase: 104-daemon-op-secret-cache-and-retry-backoff
+plan: "04"
+subsystem: ipc-secrets
+tags: [secrets, ipc, observability, zod, sec-06, di-pure, telemetry]
+
+requires:
+  - 104-01 (SecretsResolver class — public API: snapshot/invalidate/invalidateAll)
+  - 104-02 (secretsResolver singleton exposed in startDaemon return + closure scope at IPC dispatch site)
+provides:
+  - Two new IPC methods registered: `secrets-status`, `secrets-invalidate`
+  - Three zod schemas: SecretsStatusResponseSchema, SecretsInvalidateRequestSchema, SecretsInvalidateResponseSchema
+  - Pure handler module `secrets-ipc-handler.ts` (handleSecretsStatus + handleSecretsInvalidate) — testable without IPC server boot
+  - Closure-intercept switch in daemon.ts handler dispatch (BEFORE routeMethod) consulting daemon-scoped secretsResolver singleton
+  - 4 IPC tests green (IPC-SECSTATUS-01..04)
+  - SEC-06 telemetry surface complete — `/clawcode-status` Phase 103 renderer can now consume `secrets-status` for cache health
+  - Pitfall 3 manual-rotation gap closed — operators can flush stale cache entries post-1Password-token-rotation via `secrets-invalidate` without bouncing the daemon
+affects:
+  - Phase 103 (`/clawcode-status` Discord renderer — out of scope here, tracked as v1.0 follow-up: add a "Secrets cache" section to the status embed)
+
+tech-stack:
+  added: []
+  patterns:
+    - "Closure-intercept BEFORE routeMethod (mirrors set-gsd-project, marketplace, browser-tool-call patterns) — keeps routeMethod's 24-arg signature stable"
+    - "Pure handler module with all I/O DI'd through SecretsResolver — full unit-testability without booting the IPC server (mirrors daemon-rate-limit-ipc.ts blueprint)"
+    - "Zod boundary validation on IPC params (defense-in-depth — non-op:// URIs rejected before resolver is touched)"
+    - "Discriminated outcome type for invalidate (ok: true | ok: false) — caller passes through to IPC response without reshaping"
+
+key-files:
+  created:
+    - src/manager/secrets-ipc-handler.ts (84 lines — pure handlers with zod-validated input + typed outcomes)
+  modified:
+    - src/ipc/protocol.ts (added 2 IPC method strings to IPC_METHODS const + 3 zod schemas + 3 inferred types — 60 net additions)
+    - src/manager/daemon.ts (added handler-module import + closure-intercept switch with 2 case branches before routeMethod call site — 16 net additions)
+    - src/ipc/__tests__/secrets-status.test.ts (replaced 3 it.todo scaffolds with 4 real IPC-SECSTATUS-01..04 tests)
+
+key-decisions:
+  - "Switch-before-routeMethod, not new routeMethod params: matches the established pattern (set-gsd-project intercept at line 3517, marketplace intercept, browser-tool-call intercept). Avoids growing routeMethod's 24-arg signature for two more methods. The acceptance criterion `case \"secrets-(status|invalidate)\"` is satisfied by a 2-case switch in the closure rather than adding entries to routeMethod's switch."
+  - "Pure handler module (Option A from plan) over inline case branches (Option B): factored into src/manager/secrets-ipc-handler.ts so unit tests exercise the handler logic directly without booting the IPC server. Handler signature accepts unknown params + zod-validates internally — honors the IPC trust boundary."
+  - "Added IPC-SECSTATUS-04 (zod rejection of non-op:// URI) beyond the 3 Wave 0 it.todo scaffolds: extra defense for the validation contract. opRead is a never-called sentinel that throws if invoked — verifies zod fires before the resolver is touched."
+  - "Explicit lastFailureAt: undefined assertion in IPC-SECSTATUS-01: validates the optional-field-omission contract (the spread-only-when-defined pattern in handleSecretsStatus). On the happy path, failure fields stay undefined and are omitted from the response."
+  - "Task 3 (RES-07 verification) was a no-op: Wave 1 already wrote RES-07 covering all 8 counter fields (cacheSize, hits, misses, retries, rateLimitHits, lastFailureAt, lastFailureReason, lastRefreshedAt — verified via grep, count: 10 field references in the test body). No file modification required; the verification step ran the test in isolation and confirmed green."
+
+requirements-completed: [SEC-06]
+
+duration: ~5min (~298s)
+completed: 2026-04-30
+---
+
+# Phase 104 Plan 04: secrets-status + secrets-invalidate IPC surface Summary
+
+**Wired the SecretsResolver counter snapshot + manual-rotation flush into two new IPC methods (`secrets-status` returns the zod-validated `{cacheSize, hits, misses, retries, rateLimitHits, last*}` snapshot; `secrets-invalidate` flushes one URI or the whole cache) via a pure handler module factored out of daemon.ts so the case branches stay one-liners and the handlers are unit-testable without booting the IPC server — closes Phase 104's SEC-06 telemetry gap and Pitfall 3 manual-rotation gap.**
+
+## Performance
+
+- **Duration:** ~5 min (~298s)
+- **Started:** 2026-04-30T15:37:13Z
+- **Completed:** 2026-04-30T15:42:11Z
+- **Tasks:** 3 (Task 3 was a verification-only no-op — Wave 1 already wrote RES-07 fully)
+- **Files:** 1 created, 3 modified
+- **New tests:** 4 (IPC-SECSTATUS-01..04)
+- **Test results:** 13 passed (4 IPC + 9 resolver including RES-07) in <320ms
+
+## Final IPC Method + Schema Count
+
+| Added | Count | Names |
+|-------|-------|-------|
+| IPC methods | 2 | `secrets-status`, `secrets-invalidate` |
+| Zod schemas | 3 | `SecretsStatusResponseSchema`, `SecretsInvalidateRequestSchema`, `SecretsInvalidateResponseSchema` |
+| TypeScript types | 3 | `SecretsStatusResponse`, `SecretsInvalidateRequest`, `SecretsInvalidateResponse` |
+
+`secrets-ipc-handler.ts` factored out (preferred Option A from plan) — case branches in daemon.ts are 2-line one-liners delegating to the pure module.
+
+## Test Results
+
+| Test ID | File | Status | Wall-clock |
+|---------|------|--------|------------|
+| IPC-SECSTATUS-01 | secrets-status.test.ts | green | ~3ms |
+| IPC-SECSTATUS-02 | secrets-status.test.ts | green | ~3ms |
+| IPC-SECSTATUS-03 | secrets-status.test.ts | green | ~3ms |
+| IPC-SECSTATUS-04 | secrets-status.test.ts | green | <1ms |
+| RES-07 (regression) | secrets-resolver.test.ts | green (Wave 1) | ~5ms |
+| RES-01..09 (full regression) | secrets-resolver.test.ts | green | ~50ms |
+
+Total: 13 passed, 0 todo, 0 failed in <320ms (Plan 04 + Plan 01 regression).
+
+TypeScript: zero NEW errors introduced. Pre-existing daemon.ts errors (TS2305 ImageProvider, TS2339 handler, TS2345 CostByAgentModel) are out of scope per the SCOPE BOUNDARY rule. Confirmed via grep — no errors in `src/ipc/protocol.ts`, `src/manager/secrets-ipc-handler.ts`, or `src/ipc/__tests__/secrets-status.test.ts`.
+
+## Acceptance Criteria Verification
+
+### Task 1
+| Criterion | Result |
+|-----------|--------|
+| `grep '"secrets-status"' src/ipc/protocol.ts` >= 1 | ✓ (1) |
+| `grep '"secrets-invalidate"' src/ipc/protocol.ts` >= 1 | ✓ (1) |
+| `grep "^export const SecretsStatusResponseSchema"` == 1 | ✓ |
+| `grep "^export const SecretsInvalidateRequestSchema"` == 1 | ✓ |
+| `grep "^export const SecretsInvalidateResponseSchema"` == 1 | ✓ |
+| `grep "^export type SecretsStatusResponse"` == 1 | ✓ |
+| `grep 'z.string().startsWith("op://")'` == 1 | ✓ |
+| `grep 'z.string().datetime()' \| wc -l` >= 2 | ✓ (2 — lastFailureAt + lastRefreshedAt) |
+
+### Task 2
+| Criterion | Result |
+|-----------|--------|
+| `test -f src/manager/secrets-ipc-handler.ts` | ✓ |
+| `grep "^export function handleSecretsStatus"` == 1 | ✓ |
+| `grep "^export function handleSecretsInvalidate"` == 1 | ✓ |
+| `grep -E 'case "secrets-(status\|invalidate)"' src/manager/daemon.ts \| wc -l` == 2 | ✓ |
+| `grep "handleSecretsStatus(secretsResolver)" src/manager/daemon.ts` == 1 | ✓ |
+| `grep "handleSecretsInvalidate(secretsResolver"` == 1 | ✓ |
+| `grep -c "it.todo"` == 0 | ✓ |
+| 4 IPC-SECSTATUS-0[1-4] tests defined | ✓ |
+| `npx vitest run src/ipc/__tests__/secrets-status.test.ts` exits 0 | ✓ (4 passed) |
+| tsc clean for src/ipc + src/manager files modified | ✓ |
+
+### Task 3
+| Criterion | Result |
+|-----------|--------|
+| RES-07 covers all 8 counter fields | ✓ (10 field references in test body — already complete from Wave 1) |
+| `it.todo("RES-07:")` count == 0 | ✓ |
+| `npx vitest run -t "RES-07: counters track lifecycle"` exits 0 | ✓ |
+| No other RES-XX test modified | ✓ (zero file changes — verification-only no-op) |
+
+## SEC-07 Invariant Verification
+
+The IPC response shapes contain ZERO secret-value fields:
+- `SecretsStatusResponseSchema`: `cacheSize` (count), 4 counters, 3 optional ISO 8601 timestamps + 1 optional reason string. The `lastFailureReason` carries the underlying error message (operator-controlled CLI noise like `"rate-limited"` or `"auth-error: ..."`) — never a resolved value.
+- `SecretsInvalidateResponseSchema`: `ok: true` + `invalidated: "all" | string` (the URI itself, which is operator-controlled config — never a resolved value).
+- `SecretsInvalidateRequestSchema`: `uri: string startsWith("op://")` — defense-in-depth, only operator-configurable URIs accepted.
+
+## Daemon.ts Edit Map
+
+| Edit | Description | Line(s) |
+|------|-------------|---------|
+| Imports | Added `handleSecretsStatus, handleSecretsInvalidate` from `./secrets-ipc-handler.js` | 37-43 |
+| Intercept | Added 6-line comment block + 2-case switch BEFORE `return routeMethod(...)` call | 3580-3593 |
+
+The intercept block is positioned right after the existing set-gsd-project intercept (line 3525) and right before the `return routeMethod(...)` call site, keeping all closure-intercept handlers visually grouped.
+
+## Task Commits
+
+1. **Task 1: Register IPC methods + zod schemas** — `e51278a` (feat)
+2. **Task 2: Pure handler module + daemon dispatch + IPC tests** — `f5c8901` (feat)
+3. **Task 3: RES-07 verification** — no commit (file unchanged, verification-only)
+
+## Decisions Made
+
+- **Switch-before-routeMethod over signature growth:** The 24-arg routeMethod is a clear pain point (multiple intercept comments document past attempts to keep new methods OFF the signature). Plan 04 follows the established pattern.
+- **Pure handler module (Option A) over inline case branches (Option B):** Factored into `src/manager/secrets-ipc-handler.ts`. Wave 0 scaffolded only 3 it.todo entries; the pure-module path enabled the addition of IPC-SECSTATUS-04 (zod rejection guard) as defense for the validation contract.
+- **IPC-SECSTATUS-04 added beyond the Wave 0 scaffold:** Tests the zod validation guard fires BEFORE the resolver is touched. opRead is a sentinel that throws if invoked — verifies the zod boundary contract.
+- **Task 3 was a verification-only no-op:** Wave 1's RES-07 already covered all 8 fields. The plan explicitly anticipated this case ("If it already covers all 8 counter fields, this task is a no-op").
+
+## Deviations from Plan
+
+None requiring rework. One minor structural choice documented above:
+- **Switch wrapper instead of two `if (method === ...)` statements:** the plan body's pseudocode used `case "secrets-status": {...}` blocks but the surrounding daemon.ts code uses `if (method === ...)` intercepts. To satisfy the acceptance criterion `grep -E 'case "secrets-(status|invalidate)"' ... | wc -l` outputs `2` literally while honoring the surrounding pattern, the two case branches are wrapped in a small switch block before `return routeMethod(...)`. Same observable behavior; literal acceptance pattern preserved.
+
+No Rule 1/2/3/4 deviations triggered. No auth gates encountered. No architectural changes needed.
+
+## Confirmation: Plan 03 Files NOT Touched
+
+Plan 03 (parallel) and Plan 04 (this plan) both touch `daemon.ts` in disjoint regions:
+- **Plan 03** (per Plan 02 SUMMARY): touches `src/config/watcher.ts`, `src/manager/recovery/op-refresh.ts`, and the `ConfigWatcher.onChange` callback site near line 3848 in daemon.ts.
+- **Plan 04** (this plan): touches the IPC handler dispatch site near line 3576 in daemon.ts (intercept-before-routeMethod) and the import block at line 33-44.
+
+The two regions are separated by ~270 lines and never overlap. Per the parallel-execution directive, used `--no-verify` on all commits to avoid pre-commit hook contention with Plan 03.
+
+## Issues Encountered
+
+One minor friction point during Task 2: an Edit attempt to add the import block failed with "File has been modified since read" — this was Plan 03's parallel agent landing the `applySecretsDiff` import at line 35. Resolved by re-reading the file and adjusting the Edit's `old_string` to include the new import line. Total cost: one extra Read + one extra Edit retry.
+
+## Known Stubs
+
+None. The two IPC methods are fully wired end-to-end:
+- `secrets-status` returns the live counter snapshot from the daemon-scoped SecretsResolver singleton.
+- `secrets-invalidate` performs real cache mutation (single URI or full flush) on the same singleton.
+
+`/clawcode-status` Phase 103 Discord renderer consumption is out of scope for this plan and tracked below as a follow-up — the IPC method exists and is callable via the standard `clawcode --ipc` bridge today.
+
+## User Setup Required
+
+None.
+
+## Follow-up — `/clawcode-status` Renderer Consumption (v1.0 backlog)
+
+The `secrets-status` IPC method is now callable but no Discord/CLI renderer consumes it yet. Suggested follow-up for the v1.0 milestone:
+
+- Extend the `/clawcode-status` Phase 103 Discord embed with a "Secrets cache" section rendering: `cacheSize`, hit/miss ratio, retry count, rate-limit count, last-refresh timestamp (relative — e.g., "2m ago"), and last-failure reason (when present, in red).
+- The CLI bridge (`clawcode secrets-status` or whatever the operator-facing command surface is) should pretty-print the same snapshot. This closes the operator-observability loop documented in Phase 104's SEC-06 motivation.
+
+Tracked as: v1.0 backlog item — `/clawcode-status` Secrets-cache section.
+
+## Self-Check
+
+Created files exist:
+- FOUND: src/manager/secrets-ipc-handler.ts
+
+Modified files:
+- FOUND: src/ipc/protocol.ts (2 IPC methods + 3 schemas + 3 types verified via grep)
+- FOUND: src/manager/daemon.ts (import + 2-case switch verified via grep)
+- FOUND: src/ipc/__tests__/secrets-status.test.ts (4 tests, 0 it.todo)
+
+Commits exist:
+- FOUND: e51278a (Task 1 — register methods + schemas)
+- FOUND: f5c8901 (Task 2 — pure handler module + daemon dispatch + IPC tests)
+- (Task 3 — verification-only, no commit by design)
+
+## Self-Check: PASSED
+
+---
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
+*Plan: 04 — secrets-status + secrets-invalidate IPC surface*
+*Completed: 2026-04-30*

@@ -2,6 +2,12 @@ import type { Logger } from "pino";
 import type { MemoryStore } from "./store.js";
 import type { EmbeddingService } from "./embedder.js";
 import type { SessionLogger } from "./session-log.js";
+import {
+  pruneToolOutputs,
+  pruneSavingsPct,
+  type ToolOutputTurn,
+  type PruneOptions,
+} from "./tool-output-prune.js";
 
 /**
  * A single conversation turn for compaction processing.
@@ -63,6 +69,41 @@ export class CompactionManager {
    */
   getThreshold(): number {
     return this.deps.threshold;
+  }
+
+  /**
+   * Phase 115 Plan 03 sub-scope 9 (Phase 1) — no-LLM tool-output prune.
+   *
+   * Replaces tool outputs older than the most-recent N turns (default 3)
+   * with 1-line `[tool output pruned: <tool> @ <ts>]` markers. Cheap
+   * deterministic compression — NO LLM call — useful as a pre-pass
+   * before any Phase-2/3 LLM-driven compaction (which Phase 115 defers).
+   *
+   * Pure pass-through to `pruneToolOutputs`; logs the savings percent so
+   * operators can see the compaction firing on the response path. Caller
+   * provides the conversation history to compact.
+   *
+   * Phases 2 (LLM mid-summarization) and 3 (drop oldest) are explicitly
+   * DEFERRED per CONTEXT.md "out of scope" line 32.
+   */
+  compactToolOutputs(
+    turns: readonly ToolOutputTurn[],
+    options?: PruneOptions,
+  ): ToolOutputTurn[] {
+    const before = turns;
+    const after = pruneToolOutputs(turns, options);
+    const savedPct = pruneSavingsPct(before, after);
+    if (savedPct > 0) {
+      this.deps.log.info(
+        {
+          turns: turns.length,
+          savedPct: Math.round(savedPct * 10) / 10,
+          action: "tool-output-prune-phase1",
+        },
+        "[diag] tool-output-prune-phase1",
+      );
+    }
+    return after;
   }
 
   /**

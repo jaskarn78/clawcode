@@ -94,12 +94,31 @@ export type ConversationReader = Readonly<{
  */
 export type BotDirectSender = Readonly<{
   sendEmbed(channelId: string, embed: EmbedBuilder): Promise<string>;
+  /**
+   * Phase 100 follow-up — plain-text channel send for non-interaction posts
+   * (scheduled trigger output, alerts, etc.). Used by TriggerEngine's
+   * deliveryFn when the target agent has no per-agent webhook provisioned.
+   * Returns the sent message id.
+   */
+  sendText(channelId: string, content: string): Promise<string>;
 }>;
 
 export type SendRestartGreetingDeps = Readonly<{
   webhookManager: WebhookSender;
   conversationStore: ConversationReader;
   summarize: SummarizeFn;
+  /**
+   * Phase 99 D-fix (2026-04-25 evening): optional fast-path lookup for an
+   * existing session-summary memory entry (Phase 64 SessionSummarizer output,
+   * OR the Phase 99-D recovery summaries). When provided AND the chosen
+   * session has summaryMemoryId set, the resolved content is used directly
+   * — bypassing the Haiku summarize-from-raw-turns step that reliably
+   * times out (10s) on 60+ turn translated OpenClaw sessions.
+   *
+   * Returns the memory entry's content string if found, undefined otherwise.
+   * Wired by SessionManager.restartAgent → memoryStores.get(agent).getById.
+   */
+  getMemoryById?: (id: string) => string | undefined;
   now: () => number;
   log: Logger;
   /**
@@ -206,6 +225,57 @@ export function classifyRestart(prevConsecutiveFailures: number): RestartKind {
 // ---------------------------------------------------------------------------
 // Prompt builder
 // ---------------------------------------------------------------------------
+
+/**
+ * 2026-04-30 fix — detect when the prior session was dominated by API errors
+ * (auth failures, rate-limit rejections, platform 5xx) so we skip the Haiku
+ * summarization and use a verbatim recovery message instead.
+ *
+ * Background: when Anthropic's platform has an incident or the org's quota is
+ * tight, agents' `query()` calls fail mid-turn. The Discord bridge surfaces
+ * these failures as bot-authored messages in the agent's channel (e.g.
+ * "Failed to authenticate. API Error: 403 ..."). On restart, the
+ * conversation history handed to Haiku for summarization is dominated by
+ * those error strings, and Haiku reliably produces a misleading one-liner
+ * like "Credit balance is too low" — even on OAuth/Max accounts where
+ * "credit balance" is not a real concept.
+ *
+ * Pattern set is intentionally generous: any one of these in a turn's
+ * content marks the turn as an "error turn." When ≥50% of turns are error
+ * turns, the session is treated as API-error-dominated.
+ *
+ * Pure function — no I/O, no logging.
+ */
+const API_ERROR_FINGERPRINTS: readonly RegExp[] = [
+  /\bAPI Error:\s*\d{3}\b/i,
+  /\bFailed to authenticate\b/i,
+  /\bpermission_error\b/i,
+  /\brate_limit_error\b/i,
+  /\boverloaded_error\b/i,
+  /\bauthentication_error\b/i,
+  /\bCredit balance is too low\b/i,
+  /\bnot a member of the organization\b/i,
+  /\b(401|403|429|500|502|503|529)\s+error\b/i,
+];
+
+export function isApiErrorDominatedSession(
+  turns: readonly ConversationTurn[],
+): boolean {
+  if (turns.length === 0) return false;
+  const errorTurnCount = turns.filter((t) =>
+    API_ERROR_FINGERPRINTS.some((re) => re.test(t.content)),
+  ).length;
+  return errorTurnCount * 2 >= turns.length;
+}
+
+/**
+ * Verbatim recovery message used when the prior session was API-error-
+ * dominated. Stays under DESCRIPTION_MAX_CHARS, OAuth/Max-friendly (no
+ * "credit balance" phrasing), and tells the operator clearly that nothing
+ * useful happened in the prior session.
+ */
+export const PLATFORM_ERROR_RECOVERY_MESSAGE =
+  "I'm back. My prior session ran into platform errors (API auth/rate/load) and didn't make progress — nothing to recap. Ready to continue.";
 
 /**
  * Assemble the Haiku prompt for a Discord-tuned prior-session summary.
@@ -327,12 +397,19 @@ export async function sendRestartGreeting(
   // restart (common during operator testing or debugging) reads the most-
   // recent session (0 turns) and silently skips the greeting with
   // `skipped-empty-state`. That looks identical to a broken greeting even
-  // though the agent has plenty of history. We cap the lookback at 5 sessions
-  // to avoid pathological scans — anything older than that is effectively
-  // ancient and the dormancy rule would kick in anyway.
+  // though the agent has plenty of history.
+  //
+  // Phase 99-D — bumped lookback from 5 to 25 because translator-imported
+  // OpenClaw sessions can stack many turn-empty rows (status='ended' with
+  // turns still mid-translate). 5 was too tight on agents with translator
+  // backfill; 25 keeps the scan bounded but lets the loop reach a real
+  // session. The sibling fast-path (`summaryMemoryId` fallback) below
+  // covers sessions where Gap-2 cleanup has pruned raw turns post-summary
+  // OR where the translator has not yet replayed turns into a session it
+  // already imported as 'ended'.
   const recent = deps.conversationStore.listRecentTerminatedSessions(
     agentName,
-    5,
+    25,
   );
   if (recent.length === 0) return { kind: "skipped-empty-state" };
 
@@ -348,6 +425,30 @@ export async function sendRestartGreeting(
       lastSession = candidate;
       turns = candidateTurns;
       break;
+    }
+  }
+
+  // Phase 99-D fallback — none of the candidates had turns, but one may
+  // already carry a stored session-summary memory entry (translator-imported
+  // session that was later summarized via the 99-C heartbeat, or a session
+  // whose raw turns were pruned by Gap-2 cleanup post-summarize). Picking
+  // such a session here routes through the existing summaryMemoryId fast-
+  // path (~L483) which uses the cached summary verbatim and skips the Haiku
+  // call. Without this, agents with summary-only sessions fall through to
+  // the "no prior session to recap" minimal embed even though we DO have a
+  // recap on hand.
+  if (!lastSession && deps.getMemoryById) {
+    for (const candidate of recent) {
+      if (!candidate.summaryMemoryId) continue;
+      const cached = deps.getMemoryById(candidate.summaryMemoryId);
+      if (cached && cached.trim().length > 0) {
+        lastSession = candidate;
+        // turns intentionally stays []. The fast-path at ~L483 keys off
+        // `lastSession.summaryMemoryId + getMemoryById` and bypasses the
+        // turns-based Haiku prompt entirely; the dormancy + embed-builder
+        // steps below only consult `lastSession`.
+        break;
+      }
     }
   }
   // Phase 90.1 hotfix (D-11 relaxation) — if no session has turns (happens
@@ -402,24 +503,70 @@ export async function sendRestartGreeting(
     return { kind: "skipped-dormant", lastActivityMs };
   }
 
-  // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
-  //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
-  //    explicitly delegates the timer to the caller). On timeout / SDK
-  //    error / abort / empty-string we stay silent — D-11 forbids a
-  //    fallback greeting.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), summaryTimeoutMs);
-  let summary: string;
-  try {
-    summary = await deps.summarize(
-      buildRestartGreetingPrompt(turns, config, restartKind),
-      { signal: controller.signal },
-    );
-  } catch {
-    return { kind: "skipped-empty-state" };
-  } finally {
-    clearTimeout(timer);
+  // Phase 99 D-fix (2026-04-25 evening): fast-path — if the chosen session
+  // already has a summary memory entry (summaryMemoryId set), reuse it
+  // verbatim and skip the Haiku call entirely. Translated OpenClaw sessions
+  // can have 60+ turns; re-summarizing reliably exceeds the 10s Haiku
+  // timeout (D-05) and falls through to skipped-empty-state. The existing
+  // summary IS the correct artifact — one source of truth for "what
+  // happened in this session" matches the design intent of summary_memory_id.
+  let summary: string | undefined;
+  if (lastSession.summaryMemoryId && deps.getMemoryById) {
+    const existing = deps.getMemoryById(lastSession.summaryMemoryId);
+    if (existing && existing.trim().length > 0) {
+      // 2026-05-01 fix (260501-nxm) — guard against legacy bad summaries
+      // cached BEFORE the L496 isApiErrorDominatedSession guard landed
+      // (2026-04-30). Without this, a stale "Credit balance is too low"
+      // summary written by Haiku during a platform-incident session keeps
+      // reappearing on every subsequent restart until the cached value is
+      // overwritten or expired. Read-time filter only — no scrub of stored
+      // memory; the next session that writes a fresh summary will overwrite
+      // the bad cached value organically.
+      if (API_ERROR_FINGERPRINTS.some((re) => re.test(existing))) {
+        deps.log.info(
+          { agent: agentName, summaryMemoryId: lastSession.summaryMemoryId },
+          "[greeting] cached summary contains API-error fingerprint; using verbatim platform-error recovery message",
+        );
+        summary = PLATFORM_ERROR_RECOVERY_MESSAGE;
+      } else {
+        summary = existing;
+      }
+    }
   }
+
+  if (summary === undefined) {
+    // 2026-04-30 fix — bypass Haiku summarization when the prior session is
+    // dominated by API errors (auth/rate-limit/platform 5xx). Without this,
+    // Haiku gets a transcript full of error strings and produces misleading
+    // summaries like "Credit balance is too low" — confusing on OAuth/Max
+    // where the operator doesn't even have a literal credit balance.
+    if (isApiErrorDominatedSession(turns)) {
+      deps.log.info(
+        { agent: agentName, turnCount: turns.length },
+        "[greeting] prior session was API-error-dominated; using verbatim platform-error recovery message",
+      );
+      summary = PLATFORM_ERROR_RECOVERY_MESSAGE;
+    } else {
+      // 7. Haiku summarization with timeout (D-05 / D-06 / GREET-04).
+      //    Timeout is OWNED BY THIS CALLER (summarizeWithHaiku's docstring
+      //    explicitly delegates the timer to the caller). On timeout / SDK
+      //    error / abort / empty-string we stay silent — D-11 forbids a
+      //    fallback greeting.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), summaryTimeoutMs);
+      try {
+        summary = await deps.summarize(
+          buildRestartGreetingPrompt(turns, config, restartKind),
+          { signal: controller.signal },
+        );
+      } catch {
+        return { kind: "skipped-empty-state" };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   if (summary.trim().length === 0) {
     return { kind: "skipped-empty-state" };
   }

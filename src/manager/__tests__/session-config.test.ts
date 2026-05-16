@@ -50,11 +50,16 @@ function makeConfig(overrides: Partial<ResolvedAgentConfig> = {}): ResolvedAgent
     allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
+    autoCompactAt: 0.7, // Phase 124 D-06
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -393,8 +398,13 @@ The full context of its creation spans multiple paragraphs of detail.
     const result = await buildSessionConfig(config, makeDeps({ tierManagers, skillsCatalog }));
     // v1.4 equivalent for this config was approximately 1200 chars
     // v1.5 should be equal or smaller due to budget enforcement
-    // Set a generous ceiling to ensure no regression
-    expect(result.systemPrompt.length).toBeLessThanOrEqual(2000);
+    // Phase 100-fu (2026-04-26): comprehensive capability manifest
+    // (Tier 1 + Tier 2 fields) adds ~600 chars of unconditional content
+    // (Model+effort, Conversation memory, Recursion guard, MCP servers,
+    // Skills bullets) when the agent has any opt-in feature. Ceiling
+    // raised from 2000 → 2800 to accommodate the new content while still
+    // catching outsized regressions.
+    expect(result.systemPrompt.length).toBeLessThanOrEqual(2800);
   });
 
   it("bootstrap agents still get bootstrap prompt without fingerprint", async () => {
@@ -1260,6 +1270,10 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       mcpServers: [
         { name: "finmentum-db", command: "x", args: [], env: {}, optional: false },
       ],
@@ -1300,6 +1314,10 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     });
     const result = await buildSessionConfig(config, makeDeps());
     expect(result.systemPrompt).toContain("## Long-term memory");
@@ -1346,6 +1364,10 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       memoryAutoLoadPath: "/override/fixture-memory.md",
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -1373,6 +1395,10 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     });
     const result = await buildSessionConfig(config, makeDeps());
     expect(result.systemPrompt).toBeDefined();
@@ -1394,6 +1420,10 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     });
     const result = await buildSessionConfig(config, makeDeps());
     // The stable prefix contains the firm legal name verbatim.
@@ -1412,6 +1442,10 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       channels: ["channel-xyz"], // forces a mutableSuffix to exist
     });
     const result = await buildSessionConfig(config, makeDeps());
@@ -1422,5 +1456,130 @@ describe("buildSessionConfig — MEM-01 MEMORY.md auto-inject (Phase 90)", () =>
         "STABLE_PREFIX_MEMORY_PAYLOAD",
       );
     }
+  });
+});
+
+describe("buildSessionConfig — capability manifest injection (Phase 100 follow-up)", () => {
+  it("CM-INT-1: includes the capability manifest in systemPrompt when agent has notable features", async () => {
+    const config = makeConfig({
+      dream: { enabled: true, idleMinutes: 30, model: "haiku" },
+      schedules: [
+        {
+          name: "tick",
+          cron: "*/5 * * * *",
+          prompt: "tick",
+          enabled: true,
+        },
+      ],
+      skills: ["subagent-thread"],
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("Your ClawCode Capabilities");
+    expect(result.systemPrompt).toContain("Memory dreaming");
+    expect(result.systemPrompt).toContain("Scheduled tasks");
+  });
+
+  it("CM-INT-2: omits the manifest entirely when agent has zero notable features (no bloat)", async () => {
+    const config = makeConfig({
+      dream: undefined,
+      schedules: [],
+      skills: [],
+      gsd: undefined,
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("Your ClawCode Capabilities");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — back-compat byte-stability across both pillars
+//
+// Wave 0 RED-supportive snapshot test. The snapshot pins the cache-stable
+// prefix for an agent fixture WITHOUT `delegates` and WITHOUT any
+// `defaults.timezone` config — anchoring the no-config baseline so any
+// future drift fails loud (REG-DETERMINISTIC).
+//
+// On main today this test creates the snapshot and passes. After Plans 01
+// and 02 land, the same fixture must still produce the same snapshot —
+// proving back-compat for the existing 15-agent fleet (no yaml change).
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — back-compat byte-stability", () => {
+  it("back-compat-byte-identical: agent without delegates and without timezone produces stable systemPrompt", async () => {
+    // Minimal, deterministic fixture. No delegates, no timezone — the
+    // baseline that all 15 deployed agents currently match.
+    const config = makeConfig({
+      name: "back-compat-fixture-agent",
+      workspace: "/tmp/back-compat-ws",
+      memoryPath: "/tmp/back-compat-ws",
+      channels: [],
+      skills: [],
+      mcpServers: [],
+      schedules: [],
+      slashCommands: [],
+      dream: undefined,
+      // Note: NO `delegates` field — stays undefined (Plan 01 adds the
+      // resolver field on AgentConfig but absence must remain back-compat).
+    });
+
+    const result = await buildSessionConfig(config, makeDeps());
+    // Snapshot the systemPrompt verbatim. On main: snapshot is created.
+    // After Plans 01+02 deploy: same fixture must still match — any drift
+    // to the no-delegates / no-timezone baseline fails loud.
+    expect(result.systemPrompt).toMatchSnapshot(
+      "back-compat-byte-identical-systemPrompt",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 115 Plan 04 sub-scope 5 — cacheBreakpointPlacement wiring regression.
+//
+// The architectural contract: ResolvedAgentConfig.cacheBreakpointPlacement
+// MUST be threaded from session-config.ts into AssembleOptions so the
+// operator-controlled config knob actually reaches the assembler. Without
+// this wiring, an operator setting `agents.X.cacheBreakpointPlacement: "legacy"`
+// in clawcode.yaml gets NO behavioral change — the revert path is dead code.
+//
+// This test pins the wiring at the buildSessionConfig boundary. Asserts:
+//   - default (no override) → systemPrompt contains the breakpoint marker
+//     (defaults.cacheBreakpointPlacement zod-default 'static-first' fires)
+//   - explicit "legacy" → systemPrompt does NOT contain the marker
+//     (revert path produces pre-115-04 byte-shape)
+// ---------------------------------------------------------------------------
+describe("Phase 115 Plan 04 — cacheBreakpointPlacement config wiring", () => {
+  it("default (no override on ResolvedAgentConfig) → systemPrompt contains the breakpoint marker", async () => {
+    // The session-config caller threads `config.cacheBreakpointPlacement`
+    // into AssembleOptions. ResolvedAgentConfig field is optional at the
+    // type level (per shared/types.ts) but the loader resolver always
+    // populates it from defaults.cacheBreakpointPlacement (zod default
+    // "static-first"). When undefined (legacy fixture), the assembler
+    // falls back to DEFAULT_CACHE_BREAKPOINT_PLACEMENT which is also
+    // "static-first" — so the marker SHOULD appear regardless.
+    const config = makeConfig({
+      identity: "I am a 115-04 wiring test agent",
+      // Note: `cacheBreakpointPlacement` deliberately NOT set on the fixture
+      // to mirror the path through assembleContextInternal where opts is
+      // undefined and the default fires.
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("phase115-cache-breakpoint");
+  });
+
+  it("explicit 'legacy' override → systemPrompt does NOT contain the breakpoint marker (revert path active)", async () => {
+    const config = makeConfig({
+      identity: "I am a 115-04 legacy-mode agent",
+      cacheBreakpointPlacement: "legacy",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).not.toContain("phase115-cache-breakpoint");
+  });
+
+  it("explicit 'static-first' override → systemPrompt contains the marker (parity with default)", async () => {
+    const config = makeConfig({
+      identity: "I am a 115-04 explicit static-first agent",
+      cacheBreakpointPlacement: "static-first",
+    });
+    const result = await buildSessionConfig(config, makeDeps());
+    expect(result.systemPrompt).toContain("phase115-cache-breakpoint");
   });
 });

@@ -26,6 +26,16 @@ export type AssembleBriefInput = {
   readonly agentName: string;
   /** Epoch milliseconds — injected for deterministic gap tests. */
   readonly now: number;
+  /**
+   * Phase 999.13 TZ-04 (Q1=YES) — operator-local IANA TZ used for the
+   * `### Session from <YYYY-MM-DD>` heading date slice. When omitted, the
+   * helper falls back to host TZ. A summary persisted at 2026-05-01T02:00Z
+   * with `agentTz="America/Los_Angeles"` renders as "Session from 2026-04-30"
+   * (operator-perceived date) rather than "2026-05-01" (UTC date). Internal
+   * storage (`MemoryEntry.createdAt`) stays UTC ISO; only the rendered
+   * heading uses operator-local time.
+   */
+  readonly agentTz?: string;
 };
 
 /**

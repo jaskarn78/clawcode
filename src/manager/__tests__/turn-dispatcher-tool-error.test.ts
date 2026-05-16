@@ -23,7 +23,7 @@ const silentLog = pino({ level: "silent" });
 
 function makeMockSessionManager() {
   return {
-    sendToAgent: vi.fn(async () => "ok"),
+    dispatchTurn: vi.fn(async () => "ok"),
     streamFromAgent: vi.fn(async () => "ok"),
     getTraceCollector: vi.fn(() => undefined),
   };

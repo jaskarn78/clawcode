@@ -525,3 +525,68 @@ describe("assembleConversationBrief", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ-04: renderBrief uses TZ-aware date slice (not UTC slice)
+//
+// Open Question 1 LOCKED YES — Plan 02 must convert the date in the
+// `### Session from <YYYY-MM-DD>` heading from a raw UTC slice
+// (`mem.createdAt.slice(0, 10)`) to a TZ-aware date derived via
+// renderAgentVisibleTimestamp.
+//
+// Wave 0 RED: a session that ended 2026-05-01 02:00 UTC = 2026-04-30 19:00
+// PDT — current main renders "Session from 2026-05-01" (UTC date) — the
+// new test asserts "2026-04-30" (operator-perceived date).
+//
+// On main: assembleConversationBrief has no agentTz parameter so the test
+// fails because the rendered brief uses the UTC date.
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ-04: renderBrief TZ-aware date slice", () => {
+  let memStore: MemoryStore;
+  let convStore: ConversationStore;
+
+  beforeEach(() => {
+    memStore = new MemoryStore(":memory:", {
+      enabled: false,
+      similarityThreshold: 0.85,
+    });
+    convStore = new ConversationStore(memStore.getDatabase());
+  });
+
+  afterEach(() => {
+    memStore?.close();
+  });
+
+  it("renderBrief-tz-date: createdAt 2026-05-01T02:00:00Z + agentTz America/Los_Angeles → 'Session from 2026-04-30'", () => {
+    // Seed an old terminated session > 4h before T to bypass gap-skip.
+    seedEndedSession(
+      memStore,
+      convStore,
+      "agent-a",
+      "2026-04-29T00:00:00Z",
+      "2026-04-29T00:00:00Z",
+    );
+    // Summary createdAt 2026-05-01T02:00:00Z → 2026-04-30 19:00 PDT
+    seedSummary(
+      memStore,
+      "tz-test",
+      "TZ-aware brief body",
+      "2026-05-01T02:00:00Z",
+    );
+
+    const T_LATER = new Date("2026-05-02T12:00:00Z").getTime();
+
+    // Phase 999.13 TZ-04 (Q1=YES) — AssembleBriefInput.agentTz threads through
+    // renderBrief to produce operator-local date in `### Session from <YYYY-MM-DD>`.
+    const result = assembleConversationBrief(
+      { agentName: "agent-a", now: T_LATER, agentTz: "America/Los_Angeles" },
+      { conversationStore: convStore, memoryStore: memStore, config: defaultConfig },
+    );
+
+    expect(result.skipped).toBe(false);
+    if (result.skipped) return;
+    // Operator-perceived date — Pacific time on April 30.
+    expect(result.brief).toContain("Session from 2026-04-30");
+    expect(result.brief).not.toContain("Session from 2026-05-01");
+  });
+});

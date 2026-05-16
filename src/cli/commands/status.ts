@@ -27,6 +27,23 @@ export type ZoneInfo = {
 };
 
 /**
+ * Phase 124 Plan 04 T-01 — compaction telemetry per agent from
+ * heartbeat-status. Surfaced as a single sub-line under each agent row so
+ * we keep the column layout stable for existing operator muscle memory.
+ */
+export type CompactionTelemetry = {
+  readonly sessionTokens: number | null;
+  readonly lastCompactionAt: string | null;
+};
+
+/** Pretty-print compaction telemetry for the human-readable footer. */
+export function formatCompactionLine(t: CompactionTelemetry): string {
+  const tokens = t.sessionTokens === null ? "?" : t.sessionTokens.toLocaleString();
+  const last = t.lastCompactionAt === null ? "never" : t.lastCompactionAt;
+  return `${DIM}  tokens: ${tokens}  last compaction: ${last}${RESET}`;
+}
+
+/**
  * Colorize a zone name with ANSI escape codes.
  */
 function colorizeZone(zone: string, fillPercentage: number): string {
@@ -133,6 +150,7 @@ export function formatStatusTable(
   entries: readonly RegistryEntry[],
   now?: number,
   zones?: Readonly<Record<string, ZoneInfo>>,
+  telemetry?: Readonly<Record<string, CompactionTelemetry>>,
 ): string {
   if (entries.length === 0) {
     return "No agents configured";
@@ -201,7 +219,15 @@ export function formatStatusTable(
       rowParts.push(formatWarmPath(entry));
     }
 
-    return rowParts.join("  ");
+    const mainLine = rowParts.join("  ");
+    // Phase 124 Plan 04 T-01 — append per-agent compaction telemetry as a
+    // dim sub-line. Skipped when telemetry is unavailable to preserve
+    // legacy output for the registry-fallback path.
+    const t = telemetry?.[entry.name];
+    if (t !== undefined) {
+      return `${mainLine}\n${formatCompactionLine(t)}`;
+    }
+    return mainLine;
   });
 
   return [header, separator, ...rows].join("\n");
@@ -223,26 +249,42 @@ export function registerStatusCommand(program: Command): void {
           entries: readonly RegistryEntry[];
         };
 
-        // Fetch zone data (gracefully degrade if unavailable)
+        // Fetch zone data (gracefully degrade if unavailable). Phase 124
+        // Plan 04 T-01 — same payload now carries `session_tokens` and
+        // `last_compaction_at` per agent; bind them through to the table.
         let zones: Record<string, ZoneInfo> | undefined;
+        let telemetry: Record<string, CompactionTelemetry> | undefined;
         try {
           const heartbeatResult = (await sendIpcRequest(SOCKET_PATH, "heartbeat-status", {})) as {
-            agents: Record<string, { zone?: string; fillPercentage?: number }>;
+            agents: Record<string, {
+              zone?: string;
+              fillPercentage?: number;
+              session_tokens?: number | null;
+              last_compaction_at?: string | null;
+            }>;
           };
           zones = {};
+          telemetry = {};
           for (const [name, data] of Object.entries(heartbeatResult.agents)) {
             if (data.zone && typeof data.fillPercentage === "number") {
               zones[name] = { zone: data.zone, fillPercentage: data.fillPercentage };
             }
+            const hasTokens = "session_tokens" in data;
+            const hasLast = "last_compaction_at" in data;
+            if (hasTokens || hasLast) {
+              telemetry[name] = {
+                sessionTokens: data.session_tokens ?? null,
+                lastCompactionAt: data.last_compaction_at ?? null,
+              };
+            }
           }
-          if (Object.keys(zones).length === 0) {
-            zones = undefined;
-          }
+          if (Object.keys(zones).length === 0) zones = undefined;
+          if (Object.keys(telemetry).length === 0) telemetry = undefined;
         } catch {
-          // Zone data not available -- degrade gracefully
+          // Zone / telemetry data not available -- degrade gracefully
         }
 
-        cliLog(formatStatusTable(result.entries, undefined, zones));
+        cliLog(formatStatusTable(result.entries, undefined, zones, telemetry));
       } catch (error) {
         if (error instanceof ManagerNotRunningError) {
           // Fallback: try reading registry file directly

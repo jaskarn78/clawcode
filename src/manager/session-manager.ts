@@ -1,6 +1,48 @@
+import { EventEmitter } from "node:events";
 import { logger } from "../shared/logger.js";
 import { SessionError } from "../shared/errors.js";
+// FIND-123-A.next T-04 — /proc-walk PID discovery removed in favor of
+// handle.getClaudePid() (sink populated by makeDetachedSpawn). Only the
+// MCP-children walk remains; discoverClaudeSubprocessPid stays exported
+// from proc-scan.ts because the periodic reconciler (recovery path) at
+// src/mcp/reconciler.ts still needs it for stale-claude rediscovery.
+import { discoverAgentMcpPids } from "../mcp/proc-scan.js";
+
+/**
+ * Phase 999.15 TRACK-02 — polled discovery budget for the agent.start MCP
+ * registration path. Replaces the prior fixed 1s settle window (which the
+ * 2026-04-30 deploy on clawdy revealed captures the dying first-PID when
+ * the SDK respawns claude during warmup).
+ *
+ * Total wall-clock budget = MAX_ATTEMPTS × INTERVAL = 30s. After that, the
+ * polled loop logs a warn and exits — the 60s reaper-tick reconciler
+ * (Plan 02 TRACK-01) catches up on the next tick.
+ *
+ * MIN_AGE_SEC = 5 → discoverClaudeSubprocessPid filters candidates younger
+ * than 5s, so the dying-first-PID (typically dies within 2-3s) is excluded.
+ */
+// Exported so the orphan-claude-reaper structural-invariant test can pin
+// `schemaDefault.minAgeSeconds >= MCP_POLL_INTERVAL_MS * MCP_POLL_MAX_ATTEMPTS / 1000 * safetyMultiplier`.
+// Without this link, the two timing constants drift independently and
+// regress the polled-discovery race that Phase 109-B keeps reintroducing.
+export const MCP_POLL_INTERVAL_MS = 5000;
+export const MCP_POLL_MAX_ATTEMPTS = 6;
+export const MCP_POLL_MIN_AGE_SEC = 5;
+
+/**
+ * Phase 999.15 TRACK-02 — fake-timer-friendly sleep helper. Uses setTimeout
+ * (NOT Promise.resolve().then) so vi.useFakeTimers + vi.advanceTimersByTimeAsync
+ * drive the polled-discovery loop deterministically in SM-1..SM-4.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 import type { SessionAdapter, SessionHandle } from "./session-adapter.js";
+// Phase 115 sub-scope 13(a) — `prompt-bloat-suspected` classifier.
+// Pure function; runs inside the agent crash handler when the SDK error
+// matches `invalid_request_error` AND the latest stable prefix exceeds
+// the threshold (initial 20K chars, may be tuned per 115-08).
+import { classifyPromptBloat } from "./session-adapter.js";
 import type { BackoffConfig } from "./types.js";
 import { DEFAULT_BACKOFF_CONFIG } from "./types.js";
 import { readRegistry, writeRegistry, updateEntry, createEntry } from "./registry.js";
@@ -11,11 +53,17 @@ import type { SkillsCatalog } from "../skills/types.js";
 import type { MemoryStore } from "../memory/store.js";
 import type { EmbeddingService } from "../memory/embedder.js";
 import type { SessionLogger } from "../memory/session-log.js";
-import type { CompactionManager, CharacterCountFillProvider } from "../memory/compaction.js";
+import type {
+  CompactionManager,
+  CharacterCountFillProvider,
+  CompactionResult,
+  ConversationTurn,
+} from "../memory/compaction.js";
 import type { TierManager } from "../memory/tier-manager.js";
 import { buildForkName, buildForkConfig } from "./fork.js";
 import type { ForkOptions, ForkResult } from "./fork.js";
 import type { UsageTracker } from "../usage/tracker.js";
+import { RateLimitTracker } from "../usage/rate-limit-tracker.js";
 import type { DocumentStore } from "../documents/store.js";
 import type { TraceStore } from "../performance/trace-store.js";
 import type { TraceCollector, Turn } from "../performance/trace-collector.js";
@@ -26,16 +74,24 @@ import { summarizeWithHaiku } from "./summarize-with-haiku.js";
 import { AgentMemoryManager } from "./session-memory.js";
 import { SessionRecoveryManager } from "./session-recovery.js";
 import { buildSessionConfig } from "./session-config.js";
+import { makeStreamStallCallback } from "./stream-stall-callback.js";
+import type { UnloadedSkillEntry } from "./skill-loader.js";
 import { detectBootstrapNeeded } from "../bootstrap/detector.js";
 import { computePrefixHash } from "./context-assembler.js";
 import { SkillUsageTracker } from "../usage/skill-usage-tracker.js";
 import type { SkillTrackingConfig } from "./session-adapter.js";
+// Phase 117 Plan 04 T03/T04/T05 — AdvisorBudget DI + observer wiring.
+import type { AdvisorBudget } from "../usage/advisor-budget.js";
+import type { AdvisorObserverConfig } from "./session-adapter.js";
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "./warm-path-check.js";
 import {
   performMcpReadinessHandshake,
   type McpReadinessReport,
   type McpServerState,
 } from "../mcp/readiness.js";
+// Phase 999.27 — broker-pooled MCP detection (skip per-agent probes for
+// 1password broker shim; broker has its own heartbeat).
+import { filterOutBrokerPooled } from "../mcp/broker-shim-detect.js";
 import { ConversationBriefCache } from "./conversation-brief-cache.js";
 import {
   readEffortState,
@@ -81,6 +137,47 @@ export type SessionManagerOptions = {
    * inject a tmpdir-rooted path for isolation.
    */
   readonly effortStatePath?: string;
+  /**
+   * Phase 100 follow-up — per-agent MCP env override resolver wiring.
+   *
+   * When set, SessionManager threads this through SessionConfigDeps so
+   * buildSessionConfig can substitute `op://...` URIs in
+   * `ResolvedAgentConfig.mcpEnvOverrides` with concrete vault-scoped tokens
+   * BEFORE the SDK adapter spawns the MCP subprocess. Production daemon
+   * wires this to `resolveMcpEnvOverrides + defaultOpReadShellOut`. Tests
+   * leave it undefined → mcpEnvOverrides is silently skipped (back-compat).
+   *
+   * The agentName argument is provided for audit-log correlation; the
+   * resolver itself is stateless across calls.
+   */
+  readonly opEnvResolver?: (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ) => Promise<Record<string, Record<string, string>>>;
+  /**
+   * Phase 999.14 MCP-01 — daemon-wide MCP child process tracker. When set,
+   * SessionManager.startAgent discovers the agent's claude subprocess PID
+   * via /proc walk (after a settle window), enumerates MCP child PIDs of
+   * that claude PID, and registers them in the tracker. stopAgent unregisters.
+   *
+   * Optional: tests / non-Linux paths leave it undefined; SessionManager
+   * skips MCP lifecycle work entirely (back-compat with pre-Phase-999.14
+   * test fixtures).
+   */
+  readonly mcpTracker?: import("../mcp/process-tracker.js").McpProcessTracker | null;
+
+  /**
+   * Phase 999.15 TRACK-02 — cached at daemon boot via readBootTimeUnix() /
+   * readClockTicksPerSec() and passed through so the polled-discovery loop
+   * can hand them to discoverClaudeSubprocessPid({ minAge: 5, ... })
+   * without re-reading /proc/stat per call.
+   *
+   * Optional: tests mock discoverClaudeSubprocessPid directly and don't
+   * exercise the age-filter math; production daemon ALWAYS supplies these
+   * when mcpTracker is set.
+   */
+  readonly mcpBootTimeUnix?: number;
+  readonly mcpClockTicksPerSec?: number;
 };
 
 /**
@@ -99,6 +196,14 @@ export class SessionManager {
   /** Phase 65 -- tracks the active ConversationStore session ID per agent. */
   private readonly activeConversationSessionIds: Map<string, string> = new Map();
   private skillsCatalog: SkillsCatalog = new Map();
+  /**
+   * Phase 130 Plan 02 — per-agent record of skills the manifest-loader
+   * REFUSED at boot (status: refused-mcp-missing or parse-error). Plan 03
+   * surfaces this map via Discord webhook batch (boot-time) and via
+   * `clawcode skills <agent>` CLI table. Initialized empty; populated
+   * by daemon at boot via `setUnloadedSkillsByAgent`.
+   */
+  private unloadedSkillsByAgent: ReadonlyMap<string, readonly UnloadedSkillEntry[]> = new Map();
   private allAgentConfigs: readonly ResolvedAgentConfig[] = [];
   /**
    * Phase 52 Plan 02 — per-agent prefixHash across turns.
@@ -138,6 +243,39 @@ export class SessionManager {
     capacity: 20,
   });
 
+  /**
+   * Phase 117 Plan 04 T02 — advisor consultation event bus.
+   *
+   * Per RESEARCH §13.10: `session-adapter.ts` emits two observational
+   * events on this emitter when the Claude Agent SDK's native advisor
+   * tool fires inside an agent's own turn (Plan 117-04 T03/T04 wires
+   * the emitters at the per-assistant-message scan site and at the
+   * terminal `result` event for budget accounting).
+   *
+   * Event shapes (see `src/advisor/types.ts`):
+   *   - `"advisor:invoked"` payload: `AdvisorInvokedEvent`
+   *     `{ agent, turnId, toolUseId }` — fires when the executor emits
+   *     `server_tool_use{name:"advisor"}`. Discord bridge (Plan 117-09)
+   *     listens to drop the 💭 reaction on the triggering message.
+   *   - `"advisor:resulted"` payload: `AdvisorResultedEvent`
+   *     `{ agent, turnId, toolUseId, kind, text?, errorCode? }` — fires
+   *     when the matching `advisor_tool_result` block arrives in the
+   *     same assistant message. `kind` distinguishes the three SDK
+   *     terminal states (advisor_result / advisor_redacted_result /
+   *     advisor_tool_result_error). Plan 117-09 uses this for the
+   *     footer and `/verbose` inline display (Plan 117-11).
+   *
+   * Observational ONLY — listeners that throw must not break the
+   * message path. `session-adapter.ts` wraps `emit()` in try/catch
+   * (RESEARCH §6 Pitfall 1 + Pitfall 7 invariant).
+   *
+   * Lifetime: same as SessionManager instance. The emitter is
+   * `public readonly` so DiscordBridge can subscribe directly through
+   * its injected SessionManager reference (RESEARCH §13.10 — public
+   * property is the simplest reachable surface).
+   */
+  public readonly advisorEvents: EventEmitter = new EventEmitter();
+
   /** Phase 73 Plan 02 — per-agent conversation-brief cache (LAT-02). */
   private readonly briefCache = new ConversationBriefCache();
   /**
@@ -161,6 +299,31 @@ export class SessionManager {
    * diverge.
    */
   private readonly effortStatePath: string;
+
+  /**
+   * Phase 100 follow-up — per-agent MCP env override resolver. UNDEFINED in
+   * tests (mcpEnvOverrides silently skipped). Production wires
+   * resolveMcpEnvOverrides + defaultOpReadShellOut at the daemon edge.
+   */
+  private readonly opEnvResolver?: (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ) => Promise<Record<string, Record<string, string>>>;
+
+  /**
+   * Phase 999.14 MCP-01 — daemon-wide MCP child process tracker. Optional —
+   * tests/non-Linux leave it undefined and PID discovery is skipped.
+   */
+  private readonly mcpTracker?: import("../mcp/process-tracker.js").McpProcessTracker | null;
+
+  /**
+   * Phase 999.15 TRACK-02 — proc-age math constants for polled discovery.
+   * Set at construction from SessionManagerOptions; passed through to
+   * discoverClaudeSubprocessPid as opts.bootTimeUnix + opts.clockTicksPerSec
+   * so the function does NOT re-read /proc/stat on every poll attempt.
+   */
+  private readonly mcpBootTimeUnix?: number;
+  private readonly mcpClockTicksPerSec?: number;
 
   /**
    * 260419-q2z Fix B — in-flight session summaries awaited by {@link drain}
@@ -255,8 +418,56 @@ export class SessionManager {
   private readonly memoryFileFlushTimers: Map<string, MemoryFlushTimer> = new Map();
 
   /**
+   * Phase 103 OBS-02 — per-agent compaction counter mirror. In-memory only;
+   * resets on daemon restart (Research Open Q4 — informational counter, not
+   * persistence-worthy). Bumped by SessionManager.compactForAgent on each
+   * successful CompactionManager.compact() resolve. Read by /clawcode-status
+   * via getCompactionCountForAgent.
+   *
+   * Map identity stable for SessionManager lifetime — entries created lazily
+   * on first compaction or via accessor read (which returns 0 for missing).
+   */
+  private readonly compactionCounts: Map<string, number> = new Map();
+
+  /**
+   * Phase 103 OBS-04 — per-agent RateLimitTracker map.
+   *
+   * Each tracker shares the agent's UsageTracker SQLite DB handle (one DB per
+   * agent — see `src/usage/tracker.ts` initSchema where the
+   * `rate_limit_snapshots` table lives alongside `usage_events`). Constructed
+   * at agent startAgent (after warm-path success) and injected into the
+   * SessionHandle via `handle.setRateLimitTracker` so the SDK
+   * `rate_limit_event` dispatch hook in persistent-session-handle.ts has a
+   * destination. Cleaned on stopAgent.
+   *
+   * Read by:
+   *   - `getRateLimitTrackerForAgent` (this file) — Plan 03 IPC consumer
+   *   - `/clawcode-status` renderer for session/weekly bars (Plan 03)
+   *   - `/clawcode-usage` Discord slash command (Plan 03)
+   */
+  private readonly rateLimitTrackers: Map<string, RateLimitTracker> = new Map();
+
+  /**
+   * Phase 103 OBS-01 — per-agent activation timestamp mirror (ms epoch).
+   * Mirrors the registry.startedAt write in startAgent so /clawcode-status
+   * has a synchronous accessor without awaiting readRegistry. Reset on
+   * stopAgent (entry deleted). Set on each successful warm-path completion
+   * to match the registry semantics ("most recent successful start").
+   */
+  private readonly activationAtByAgent: Map<string, number> = new Map();
+
+  /**
+   * Phase 103 OBS-01 — injected HeartbeatRunner reference for context-zone
+   * fillPercentage lookup. Set once at daemon boot via setHeartbeatRunner
+   * (mirrors the setWebhookManager / setBotDirectSender DI pattern). Left
+   * undefined in tests / SessionManager-only fixtures — the
+   * getContextFillPercentageForAgent accessor returns undefined when unset.
+   */
+  private heartbeatRunner: import("../heartbeat/runner.js").HeartbeatRunner | undefined = undefined;
+
+  /**
    * 260419-q2z Fix B — set to `true` by {@link drain}; causes
-   * `streamFromAgent` / `sendToAgent` to reject new work with
+   * `streamFromAgent` / `dispatchTurn` to reject new work with
    * `SessionError('shutting down ...')`. `stopAgent` / `reconcileRegistry`
    * continue to function so the daemon can still clean up cleanly.
    */
@@ -270,6 +481,15 @@ export class SessionManager {
     this.flushIntervalMsOverride = options.flushIntervalMsOverride;
     // Phase 83 Plan 02 EFFORT-03 — persist path resolves via DI or default.
     this.effortStatePath = options.effortStatePath ?? DEFAULT_EFFORT_STATE_PATH;
+    // Phase 100 follow-up — vault-scope override resolver (DI). Undefined in
+    // tests / bootstrap; daemon wires the production opRead at edge.
+    this.opEnvResolver = options.opEnvResolver;
+    // Phase 999.14 MCP-01 — capture optional MCP process tracker.
+    this.mcpTracker = options.mcpTracker;
+    // Phase 999.15 TRACK-02 — cache age-filter constants (production daemon
+    // wires these at boot; tests omit and rely on mocked discoverClaudeSubprocessPid).
+    this.mcpBootTimeUnix = options.mcpBootTimeUnix;
+    this.mcpClockTicksPerSec = options.mcpClockTicksPerSec;
     this.memory = new AgentMemoryManager(this.log);
     this.recovery = new SessionRecoveryManager(
       this.registryPath,
@@ -315,6 +535,24 @@ export class SessionManager {
   setSkillsCatalog(catalog: SkillsCatalog): void { this.skillsCatalog = catalog; }
 
   /**
+   * Phase 130 Plan 02 — daemon-boot setter for the per-agent unloaded-skills
+   * map (DI'd from `unloadedSkillsByAgent` constructed in daemon.ts:5a).
+   * Plan 03 CLI handler reads this via `getUnloadedSkills(agentName)`.
+   */
+  setUnloadedSkillsByAgent(map: ReadonlyMap<string, readonly UnloadedSkillEntry[]>): void {
+    this.unloadedSkillsByAgent = map;
+  }
+
+  /**
+   * Phase 130 Plan 02 — per-agent accessor for refused-skill records.
+   * Returns an empty array (not undefined) when the agent has no refusals
+   * so callers don't need null-checks. Plan 03 T-02 CLI consumes this.
+   */
+  getUnloadedSkills(agentName: string): readonly UnloadedSkillEntry[] {
+    return this.unloadedSkillsByAgent.get(agentName) ?? [];
+  }
+
+  /**
    * Phase 89 GREET-01 — inject the WebhookManager reference after both this
    * SessionManager and the WebhookManager are constructed (daemon boot order
    * has SessionManager first at ~line 1014, WebhookManager at ~1823/1834/1839).
@@ -346,6 +584,94 @@ export class SessionManager {
    */
   setMemoryScanner(agentName: string, scanner: MemoryScanner): void {
     this.memoryScanners.set(agentName, scanner);
+  }
+
+  /**
+   * Phase 117 Plan 04 T05 — daemon-wide AdvisorBudget reference.
+   *
+   * Wired by daemon.ts AFTER SessionManager construction (daemon
+   * constructs the SQLite-backed AdvisorBudget at line ~2592, before
+   * SessionManager is constructed at line ~2401 in the existing boot
+   * order). Setter pattern mirrors `setWebhookManager` /
+   * `setBotDirectSender` so the constructor signature stays stable
+   * (15+ agent test fixtures rely on the existing shape).
+   *
+   * When unset (tests, bootstrap paths), `makeAdvisorObserver` returns
+   * undefined and the SDK adapter skips advisor-event observation +
+   * budget accounting. Native-backend agents in this state still
+   * function — the SDK enforces its own server-side `max_uses` cap;
+   * only the daily soft-cap goes uncharged. Documented as the
+   * acceptable graceful-degradation mode in RESEARCH §13.5.
+   */
+  private advisorBudget: AdvisorBudget | undefined = undefined;
+
+  setAdvisorBudget(budget: AdvisorBudget): void {
+    this.advisorBudget = budget;
+  }
+
+  /**
+   * Phase 117 Plan 04 T05 — daemon-wide advisor defaults block
+   * (`config.defaults.advisor` from clawcode.yaml).
+   *
+   * Wired by daemon.ts AFTER SessionManager construction (the full
+   * `config.defaults` is only known once `loadConfig` resolves; setter
+   * pattern mirrors setWebhookManager / setBotDirectSender to keep the
+   * SessionManager constructor signature stable).
+   *
+   * Threaded into `SessionConfigDeps.advisorDefaults` (via
+   * `configDeps`) so `buildSessionConfig`'s `shouldEnableAdvisor`
+   * gate can run `resolveAdvisorBackend(agent, defaults)` against
+   * the same defaults block the rest of the daemon uses. When unset
+   * (tests), the resolver falls through to its hard-coded baseline
+   * (`"native"` / `"opus"`).
+   */
+  private advisorDefaults:
+    | { advisor?: { backend?: string; model?: string } }
+    | undefined = undefined;
+
+  setAdvisorDefaults(defaults: {
+    advisor?: { backend?: string; model?: string };
+  }): void {
+    this.advisorDefaults = defaults;
+  }
+
+  /**
+   * Phase 117 Plan 04 T03/T04 — build the native-advisor observer wiring
+   * for a single agent. Returns undefined when the AdvisorBudget has
+   * not been injected (test paths) so the adapter's advisorObserver
+   * argument falls back to "no observation."
+   *
+   * Mirrors the `makeSkillTracking` pattern (line ~471 in this file) —
+   * a tiny factory invoked from startAgent / restartAgent right before
+   * the `adapter.createSession` / `resumeSession` call. Returning a
+   * fresh object each time keeps the observer config immutable per
+   * session-handle lifecycle, matching the existing observational
+   * contract for skill-mention tracking.
+   */
+  private makeAdvisorObserver(
+    agentName: string,
+  ): AdvisorObserverConfig | undefined {
+    if (!this.advisorBudget) return undefined;
+    return {
+      agentName,
+      advisorEvents: this.advisorEvents,
+      advisorBudget: this.advisorBudget,
+    };
+  }
+
+  /**
+   * Phase 103 OBS-01 — inject the HeartbeatRunner reference so
+   * `/clawcode-status` can read context-zone fillPercentage synchronously.
+   * Called once by daemon.ts AFTER both SessionManager and HeartbeatRunner
+   * are constructed (mirrors setWebhookManager / setBotDirectSender DI).
+   * Idempotent: re-calling replaces the reference.
+   *
+   * Tests / SessionManager-only fixtures leave this unset — the
+   * getContextFillPercentageForAgent accessor returns undefined when no
+   * runner is wired (graceful degradation).
+   */
+  setHeartbeatRunner(runner: import("../heartbeat/runner.js").HeartbeatRunner): void {
+    this.heartbeatRunner = runner;
   }
 
   /**
@@ -387,16 +713,110 @@ export class SessionManager {
     if (!store) return undefined;
     const config = this.configs.get(agentName);
     const topK = config?.memoryRetrievalTopK ?? 5;
+    // Phase 115 sub-scope 3 — wire the previously-dead memoryRetrievalTokenBudget
+    // knob from ResolvedAgentConfig (loader populates from agent.X ??
+    // defaults.X). Pre-115 the per-turn <memory-context> always used the
+    // hardcoded 2000-token default in retrieveMemoryChunks regardless of yaml
+    // config. Now per-agent + defaults flow through. Default 1500 here matches
+    // defaults.memoryRetrievalTokenBudget so test code that builds a
+    // ResolvedAgentConfig without this field still gets the Phase 115 default.
+    const tokenBudget = config?.memoryRetrievalTokenBudget ?? 1500;
+    // Phase 115 sub-scope 4 — read the locked Phase 115 default tag-exclusion
+    // list when the resolved config lacks one (test-factory back-compat — in
+    // production, loader always populates from defaults, so the `??` only
+    // fires for unit tests building a ResolvedAgentConfig literal). The
+    // locked list is documented in CONTEXT.md sub-scope 4 and verified by
+    // grep in the plan's must_haves. Operators can fully replace per-agent.
+    const excludeTags =
+      config?.memoryRetrievalExcludeTags ??
+      (["session-summary", "mid-session", "raw-fallback"] as const);
     const embedder = this.memory.embedder;
+    // Phase 101 Plan 04 — pull the reranker config via the resolver closure
+    // wired by daemon.ts at boot (mirrors `setAllowMistralOcr` pattern). When
+    // the resolver is unset (tests, bootstrap) the rerank step is skipped
+    // (back-compat with pre-101-04 retrieval).
+    const rerankerResolver = this.rerankerConfigResolver;
+    // Phase 999.43 Plan 03 Task 2 — capture `this` so the inner closure can
+    // re-resolve the agent's documentStore + LIVE ingestionPriority on every
+    // call. Both reads run AT TURN TIME (not at retriever construction time)
+    // so a `clawcode reload` flip of ingestionPriority takes effect on the
+    // next turn without re-wiring the retriever.
+    const self = this;
+    // Phase 999.43 D-01 axis 1 multipliers (LOCKED VERBATIM):
+    //   high: 1.5, medium: 1.0, low: 0.7
+    const DOC_PRIORITY_AGENT_WEIGHTS = {
+      high: 1.5,
+      medium: 1.0,
+      low: 0.7,
+    } as const;
     return async (query: string) => {
+      const rerankerCfg = rerankerResolver?.();
+      // Re-resolve at call time for hot-reload semantics. When the agent
+      // has no DocumentStore (e.g. fresh agent before any ingest) the
+      // documentPriority arg is omitted and retrieveMemoryChunks runs
+      // the legacy pipeline (back-compat).
+      const docStore = self.getDocumentStore(agentName);
+      const liveConfig = self.configs.get(agentName);
+      const livePriority = liveConfig?.ingestionPriority ?? "medium";
+      const liveAgentWeight = DOC_PRIORITY_AGENT_WEIGHTS[livePriority];
+      const documentPriority = docStore
+        ? {
+            getDocumentRow: (docSlug: string) => {
+              const row = docStore.getDocumentRowBySlug(docSlug);
+              if (!row) return null;
+              return {
+                content_priority_weight: row.content_priority_weight,
+                ingested_at: row.ingested_at,
+              };
+            },
+            agentWeight: liveAgentWeight,
+          }
+        : undefined;
       return retrieveMemoryChunks({
         query,
         store,
         embed: (text: string) => embedder.embed(text),
         topK,
         timeWindowDays: 14,
+        tokenBudget,
+        excludeTags,
+        agent: agentName,
+        reranker: rerankerCfg,
+        documentPriority,
       });
     };
+  }
+
+  /**
+   * Phase 101 Plan 04 (D-04, U9, SC-10) — daemon-boot DI of the reranker
+   * config getter. Mirrors the `setAllowMistralOcr` resolver pattern: the
+   * daemon hands SessionManager a closure that reads
+   * `config.defaults.documentIngest.reranker` at CALL time so a `clawcode
+   * reload` mutation propagates without re-wiring. Unset in tests +
+   * bootstrap paths; `getMemoryRetrieverForAgent` then runs the legacy
+   * non-reranked retrieval (back-compat).
+   *
+   * The resolver may return `undefined` (config block absent) — that
+   * signal is treated the same as "disabled" by `retrieveMemoryChunks`.
+   */
+  private rerankerConfigResolver:
+    | (() => Readonly<{
+        enabled: boolean;
+        topNToRerank: number;
+        finalTopK: number;
+        timeoutMs: number;
+      }> | undefined)
+    | undefined = undefined;
+
+  setRerankerConfigResolver(
+    resolver: () => Readonly<{
+      enabled: boolean;
+      topNToRerank: number;
+      finalTopK: number;
+      timeoutMs: number;
+    }> | undefined,
+  ): void {
+    this.rerankerConfigResolver = resolver;
   }
 
   /**
@@ -474,6 +894,65 @@ export class SessionManager {
       throw new SessionError(`Agent '${name}' is already running`, name);
     }
     this.configs.set(name, config);
+
+    // Phase 106 STALL-02 — warmup-timeout sentinel. After the 2026-04-30
+    // 22:09 PT incident where research/fin-research silently stalled
+    // post-memory-scanner, post-schedules-registered, but pre-warm-path-ready
+    // (no error, no log), this sentinel converts silent failure into loud
+    // failure: at 60s elapsed without warm-path-ready, emit a structured
+    // pino-warn that operators can `grep "warmup-timeout" | jq .mcpServersPending`
+    // to identify the hung MCP. Cleared on any startAgent exit (success,
+    // failure, exception) via the try/finally wrapping the body.
+    // lastStep semantics: tracks the current major phase of agent startup so
+    // the warmup-timeout warn pinpoints WHICH subsystem hung. The dominant
+    // expected stall point per RESEARCH.md is `adapter.createSession` (Claude
+    // Agent SDK MCP cold-start handshake), so we sync-init lastStep to that
+    // value at the top of the try block — operators reading
+    // `journalctl | grep warmup-timeout | jq .lastStep` see the most-likely
+    // culprit by default. We monotonically advance through warm-path-check
+    // and post-warm as we pass each milestone. The "init" / "build-session-config"
+    // / "mcp-discovery" labels are reserved for future granularity but
+    // currently mostly transient (operators rarely catch a stall in those
+    // microsecond windows in practice).
+    let lastStep:
+      | "init"
+      | "build-session-config"
+      | "adapter-create-session"
+      | "mcp-discovery"
+      | "warm-path-check"
+      | "post-warm" = "init";
+    const mcpServersConfigured = (config.mcpServers ?? []).map((s) => s.name);
+    let mcpReadinessRef: McpReadinessReport | null = null;
+    const warmupTimeoutHandle = setTimeout(() => {
+      const loaded: string[] = [];
+      const pending: string[] = [];
+      if (mcpReadinessRef) {
+        for (const [serverName, state] of mcpReadinessRef.stateByName) {
+          if (state.status === "ready") loaded.push(serverName);
+          else pending.push(serverName);
+        }
+      } else {
+        pending.push(...mcpServersConfigured);
+      }
+      this.log.warn(
+        {
+          agent: name,
+          elapsedMs: 60_000,
+          lastStep,
+          mcpServersConfigured,
+          mcpServersLoaded: loaded,
+          mcpServersPending: pending,
+        },
+        "agent warmup-timeout — boot stalled, no warm-path-ready",
+      );
+    }, 60_000);
+
+    try {
+    // Phase 106 STALL-02 — sync-advance lastStep to the dominant expected
+    // stall point (adapter.createSession). Operators reading the
+    // warmup-timeout warn see the most-likely culprit by default; later
+    // milestones (warm-path-check, post-warm) overwrite this as we pass them.
+    lastStep = "adapter-create-session";
 
     // Ensure registry entry exists
     let registry = await readRegistry(this.registryPath);
@@ -581,9 +1060,87 @@ export class SessionManager {
       usageCallback,
       this.makePrefixHashProvider(name),
       this.makeSkillTracking(config),
+      // Phase 117 Plan 04 T03/T04 — native advisor observer wiring.
+      // Returns undefined when AdvisorBudget hasn't been injected (test
+      // paths); production daemon sets the budget right after
+      // SessionManager construction so the observer is always present
+      // for the 15+ agent fleet.
+      this.makeAdvisorObserver(name),
     );
     sessionIdRef.current = handle.sessionId;
     this.sessions.set(name, handle);
+
+    // FIND-123-A.next T-04 — sink-based claudePid acquisition (replaces the
+    // Phase 999.15 TRACK-02 polled /proc-walk discovery via
+    // discoverClaudeSubprocessPid).
+    //
+    // The structural spawn wrapper (T-02) writes the live claude subprocess
+    // PID into the handle's pidSink synchronously inside the SDK's
+    // `spawnLocalProcess` callback, so by the time the first `query()` has
+    // emitted any data the sink is populated. The race window between
+    // handle construction and SDK spawn is small but non-zero — we poll
+    // the sink with the same 30s budget (6×5s) so a slow SDK init does
+    // not skip registration. Polling stays fire-and-forget so warmup
+    // never blocks on it.
+    //
+    // sessions.has(name) check at every iteration short-circuits if the
+    // operator stops the agent during the wait (Pitfall 6 — abort on
+    // dispose). Reaper reconciliation (`mcp/reconciler.ts:reconcileAgent`,
+    // recovery path) still uses /proc discovery to rediscover after an
+    // SDK respawn — that path is intentionally out of scope here.
+    if (this.mcpTracker) {
+      lastStep = "mcp-discovery";
+      void (async () => {
+        try {
+          let claudePid: number | null = null;
+          for (let attempt = 0; attempt < MCP_POLL_MAX_ATTEMPTS; attempt++) {
+            await sleep(MCP_POLL_INTERVAL_MS);
+            if (!this.sessions.has(name)) return;
+            const liveHandle = this.sessions.get(name);
+            const found = liveHandle?.getClaudePid?.() ?? null;
+            if (found !== null && found > 1) {
+              claudePid = found;
+              break;
+            }
+          }
+          if (claudePid === null) {
+            this.log.warn(
+              { agent: name },
+              "no claude pid in sink within 30s — relying on reaper reconciliation",
+            );
+            return;
+          }
+          // Re-check disposal post-loop before mutating tracker state.
+          if (!this.sessions.has(name)) return;
+          const tracker = this.mcpTracker;
+          if (!tracker) return; // narrowing
+          let patterns: RegExp;
+          try {
+            patterns = tracker.patterns;
+          } catch {
+            // Tracker constructed without patterns (test fixture); skip.
+            return;
+          }
+          const mcpPids = await discoverAgentMcpPids(claudePid, patterns);
+          // Phase 999.15 TRACK-03 — 3-arg register stores claudePid alongside MCPs.
+          await tracker.register(name, claudePid, mcpPids);
+          this.log.info(
+            {
+              agent: name,
+              claudePid,
+              mcpPidCount: mcpPids.length,
+              source: "123-A-next-sink",
+            },
+            "registered agent MCP PIDs with tracker (FIND-123-A.next T-04 sink)",
+          );
+        } catch (err) {
+          this.log.warn(
+            { agent: name, err: String(err) },
+            "MCP PID sink registration failed (non-fatal — reaper will catch leaks)",
+          );
+        }
+      })();
+    }
 
     // Phase 83 Plan 02 EFFORT-03 — re-apply persisted runtime effort override
     // so `/clawcode-effort` survives `clawcode restart <agent>`. Read happens
@@ -629,6 +1186,7 @@ export class SessionManager {
     // do NOT contribute to the gate-blocking errors array.
     const mcpReadiness: { current: McpReadinessReport | null } = { current: null };
     const mcpServers = config.mcpServers ?? [];
+    lastStep = "warm-path-check";
     const warmResult = await runWarmPathCheck({
       agent: name,
       sqliteWarm: (agentName) => this.memory.warmSqliteStores(agentName),
@@ -647,7 +1205,13 @@ export class SessionManager {
       ...(mcpServers.length > 0
         ? {
             mcpProbe: async () => {
-              const rep = await performMcpReadinessHandshake(mcpServers);
+              // Phase 999.27 — skip broker-pooled servers (1password broker
+              // shim) from warm-path probes. The probe spawns the shim with
+              // the daemon's default env (clawdbot token) instead of the
+              // per-agent overridden env, causing broker rebind cycles + pool
+              // churn. Broker has its own heartbeat (`mcp-broker.ts`).
+              const probableServers = filterOutBrokerPooled(mcpServers);
+              const rep = await performMcpReadinessHandshake(probableServers);
               mcpReadiness.current = rep;
               if (rep.optionalErrors.length > 0) {
                 this.log.warn(
@@ -702,15 +1266,24 @@ export class SessionManager {
       return;
     }
 
+    // Phase 106 STALL-02 — capture latest readiness so the sentinel timer
+    // (rare exotic stall during post-warm registry write) reports a useful
+    // mcpServersLoaded/Pending split rather than empty/configured.
+    mcpReadinessRef = mcpReadiness.current;
+    lastStep = "post-warm";
+    const startedAt = Date.now();
     registry = updateEntry(registry, name, {
       status: "running",
       sessionId: handle.sessionId,
-      startedAt: Date.now(),
+      startedAt,
       warm_path_ready: true,
       warm_path_readiness_ms: warmResult.total_ms,
       lastError: null,
     });
     await writeRegistry(this.registryPath, registry);
+    // Phase 103 OBS-01 — mirror startedAt for synchronous /clawcode-status
+    // reads. Cleared in stopAgent.
+    this.activationAtByAgent.set(name, startedAt);
     this.log.info(
       {
         agent: name,
@@ -728,6 +1301,27 @@ export class SessionManager {
     // check every tick (see src/heartbeat/checks/mcp-reconnect.ts).
     if (mcpReadiness.current) {
       handle.setMcpState(mcpReadiness.current.stateByName);
+    }
+
+    // Phase 103 OBS-04 / OBS-05 — construct + inject per-agent
+    // RateLimitTracker. Shares the agent's UsageTracker DB handle (Research
+    // §Architecture — add table to UsageTracker DB rather than a second
+    // per-agent DB; one DB handle per agent stays clean).
+    //
+    // The tracker is the destination for SDK `rate_limit_event` messages
+    // dispatched by persistent-session-handle.iterateUntilResult. When the
+    // agent has no UsageTracker (e.g. memoryEnabled=false), the block silently
+    // no-ops; the handle's dispatch branch optional-chains
+    // `_rateLimitTracker?.record(...)` so a missing tracker is graceful and
+    // /clawcode-usage shows "no data" (Pitfall 7).
+    //
+    // Pitfall 8: messages arriving in the race window between handle
+    // construction (line ~660 above) and this injection are silently dropped.
+    // Acceptable best-effort capture per Research.
+    if (usageTracker) {
+      const rateLimitTracker = new RateLimitTracker(usageTracker.getDatabase(), this.log);
+      this.rateLimitTrackers.set(name, rateLimitTracker);
+      handle.setRateLimitTracker(rateLimitTracker);
     }
 
     // Phase 94 Plan 01 Gap-Closure — boot-time capability probe (D-03).
@@ -754,7 +1348,11 @@ export class SessionManager {
     //     the probe coroutine threw. The next 60s heartbeat tick reruns
     //     this probe with full state-merge semantics.
     if (mcpServers.length > 0) {
-      const serverNames = mcpServers.map((s) => s.name);
+      // Phase 999.27 — skip broker-pooled servers from agent-side capability
+      // probes. The 1password broker shim is daemon-singleton transport;
+      // probes spawning it with un-overridden env cause rebind cycles.
+      const probableForCapability = filterOutBrokerPooled(mcpServers);
+      const serverNames = probableForCapability.map((s) => s.name);
       const priorState = this.getMcpStateForAgent(name);
       const prevProbeByName = new Map<
         string,
@@ -781,7 +1379,7 @@ export class SessionManager {
           const probeLog = pino({ level: "silent" });
 
           const serversByName = new Map(
-            mcpServers.map((s) => [
+            probableForCapability.map((s) => [
               s.name,
               {
                 name: s.name,
@@ -874,6 +1472,12 @@ export class SessionManager {
     // between DB flushes doesn't lose the active session's context). Skip
     // heuristic prevents spam on idle windows.
     this.startMemoryFileFlushTimer(name, config);
+    } finally {
+      // Phase 106 STALL-02 — clear the warmup-timeout sentinel on every
+      // exit path (success, early-return failure, exception). The
+      // outer try/finally guarantees no timer leak.
+      clearTimeout(warmupTimeoutHandle);
+    }
   }
 
   /**
@@ -961,14 +1565,26 @@ export class SessionManager {
   }
 
   /**
-   * @throws SessionError if the agent is not running
+   * Dispatch a turn to the named agent and await the result.
    *
-   * Accepts an OPTIONAL pre-constructed Turn (caller-owned lifecycle, Phase 50).
-   * The caller (DiscordBridge / Scheduler) constructs the Turn via
-   * `getTraceCollector(name).startTurn(...)` and owns `turn.end()`. SessionManager
-   * is pure passthrough — it does NOT create or end Turn objects.
+   * (Renamed from the previous "send-to-agent" framing in Phase 999.2 D-RNI-01 —
+   *  it was misleading; this method dispatches a turn and waits for the
+   *  response, whether the target is the caller's own agent
+   *  (heartbeat/inbox), a fork (escalation), or a true peer (cross-agent IPC).)
+   *
+   * Signature is identical to the prior method (D-RNI-03):
+   * @param name      Target agent name.
+   * @param message   Turn content.
+   * @param turn      Optional pre-constructed Turn (caller-owned lifecycle,
+   *                  Phase 50). The caller (DiscordBridge / Scheduler) constructs
+   *                  the Turn via `getTraceCollector(name).startTurn(...)` and
+   *                  owns `turn.end()`. SessionManager is pure passthrough — it
+   *                  does NOT create or end Turn objects.
+   * @param options   Optional `{ signal }` abort handle (Phase 59).
+   * @returns         Resolves with the agent's response string.
+   * @throws SessionError if the agent is not running.
    */
-  async sendToAgent(
+  async dispatchTurn(
     name: string,
     message: string,
     turn?: Turn,
@@ -994,7 +1610,7 @@ export class SessionManager {
    * @throws SessionError if the agent is not running
    *
    * Accepts an OPTIONAL pre-constructed Turn (caller-owned lifecycle, Phase 50).
-   * See sendToAgent docstring for the lifecycle contract.
+   * See dispatchTurn docstring for the lifecycle contract.
    */
   async streamFromAgent(
     name: string,
@@ -1167,6 +1783,22 @@ export class SessionManager {
     this.briefCache.invalidate(name); // Phase 73 Plan 02 — LAT-02
     this.recovery.clearStabilityTimer(name);
     this.recovery.clearRestartTimer(name);
+    // Phase 999.14 MCP-02 — fire process-group SIGTERM at the agent's tracked
+    // MCP PIDs BEFORE handle.close (the SDK teardown). killAgentGroup is
+    // idempotent (ESRCH treated as success), so a second invocation from the
+    // PSH disconnect handler is a safe no-op. Wrapped in try/catch so a
+    // tracker failure NEVER blocks stopAgent — operator-initiated stop must
+    // always complete cleanly even if /proc is misbehaving.
+    if (this.mcpTracker) {
+      try {
+        await this.mcpTracker.killAgentGroup(name, 5_000);
+      } catch (err) {
+        this.log.error(
+          { agent: name, err: String(err) },
+          "tracker.killAgentGroup failed during stopAgent (non-fatal)",
+        );
+      }
+    }
     // Gap 3 (memory-persistence-gaps): stop the flush timer BEFORE
     // summarization so a timer tick cannot race against endSession and
     // try to flush a session that has just transitioned out of 'active'.
@@ -1214,6 +1846,16 @@ export class SessionManager {
 
     await handle.close();
     this.sessions.delete(name);
+    // Phase 103 OBS-01/02 — clear synchronous /clawcode-status mirrors. Counter
+    // resets on stop (matches in-memory-only semantics — Open Q4); activation
+    // mirror cleared so the post-stop accessor read returns undefined.
+    this.compactionCounts.delete(name);
+    this.activationAtByAgent.delete(name);
+    // Phase 103 OBS-04 — drop the per-agent RateLimitTracker reference. The
+    // underlying SQLite snapshot rows survive (the UsageTracker DB is closed
+    // by AgentMemoryManager.cleanupMemory above) so a subsequent restart
+    // restores them on next RateLimitTracker construction.
+    this.rateLimitTrackers.delete(name);
     // Phase 52 Plan 02 — drop per-agent cache-prefix state so a fresh start
     // records cacheEvictionExpected=false on turn 1 (no prior hash).
     this.lastPrefixHashByAgent.delete(name);
@@ -1332,6 +1974,23 @@ export class SessionManager {
     return handle.hasActiveTurn();
   }
 
+  /**
+   * Phase 124 follow-up — surface the in-flight turn's start timestamp.
+   *
+   * Mirrors the `hasActiveTurn` shape: returns null when the agent is not
+   * running, the handle predates the primitive (legacy mocks / wrapSdkQuery
+   * paths), or no turn is in-flight. Read by the daemon's `compact-session`
+   * dep-builder to enforce the ERR_TURN_TOO_LONG safety budget — the
+   * handler resolves it through a per-agent `ReadonlyMap<string, number>`,
+   * but the source of truth is the handle's slot, not a daemon-side map.
+   */
+  getTurnStartedAt(name: string): number | null {
+    const handle = this.sessions.get(name);
+    if (!handle) return null;
+    if (typeof handle.getTurnStartedAt !== "function") return null;
+    return handle.getTurnStartedAt();
+  }
+
   async restartAgent(name: string, config: ResolvedAgentConfig): Promise<void> {
     // Phase 90.1 hotfix — tolerate "agent not running" at the stop step.
     // Previously, restartAgent threw when called on a stopped agent, forcing
@@ -1381,11 +2040,26 @@ export class SessionManager {
       "[greeting] restartAgent: evaluating greeting guards",
     );
     if (webhookManager && convStore) {
+      // Phase 99 D-fix (2026-04-25 evening): wire fast-path lookup for
+      // existing summary memory entries so restart-greeting can skip the
+      // 10s Haiku call when summary_memory_id is already populated.
+      const memStoreForGreeting = this.memory.memoryStores.get(name);
+      const getMemoryById = memStoreForGreeting
+        ? (id: string) => {
+            try {
+              const entry = memStoreForGreeting.getById(id);
+              return entry?.content;
+            } catch {
+              return undefined;
+            }
+          }
+        : undefined;
       void sendRestartGreeting(
         {
           webhookManager,
           conversationStore: convStore,
           summarize: this.summarizeFn,
+          getMemoryById,
           now: () => Date.now(),
           log: this.log,
           coolDownState: this.greetCoolDownByAgent,
@@ -1501,6 +2175,12 @@ export class SessionManager {
             undefined,
             this.makePrefixHashProvider(entry.name),
             this.makeSkillTracking(config),
+            // Phase 117 Plan 04 T03/T04 — symmetric mirror of the
+            // createSession path above (Rule 3 symmetric-edits). A
+            // resumed session MUST attach the same advisor observer as
+            // the original create call so post-restart advisor events
+            // continue to fire on the daemon-wide EventEmitter.
+            this.makeAdvisorObserver(entry.name),
           );
           this.sessions.set(entry.name, handle);
           this.configs.set(entry.name, config);
@@ -1593,6 +2273,88 @@ export class SessionManager {
   // Memory accessors (delegate to AgentMemoryManager)
   getMemoryStore(agentName: string): MemoryStore | undefined { return this.memory.memoryStores.get(agentName); }
   getCompactionManager(agentName: string): CompactionManager | undefined { return this.memory.compactionManagers.get(agentName); }
+
+  /**
+   * Phase 103 OBS-02 — current compaction count for an agent.
+   * Returns 0 when no compactions have occurred. In-memory only;
+   * resets on daemon restart (Research Open Q4).
+   */
+  getCompactionCountForAgent(name: string): number {
+    return this.compactionCounts.get(name) ?? 0;
+  }
+
+  /**
+   * Phase 103 OBS-02 — internal hook for bumping the counter after a
+   * successful CompactionManager.compact() resolve. Use compactForAgent
+   * in production; this exists for the wrapper itself + future code paths
+   * that need to record a compaction outside the canonical entry point.
+   */
+  private bumpCompactionCount(name: string): void {
+    this.compactionCounts.set(name, (this.compactionCounts.get(name) ?? 0) + 1);
+  }
+
+  /**
+   * Phase 103 OBS-02 — canonical entry point for triggering a compaction.
+   * Wraps CompactionManager.compact so the counter bumps ONLY on resolve.
+   * Reject path leaves the counter unchanged (Pitfall 3 — compactions
+   * must reflect SUCCESSFUL flushes only). Returns the same
+   * CompactionResult so callers see no behavior change.
+   *
+   * Throws SessionError when the agent has no CompactionManager (e.g.
+   * the agent is not initialized).
+   */
+  async compactForAgent(
+    name: string,
+    conversation: readonly ConversationTurn[],
+    extractMemories: (text: string) => Promise<readonly string[]>,
+  ): Promise<CompactionResult> {
+    const cm = this.memory.compactionManagers.get(name);
+    if (!cm) {
+      throw new SessionError(`Agent '${name}' has no CompactionManager`, name);
+    }
+    const result = await cm.compact(conversation, extractMemories);
+    this.bumpCompactionCount(name);
+    return result;
+  }
+
+  /**
+   * Phase 103 OBS-01 — context-zone fillPercentage (0-1) for /clawcode-status.
+   * Returns undefined when:
+   *   - no HeartbeatRunner is wired (tests / minimal fixtures)
+   *   - the runner has no zone data for this agent (agent stopped, or zone
+   *     check has not yet run after warm-path completion)
+   */
+  getContextFillPercentageForAgent(name: string): number | undefined {
+    const zone = this.heartbeatRunner?.getZoneStatuses().get(name);
+    return zone?.fillPercentage;
+  }
+
+  /**
+   * Phase 103 OBS-01 — registry-recorded activation timestamp (ms epoch).
+   * Returns undefined when the agent has no recorded start (never started
+   * since daemon boot, or has been stopped). Mirrors registry.startedAt
+   * synchronously to avoid awaiting readRegistry on every status render.
+   */
+  getActivationAtForAgent(name: string): number | undefined {
+    return this.activationAtByAgent.get(name);
+  }
+
+  /**
+   * Phase 103 OBS-04 / OBS-06 — per-agent RateLimitTracker accessor.
+   *
+   * Returns undefined when:
+   *   - the agent is not running (never started, or stopped)
+   *   - the agent's UsageTracker was unavailable at start (no DB handle to
+   *     share — graceful degradation, /clawcode-usage shows "no data")
+   *
+   * Read by:
+   *   - daemon.ts list-rate-limit-snapshots IPC handler (Plan 03)
+   *   - /clawcode-status renderer for session/weekly bars (Plan 03)
+   *   - /clawcode-usage Discord slash command (Plan 03)
+   */
+  getRateLimitTrackerForAgent(name: string): RateLimitTracker | undefined {
+    return this.rateLimitTrackers.get(name);
+  }
   getContextFillProvider(agentName: string): CharacterCountFillProvider | undefined { return this.memory.contextFillProviders.get(agentName); }
   getEmbedder(): EmbeddingService { return this.memory.embedder; }
   getAgentConfig(agentName: string): ResolvedAgentConfig | undefined { return this.configs.get(agentName); }
@@ -1626,6 +2388,8 @@ export class SessionManager {
   }
   getSessionLogger(agentName: string): SessionLogger | undefined { return this.memory.sessionLoggers.get(agentName); }
   getTierManager(agentName: string): TierManager | undefined { return this.memory.tierManagers.get(agentName); }
+  /** Phase 999.8 follow-up — used by `tier-maintenance-tick` IPC to iterate every agent with a TierManager. */
+  tierManagerNames(): IterableIterator<string> { return this.memory.tierManagers.keys(); }
   getUsageTracker(agentName: string): UsageTracker | undefined { return this.memory.usageTrackers.get(agentName); }
   getEpisodeStore(agentName: string) { return this.memory.episodeStores.get(agentName); }
   getDocumentStore(agentName: string): DocumentStore | undefined { return this.memory.documentStores.get(agentName); }
@@ -1697,7 +2461,84 @@ export class SessionManager {
       // renderMcpPromptBlock can populate the live status table in the
       // stable prefix (TOOL-02 / TOOL-07).
       mcpStateProvider: (name: string) => this.getMcpStateForAgent(name),
+      // Phase 96 Plan 02 D-02 — thread per-agent filesystem-capability
+      // snapshot so renderFilesystemCapabilityBlock can populate the
+      // <filesystem_capability> block in the LLM stable prefix.
+      // Snapshot is mutated in-place by the fs-probe heartbeat check
+      // (96-07) every 60s; session-config rebuilds on next turn pick up
+      // the latest state automatically.
+      fsCapabilitySnapshotProvider: (name: string) =>
+        this.getSessionHandle(name)?.getFsCapabilitySnapshot() ?? new Map(),
+      // Phase 100 follow-up — thread the vault-scope MCP env resolver so
+      // buildSessionConfig can swap clawdbot-scoped tokens for narrower
+      // (e.g. Finmentum-only) tokens before MCP subprocess spawn.
+      // Undefined in tests → buildSessionConfig silently skips (back-compat).
+      opEnvResolver: this.opEnvResolver,
+      // Phase 999.7 — per-agent TraceCollector for context-audit telemetry.
+      // Wired here so buildSessionConfig can capture section_tokens metadata
+      // on a synthetic bootstrap Turn at every session start. Without this,
+      // `clawcode context-audit` reports `sampledTurns: 0` for every agent.
+      traceCollector:
+        agentName !== undefined
+          ? this.memory.traceCollectors.get(agentName)
+          : undefined,
+      // Phase 117 Plan 04 T05 — advisor defaults + budget for the
+      // `shouldEnableAdvisor` gate inside buildSessionConfig. Both
+      // optional — when SessionManager hasn't been wired (test paths),
+      // the gate falls through to its hard-coded baselines and the
+      // advisor is enabled-by-default (matches the production fleet
+      // default `defaults.advisor.backend: native`).
+      advisorDefaults: this.advisorDefaults,
+      advisorBudget: this.advisorBudget,
+      // Phase 127 Plan 02 — stream-stall callback factory. When
+      // `webhookManager` is wired (post-construction setWebhookManager
+      // pattern), this returns a closure that emits a Discord
+      // notification + records a JSONL stall row on trip. When the
+      // webhookManager is still undefined (boot ordering, tests), the
+      // factory falls back to a sessionLogger-only callback. When even
+      // the agent name is unknown (configDeps called with no name —
+      // legacy callers in test paths), the factory itself is omitted
+      // and buildSessionConfig OMITS the `onStreamStall` field.
+      streamStallCallbackFactory:
+        agentName !== undefined
+          ? this.makeStreamStallCallbackFactory()
+          : undefined,
     };
+  }
+
+  /**
+   * Phase 127 Plan 02 — build a stall-callback factory closure.
+   *
+   * Closed over `this.webhookManager` (DI'd via setWebhookManager AFTER
+   * construction) and a late-binding lookup for the per-agent
+   * SessionLogger + active sessionId. Both lookups happen at trip
+   * time, not factory time, so the factory survives a webhookManager
+   * that lands during boot and a session that rotates mid-lifetime.
+   *
+   * The factory accepts `{agentName, model, effort}` and returns a
+   * callback the buildSessionConfig spread inserts into
+   * `AgentSessionConfig.onStreamStall`.
+   */
+  private makeStreamStallCallbackFactory(): (args: {
+    readonly agentName: string;
+    readonly model: string;
+    readonly effort: string;
+  }) => (payload: {
+    readonly lastUsefulTokenAgeMs: number;
+    readonly thresholdMs: number;
+  }) => void {
+    return (args) =>
+      makeStreamStallCallback({
+        agentName: args.agentName,
+        model: args.model,
+        effort: args.effort,
+        webhookManager: this.webhookManager,
+        sessionLoggerProvider: () =>
+          this.memory.sessionLoggers.get(args.agentName),
+        sessionIdProvider: () =>
+          this.sessions.get(args.agentName)?.sessionId ?? "",
+        log: this.log,
+      });
   }
 
   private async performRestart(name: string, config: ResolvedAgentConfig): Promise<void> {
@@ -1761,7 +2602,7 @@ export class SessionManager {
    * mid-flight.
    *
    * After calling drain(), new turn dispatches (streamFromAgent /
-   * sendToAgent) reject with `SessionError('shutting down, agent X is no
+   * dispatchTurn) reject with `SessionError('shutting down, agent X is no
    * longer accepting turns')`. This is the ONE surface that blocks new work;
    * stopAgent / reconcileRegistry continue to function so the daemon can
    * still clean up.
@@ -1818,6 +2659,44 @@ export class SessionManager {
     handle: SessionHandle,
   ): void {
     handle.onError((error: Error) => {
+      // Phase 115 sub-scope 13(a) — prompt-bloat classifier.
+      // Runs FIRST so the [diag] log line is correlated with this exact crash;
+      // any subsequent crash-handling work (summarize, recovery, mcp teardown)
+      // is independent. Failure-isolated: classifier errors NEVER block the
+      // existing crash-recovery path.
+      try {
+        const stablePrefix =
+          this.latestStablePrefixByAgent.get(name) ?? "";
+        const traceCollector = this.memory.traceCollectors.get(name);
+        const traceSink = traceCollector
+          ? {
+              incrementPromptBloatWarning: (agent: string): void => {
+                // Phase 115 sub-scope 13(a) dependency note: 115-00-T02
+                // adds a `prompt_bloat_warnings_24h` column on traces.db.
+                // Until that DDL lands in this worktree, the increment
+                // method may not exist on TraceCollector — invoke
+                // defensively. Classifier remains operator-visible via
+                // the warn log line even when the counter is dark.
+                const sink = traceCollector as unknown as {
+                  incrementPromptBloatWarning?: (agent: string) => void;
+                };
+                if (typeof sink.incrementPromptBloatWarning === "function") {
+                  sink.incrementPromptBloatWarning(agent);
+                }
+                /* else: column/method not yet present — best-effort no-op */
+              },
+            }
+          : undefined;
+        classifyPromptBloat(
+          error,
+          stablePrefix.length,
+          name,
+          this.log,
+          traceSink,
+        );
+      } catch {
+        /* classifier MUST NEVER break the crash-recovery path */
+      }
       // Phase 65: crash the ConversationStore session
       const convSessionId = this.activeConversationSessionIds.get(name);
       const convStoreForCrash = this.memory.conversationStores.get(name);
@@ -1853,6 +2732,26 @@ export class SessionManager {
       // would likely fail on the corrupted state. Timer is just stopped.
       this.stopMemoryFileFlushTimer(name);
 
+      // Phase 999.14 MCP-02 — fire process-group SIGTERM on crash. The
+      // underlying claude subprocess has died (that's why onError fired);
+      // its MCP grandchildren have reparented to PID 1 by the time we get
+      // here. killAgentGroup signals their pgid, idempotent on dead PIDs.
+      // Fire-and-forget so crash recovery isn't delayed by /proc reads.
+      // See RESEARCH.md Pitfall 5: this is the SESSION-LEVEL teardown trigger,
+      // NOT a per-MCP transport disconnect — reaper-storm safe.
+      if (this.mcpTracker) {
+        const tracker = this.mcpTracker;
+        void (async () => {
+          try {
+            await tracker.killAgentGroup(name, 5_000);
+          } catch (err) {
+            this.log.error(
+              { agent: name, err: String(err) },
+              "tracker.killAgentGroup failed during crash teardown (non-fatal)",
+            );
+          }
+        })();
+      }
       this.recovery.handleCrash(name, config, error, this.sessions);
       // Invoke session end callback on crash (e.g., subagent thread cleanup)
       const endCallback = this.sessionEndCallbacks.get(name);
@@ -1978,6 +2877,90 @@ export class SessionManager {
         "flush threw unexpectedly (non-fatal)",
       );
     }
+  }
+
+  /**
+   * Phase 99-C — drain the pending-summary backlog for an agent.
+   *
+   * Looks up sessions in terminal status that never received a Phase 64
+   * summarization (status IN ('ended','crashed') AND summary_memory_id IS
+   * NULL — see ConversationStore.listPendingSummarySessions for the full
+   * predicate) and runs `summarizeSession` on each, oldest-first. Counts
+   * the outcome shape so the caller (the `summarize-pending` heartbeat
+   * check) can render a one-line healthy/warning message.
+   *
+   * Each in-flight summary is registered with `trackSummary` so daemon
+   * shutdown drain (`drain(timeoutMs)`) waits for it to settle, exactly
+   * like the stop-path and crash-path trigger sites already do.
+   *
+   * Never throws — failures fall through into the `skipped` count and a
+   * defensive warn log. The heartbeat check timeout is the ultimate
+   * upper bound on per-tick work.
+   */
+  async summarizePendingSessions(
+    agentName: string,
+    limit: number,
+  ): Promise<{
+    readonly attempted: number;
+    readonly summarized: number;
+    readonly skipped: number;
+  }> {
+    const memoryStore = this.memory.memoryStores.get(agentName);
+    const conversationStore = this.memory.conversationStores.get(agentName);
+    if (!memoryStore || !conversationStore) {
+      return { attempted: 0, summarized: 0, skipped: 0 };
+    }
+    let pending: readonly { readonly id: string }[] = [];
+    try {
+      pending = conversationStore.listPendingSummarySessions(agentName, limit);
+    } catch (err) {
+      this.log.warn(
+        { agent: agentName, error: (err as Error).message },
+        "summarize-pending: list query failed (non-fatal)",
+      );
+      return { attempted: 0, summarized: 0, skipped: 0 };
+    }
+
+    let attempted = 0;
+    let summarized = 0;
+    let skipped = 0;
+    for (const session of pending) {
+      attempted++;
+      const sessionId = session.id;
+      try {
+        const result = await this.trackSummary(
+          (async () => {
+            const r = await summarizeSession(
+              { agentName, sessionId },
+              {
+                conversationStore,
+                memoryStore,
+                embedder: this.memory.embedder,
+                summarize: this.summarizeFn,
+                log: this.log,
+              },
+            );
+            if ("success" in r && r.success) {
+              summarized++;
+            } else {
+              skipped++;
+            }
+          })(),
+        );
+        void result;
+      } catch (err) {
+        skipped++;
+        this.log.warn(
+          {
+            agent: agentName,
+            session: sessionId,
+            error: (err as Error).message,
+          },
+          "summarize-pending: per-session summarization threw (non-fatal)",
+        );
+      }
+    }
+    return { attempted, summarized, skipped };
   }
 
   private async summarizeSessionIfPossible(

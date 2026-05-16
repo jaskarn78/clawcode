@@ -1,90 +1,29 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+// src/heartbeat/__tests__/discovery.test.ts
+//
+// Phase 999.8 Plan 03 — discoverChecks is now a back-compat shim around the
+// static CHECK_REGISTRY. The pre-Plan-03 tmpdir + readdir tests were testing
+// the (broken-in-prod) dynamic-import behaviour; they no longer apply.
+import { describe, it, expect } from "vitest";
 import { discoverChecks } from "../discovery.js";
+import { CHECK_REGISTRY } from "../check-registry.js";
 
-describe("discoverChecks", () => {
-  let tempDir: string;
-
-  beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "heartbeat-checks-"));
+describe("discoverChecks (Phase 999.8 — static registry)", () => {
+  it("returns the static CHECK_REGISTRY regardless of checksDir argument", async () => {
+    const result = await discoverChecks("/nonexistent/path");
+    expect(result).toBe(CHECK_REGISTRY);
   });
 
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+  it("returns 14 modules", async () => {
+    // Phase 108 — added mcp-broker check (POOL-07).
+    // Phase 99-C — added summarize-pending (drains crashed-session summary backlog).
+    // Phase 999.47 Plan 02 — added homelab-refresh (hourly inventory poller).
+    const result = await discoverChecks("/any/path");
+    expect(result).toHaveLength(14);
   });
 
-  it("discovers valid check modules from a directory", async () => {
-    writeFileSync(
-      join(tempDir, "my-check.ts"),
-      `export default { name: "my-check", execute: async () => ({ status: "healthy", message: "ok" }) };`,
-    );
-
-    const checks = await discoverChecks(tempDir);
-
-    expect(checks).toHaveLength(1);
-    expect(checks[0].name).toBe("my-check");
-  });
-
-  it("ignores .test.ts files", async () => {
-    writeFileSync(
-      join(tempDir, "valid.ts"),
-      `export default { name: "valid", execute: async () => ({ status: "healthy", message: "ok" }) };`,
-    );
-    writeFileSync(
-      join(tempDir, "valid.test.ts"),
-      `export default { name: "test-file", execute: async () => ({ status: "healthy", message: "ok" }) };`,
-    );
-
-    const checks = await discoverChecks(tempDir);
-
-    expect(checks).toHaveLength(1);
-    expect(checks[0].name).toBe("valid");
-  });
-
-  it("ignores modules without valid default export", async () => {
-    writeFileSync(
-      join(tempDir, "bad-module.ts"),
-      `export const notDefault = { name: "bad", execute: async () => ({}) };`,
-    );
-
-    const checks = await discoverChecks(tempDir);
-
-    expect(checks).toHaveLength(0);
-  });
-
-  it("returns empty array for empty directory", async () => {
-    const checks = await discoverChecks(tempDir);
-
-    expect(checks).toHaveLength(0);
-  });
-
-  it("returns empty array for nonexistent directory", async () => {
-    const checks = await discoverChecks(join(tempDir, "nonexistent"));
-
-    expect(checks).toHaveLength(0);
-  });
-
-  it("ignores modules with no name property", async () => {
-    writeFileSync(
-      join(tempDir, "no-name.ts"),
-      `export default { execute: async () => ({ status: "healthy", message: "ok" }) };`,
-    );
-
-    const checks = await discoverChecks(tempDir);
-
-    expect(checks).toHaveLength(0);
-  });
-
-  it("ignores modules with no execute function", async () => {
-    writeFileSync(
-      join(tempDir, "no-execute.ts"),
-      `export default { name: "no-execute" };`,
-    );
-
-    const checks = await discoverChecks(tempDir);
-
-    expect(checks).toHaveLength(0);
+  it("ignores the checksDir parameter (back-compat shim)", async () => {
+    const a = await discoverChecks("/a");
+    const b = await discoverChecks("/b");
+    expect(a).toBe(b);
   });
 });

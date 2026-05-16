@@ -1,0 +1,205 @@
+---
+phase: 104-daemon-op-secret-cache-and-retry-backoff
+plan: "01"
+subsystem: secrets
+tags: [secrets, 1password, cache, retry, p-retry, di-pure, vitest]
+
+requires:
+  - p-retry@^8.0.0 (installed in Wave 0)
+  - vitest scaffolds RES-01..RES-09 (planted in Wave 0)
+provides:
+  - SecretsResolver class with URI-keyed Map cache + inflight dedup
+  - p-retry@8 retry shim with rate-limit early bail (Pitfall 5) + empty-string AbortError (Pitfall 4)
+  - Public method surface for Wave 2 callsite migration: resolve / getCached / preResolveAll / invalidate / invalidateAll / snapshot
+  - 9/9 RES-XX tests green (SEC-02/03/06/07 unit-verified)
+affects:
+  - 104-02 (Wave 2 — daemon boot pre-resolve + 3 callsite swaps now have a stable target)
+  - 104-03 (Wave 3 — ConfigWatcher invalidation hook + recovery wiring will call invalidate / invalidateAll)
+  - 104-04 (Wave 3 — secrets-status IPC handler will call snapshot())
+
+tech-stack:
+  added: []
+  patterns:
+    - "DI-pure resolver class — opRead + log injected via Deps struct (mirrors op-env-resolver.ts)"
+    - "Inflight Promise map for concurrent-resolve dedup (boot-storm fix)"
+    - "p-retry onFailedAttempt → AbortError to halt retries on permanent-class errors (rate-limit, empty-string)"
+    - "Counter telemetry as plain object mutated in place + frozen snapshot helper (matches clawhub-cache.ts)"
+
+key-files:
+  created:
+    - src/manager/secrets-resolver.ts (243 lines)
+  modified:
+    - src/manager/__tests__/secrets-resolver.test.ts (16 → 301 lines, todos → real tests)
+
+key-decisions:
+  - "p-retry v8 RetryContext shape: ctx.error.message + ctx.attemptNumber (NOT err.message / err.attemptNumber from older p-retry releases)"
+  - "Rate-limit early bail at attemptNumber >= 2 — first retry still fires, subsequent rate-limit hits abort. Trades retry budget against compounding throttle window."
+  - "Empty-string resolution → AbortError (not regular Error) so p-retry stops immediately. Empty is permanent, never transient."
+  - "URI prefix guard is case-sensitive op:// (matches loader.ts defaultOpRefResolver — broader validation lives at the schema layer, not here)"
+  - "Default randomize: true (jitter on by default — critical against synchronized retry storms per Pitfall 1)"
+  - "No fake timers in tests — minTimeout:1/maxTimeout:1 keeps wall-clock under 500ms without fighting p-retry's setTimeout-based backoff"
+
+requirements-completed: [SEC-02, SEC-03, SEC-07]
+
+duration: ~3.5min
+completed: 2026-04-30
+---
+
+# Phase 104 Plan 01: SecretsResolver class + RES-01..RES-09 tests Summary
+
+**Built the in-memory `SecretsResolver` class — URI-keyed `Map` cache + inflight Promise dedup + p-retry@8 retry with rate-limit early-bail and empty-string AbortError; 9/9 RES-XX behavior tests green in <500ms wall-clock.**
+
+## Performance
+
+- **Duration:** ~3.5 min (~211s)
+- **Started:** 2026-04-30T15:17:40Z
+- **Completed:** 2026-04-30T15:21:11Z
+- **Tasks:** 2
+- **Files modified:** 1 created, 1 modified
+
+## Accomplishments
+
+- Implemented `src/manager/secrets-resolver.ts` (243 lines) with the verbatim public API surface from RESEARCH.md §Pattern 1, plus the planned `getCached(uri)` sync helper for Wave 2's loader shim.
+- Replaced 9 `it.todo` scaffolds in `src/manager/__tests__/secrets-resolver.test.ts` with real DI-pure tests covering RES-01..RES-09.
+- All 9 tests pass in ~370ms wall-clock; total test runtime well under the plan's 5s budget.
+- TypeScript clean: `npx tsc --noEmit -p .` reports zero errors against `secrets-resolver.ts`.
+- Zero new dependencies (Wave 0 already installed `p-retry@8.0.0`).
+
+## Public API Surface (final)
+
+```typescript
+export type OpReadFn = (uri: string) => Promise<string>;
+
+export interface SecretsResolverDeps {
+  readonly opRead: OpReadFn;
+  readonly log: pino.Logger;
+  readonly retryOptions?: {
+    readonly retries?: number;       // default 3
+    readonly minTimeout?: number;    // default 1000
+    readonly maxTimeout?: number;    // default 8000
+    readonly factor?: number;        // default 2
+    readonly randomize?: boolean;    // default true (jitter on)
+  };
+}
+
+export interface SecretsCounters {
+  hits: number;
+  misses: number;
+  retries: number;
+  rateLimitHits: number;
+  lastFailureAt: string | undefined;
+  lastFailureReason: string | undefined;
+  lastRefreshedAt: string | undefined;
+}
+
+export class SecretsResolver {
+  constructor(deps: SecretsResolverDeps);
+  resolve(uri: string): Promise<string>;
+  getCached(uri: string): string | undefined;
+  preResolveAll(uris: readonly string[]): Promise<readonly { uri: string; ok: boolean; reason?: string }[]>;
+  invalidate(uri: string): void;
+  invalidateAll(): void;
+  snapshot(): Readonly<SecretsCounters & { cacheSize: number }>;
+}
+```
+
+## Test Results (9/9 green)
+
+| Test  | Behavior                                              | Status | Wall-clock |
+| ----- | ----------------------------------------------------- | ------ | ---------- |
+| RES-01 | cache hit avoids opRead                              | green  | 6ms        |
+| RES-02 | inflight dedup (3 concurrent → 1 opRead call)        | green  | 12ms       |
+| RES-03 | retry succeeds before exhaustion (transient → ok)    | green  | 3ms        |
+| RES-04 | rate-limit bails early (≤2 opRead calls, not 4)      | green  | 9ms        |
+| RES-05 | empty resolution throws AbortError (no cache write)  | green  | 3ms        |
+| RES-06 | preResolveAll partial failure (no throw)             | green  | 3ms        |
+| RES-07 | counters track hit/miss/retry/rate-limit/empty       | green  | 7ms        |
+| RES-08 | SENTINEL_VALUE never in pino sink output             | green  | 9ms        |
+| RES-09 | error messages embed URI but not resolved value      | green  | 2ms        |
+
+Total: 9 passed, 0 todo, 0 failed in 367ms.
+
+## Task Commits
+
+Each task was committed atomically:
+
+1. **Task 1: Implement SecretsResolver class** — `f888737` (feat)
+2. **Task 2: Replace it.todo scaffolds with real RES-01..RES-09 tests** — `7fef11b` (test)
+
+## Files Created/Modified
+
+- `src/manager/secrets-resolver.ts` — NEW, 243 lines. SecretsResolver class + 4 type/interface exports. JSDoc framing references Phase 104 + DI-pure-test contract; per-method JSDoc covers resolve/getCached/preResolveAll/invalidate/invalidateAll/snapshot.
+- `src/manager/__tests__/secrets-resolver.test.ts` — MODIFIED, 16 → 301 lines. 9 `it.todo` placeholders replaced with real DI-pure tests using vi.fn-mocked opRead and a pino-on-Writable test transport for SEC-07 leak detection.
+
+## Decisions Made
+
+- **p-retry v8 RetryContext shape:** The plan's pseudo-code referenced `err.message` / `err.attemptNumber` (older p-retry signature). v8 passes a `RetryContext` with `error`, `attemptNumber`, `retriesLeft`, `retriesConsumed`, `retryDelay` fields. Code uses `ctx.error.message` + `ctx.attemptNumber` correctly. No behavioral change; just signature alignment.
+- **Rate-limit early bail at `attemptNumber >= 2`:** First retry (attempt 2) still fires — gives the throttle a brief recovery window; subsequent rate-limit hits abort via `AbortError`. Verified by RES-04: opRead called ≤ 2 times, never the full retries+1 = 4.
+- **Empty-string handling via `AbortError`:** Throws inside the pRetry callback (NOT in `onFailedAttempt`) so p-retry's built-in AbortError handling stops the loop immediately. RES-05 verifies opRead is called exactly once, no cache write.
+- **URI prefix guard is case-sensitive `op://`** — matches the existing `defaultOpRefResolver` in `src/config/loader.ts`. Broader validation (slash count, vault/item/field shape) is the schema layer's job, not the resolver's.
+- **Default `randomize: true`** — jitter on by default, per RESEARCH.md Pitfall 1. Operators who need deterministic timing in tests pass `randomize: false` explicitly (RES-03/04/05/07 do this for predictable wall-clock).
+- **No fake timers in tests:** p-retry's setTimeout-based backoff fights vitest's fake timers (the test would hang waiting for `vi.advanceTimersByTimeAsync`). Used `minTimeout: 1` / `maxTimeout: 1` instead — total test wall-clock 367ms, well under the 5s plan budget.
+
+## Deviations from Plan
+
+### Auto-fixed Issues
+
+**1. [Rule 1 — Bug] p-retry v8 onFailedAttempt signature drift**
+
+- **Found during:** Task 1 (during implementation, while reading `node_modules/p-retry/index.d.ts`)
+- **Issue:** The plan's pseudo-code (mirroring an older p-retry release) referenced `err.message`, `err.attemptNumber`, `err.retriesLeft`. p-retry v8 passes a `RetryContext` object with fields `error`, `attemptNumber`, `retriesLeft`, `retriesConsumed`, `retryDelay`. Using the plan signature directly would be a TypeScript error and a runtime bug (`undefined.message`).
+- **Fix:** Used `ctx.error.message`, `ctx.attemptNumber`, `ctx.retriesLeft` throughout `onFailedAttempt`. Behavior is identical; only the destructure shape differs.
+- **Files modified:** `src/manager/secrets-resolver.ts` (no source-code regression — the plan's other acceptance criteria all still pass).
+- **Commit:** `f888737` (the fix is part of the same Task 1 implementation commit).
+
+---
+
+**Total deviations:** 1 auto-fixed (Rule 1 — bug from documentation drift).
+**Impact on plan:** No scope creep. Public API + behavior + test set are exactly what the plan specified.
+
+## Confirmation: Wave 2+ files NOT modified yet
+
+Per the plan's explicit guard: this wave is the implementation core only. Verified with `git diff` that the following files are unchanged:
+
+- `src/manager/daemon.ts` — untouched (Wave 2 swaps the 3 callsites)
+- `src/config/loader.ts` — untouched (Wave 2 wraps the sync resolver)
+- `src/manager/op-env-resolver.ts` — untouched (Wave 2 routes through SecretsResolver)
+- `src/manager/recovery/op-refresh.ts` — untouched (Wave 3 wires invalidate)
+- `src/config/watcher.ts` — untouched (Wave 3 hooks ConfigWatcher.onChange)
+- `src/ipc/protocol.ts` — untouched (Wave 3 adds secrets-status schemas)
+
+Only `src/manager/secrets-resolver.ts` (created) and `src/manager/__tests__/secrets-resolver.test.ts` (modified) changed in this wave.
+
+## Issues Encountered
+
+None.
+
+## Known Stubs
+
+None — all public methods are fully wired. Wave 2's loader sync wrapper will be a thin call to `getCached(uri)`; Wave 3's `secrets-invalidate` IPC handler will be a thin call to `invalidate / invalidateAll`. Neither requires any additional class-internal scaffolding.
+
+## User Setup Required
+
+None — `p-retry@8.0.0` was installed in Wave 0; no operator action needed.
+
+## Next Phase Readiness
+
+- **Wave 2 (Plan 02) ready:** Public API surface frozen. The 3 callsite swaps (daemon.ts botToken, loader.ts sync wrapper, op-env-resolver.ts → resolver) all have stable method signatures to call against.
+- **No blockers.** TypeScript clean; tests green; no daemon paths touched.
+- **Validation chain intact:** RES-01..RES-09 cover SEC-02 (cache + dedup), SEC-03 (retry + rate-limit + empty), SEC-07 (no-leak). Wave 2 will exercise SEC-04 (preResolveAll boot integration) via `daemon-boot-secrets-degraded.test.ts`. Wave 3 will exercise SEC-05 (ConfigWatcher) and SEC-06 (IPC) via the remaining scaffolds.
+
+## Self-Check
+
+Created files exist:
+- FOUND: src/manager/secrets-resolver.ts (243 lines)
+- FOUND: src/manager/__tests__/secrets-resolver.test.ts (301 lines, 9 real tests)
+
+Commits exist:
+- FOUND: f888737 (Task 1 — SecretsResolver class)
+- FOUND: 7fef11b (Task 2 — RES-01..RES-09 real tests)
+
+## Self-Check: PASSED
+
+---
+*Phase: 104-daemon-op-secret-cache-and-retry-backoff*
+*Completed: 2026-04-30*

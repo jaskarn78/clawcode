@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode — fin-acquisition Inspector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          display: ['Fraunces', 'serif'],
+          sans: ['Geist', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+        },
+        colors: {
+          bg: { deep: '#0a0a0e', s1: '#12121a', s2: '#1a1a26', s3: '#23232f' },
+          accent: { pink: '#ff3366', cyan: '#00e5ff', gold: '#d4a574' },
+          slo: { ok: '#00e676', warn: '#ffb300', bad: '#ff1744' },
+          fg: { 1: '#e8e6e3', 2: '#a8a8b8', 3: '#6a6a78' },
+        },
+      },
+    },
+  };
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  body { font-family: 'Geist', sans-serif; background: #0a0a0e; }
+  .grain-overlay {
+    position: fixed; inset: 0; z-index: 999; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    opacity: 0.035; mix-blend-mode: overlay;
+  }
+  .radial-bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse at 20% 20%, rgba(212,165,116,0.05) 0%, transparent 40%),
+      radial-gradient(ellipse at 80% 80%, rgba(0,229,255,0.04) 0%, transparent 40%);
+  }
+  .three-panel { display: grid; grid-template-columns: 240px 1fr 280px; height: calc(100vh - 56px); overflow: hidden; }
+  .panel { overflow-y: auto; }
+  .panel::-webkit-scrollbar { width: 4px; }
+  .panel::-webkit-scrollbar-track { background: transparent; }
+  .panel::-webkit-scrollbar-thumb { background: rgba(255,51,102,0.3); border-radius: 2px; }
+  .nav-item { transition: all 0.15s ease; }
+  .nav-item:hover { background: rgba(255,255,255,0.04); }
+  .nav-item.active { background: rgba(255,51,102,0.08); border-right: 2px solid #ff3366; }
+  .model-badge { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+  .badge-sonnet { background: rgba(0,229,255,0.1); color: #00e5ff; border: 1px solid rgba(0,229,255,0.2); }
+  .progress-bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 2px; }
+  .waterfall-row { position: relative; height: 28px; margin-bottom: 2px; }
+  .waterfall-label { position: absolute; left: 0; top: 50%; transform: translateY(-50%); white-space: nowrap; z-index: 2; }
+  .waterfall-track { position: absolute; right: 0; top: 4px; height: 20px; border-radius: 3px; }
+  .mcp-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-running { background: #00e676; box-shadow: 0 0 6px rgba(0,230,118,0.6); animation: pulseSoft 2s ease-in-out infinite; }
+  .turn-item { transition: background 0.1s ease; cursor: pointer; }
+  .turn-item:hover { background: rgba(255,255,255,0.03); }
+  .turn-item.active { background: rgba(255,51,102,0.05); border-left: 2px solid #ff3366; }
+  .section-divider { border-top: 1px solid rgba(255,255,255,0.05); margin: 16px 0; }
+  .stat-chip { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 6px 10px; }
+  .palette-backdrop { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,0.6); display: none; backdrop-filter: blur(8px); align-items: flex-start; justify-content: center; padding-top: 15vh; }
+  .palette-backdrop.open { display: flex; }
+  .palette { width: 560px; background: #1a1a26; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 40px 80px rgba(0,0,0,0.8); overflow: hidden; animation: fadeUp 0.2s ease; }
+  .palette-item { transition: background 0.1s ease; cursor: pointer; }
+  .palette-item:hover, .palette-item.selected { background: rgba(255,51,102,0.08); }
+  /* Left accent bar on the page — editorial touch */
+  .accent-edge { position: fixed; left: 0; top: 0; bottom: 0; width: 2px; background: linear-gradient(to bottom, transparent 0%, #ff3366 30%, #d4a574 70%, transparent 100%); z-index: 100; opacity: 0.6; }
+  @keyframes pulseSoft { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes fadeUp { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+  .fade-up { animation: fadeUp 0.35s ease forwards; }
+  /* Tool latency bars (F07) */
+  .latency-bar-wrap { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .latency-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #6a6a78; width: 160px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .latency-track { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.06); position: relative; overflow: hidden; }
+  .latency-exec { height: 100%; border-radius: 4px; }
+  .latency-roundtrip { position: absolute; top: 0; height: 100%; border-radius: 4px; border: 1px solid; opacity: 0.5; background: transparent; }
+  .dream-row { display: flex; align-items: start; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .dream-row:last-child { border-bottom: none; }
+</style>
+</head>
+<body class="min-h-screen text-fg-1 overflow-hidden">
+  <div class="grain-overlay"></div>
+  <div class="radial-bg"></div>
+  <div class="accent-edge"></div>
+
+  <!-- COMMAND PALETTE -->
+  <div class="palette-backdrop" id="palette-backdrop" onclick="closePalette(event)">
+    <div class="palette" onclick="event.stopPropagation()">
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-white/5">
+        <i data-lucide="search" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+        <input id="palette-input" type="text" placeholder="Search agents, actions, metrics..."
+          class="flex-1 bg-transparent text-fg-1 text-sm outline-none placeholder-fg-3"
+          oninput="filterPalette(this.value)" onkeydown="handlePaletteKey(event)">
+        <span class="text-fg-3 text-xs font-mono bg-bg-s3 px-1.5 py-0.5 rounded">ESC</span>
+      </div>
+      <div id="palette-list" class="py-1 max-h-80 overflow-y-auto"></div>
+      <div class="px-4 py-2 border-t border-white/5 flex gap-4 text-xs text-fg-3">
+        <span><kbd class="font-mono">↑↓</kbd> navigate</span>
+        <span><kbd class="font-mono">↵</kbd> select</span>
+        <span><kbd class="font-mono">ESC</kbd> close</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PAGE LAYOUT -->
+  <div class="relative z-10 flex flex-col min-h-screen">
+
+    <!-- TOP HEADER BAR -->
+    <header class="bg-bg-s1/90 backdrop-blur border-b border-white/5 px-6 flex items-center justify-between h-14 sticky top-0 z-50 flex-shrink-0">
+      <div class="flex items-center gap-2 text-sm text-fg-3">
+        <a href="mockup-fleet.html" class="text-fg-3 hover:text-fg-2 transition-colors flex items-center gap-1">
+          <i data-lucide="layout-grid" class="w-3.5 h-3.5"></i>
+          <span>Fleet</span>
+        </a>
+        <i data-lucide="chevron-right" class="w-3 h-3"></i>
+        <span class="text-fg-2">Agents</span>
+        <i data-lucide="chevron-right" class="w-3 h-3"></i>
+        <span class="text-fg-1 flex items-center gap-1.5">
+          fin-acquisition
+          <span class="text-xs font-mono bg-accent-gold/10 text-accent-gold border border-accent-gold/20 px-1.5 py-0.5 rounded">ramy</span>
+        </span>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="openPalette()" class="flex items-center gap-2 text-xs text-fg-3 bg-bg-s3 border border-white/5 rounded-md px-3 py-1.5 hover:border-white/10 transition-colors">
+          <i data-lucide="search" class="w-3 h-3"></i>
+          <span>Search...</span>
+          <kbd class="font-mono text-fg-3 ml-2">⌘K</kbd>
+        </button>
+        <button class="relative p-2 rounded-md hover:bg-white/5 transition-colors">
+          <i data-lucide="bell" class="w-4 h-4 text-fg-2"></i>
+        </button>
+        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-accent-pink to-accent-cyan flex items-center justify-center text-xs font-mono font-bold text-white">J</div>
+      </div>
+    </header>
+
+    <!-- THREE-PANEL LAYOUT (F11) -->
+    <div class="three-panel relative z-10">
+
+      <!-- LEFT PANEL: Agent Config -->
+      <aside class="panel bg-bg-s1 border-r border-white/5 p-5">
+        <!-- Agent identity -->
+        <div class="mb-5">
+          <div class="flex items-center gap-2 mb-1">
+            <div class="status-dot status-running"></div>
+            <h2 class="font-display text-base font-semibold text-fg-1">fin-acquisition</h2>
+          </div>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="model-badge badge-sonnet">sonnet</span>
+            <span class="text-xs font-mono text-accent-gold bg-accent-gold/10 border border-accent-gold/20 px-1.5 py-0.5 rounded">⭐ ramy · premium</span>
+          </div>
+          <div class="text-xs text-fg-3 font-mono mt-2">up 3h 04m · #fin-acquisition</div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- Config details -->
+        <div class="space-y-3">
+          <div>
+            <div class="text-xs font-mono text-fg-3 mb-1">Model</div>
+            <div class="text-sm font-mono text-fg-1">claude-sonnet-4-6</div>
+            <div class="text-xs text-fg-3 font-mono">subagent: opus · effort: auto</div>
+          </div>
+          <div>
+            <div class="text-xs font-mono text-fg-3 mb-1">Workspace</div>
+            <div class="text-xs font-mono text-fg-2 break-all">~/.clawcode/agents/finmentum</div>
+          </div>
+          <div>
+            <div class="text-xs font-mono text-fg-3 mb-1">Discord Channel</div>
+            <div class="text-xs font-mono text-accent-cyan">1481670479017414767</div>
+          </div>
+          <div>
+            <div class="text-xs font-mono text-fg-3 mb-1">Heartbeat</div>
+            <div class="text-xs font-mono text-fg-2">every 50m · haiku model</div>
+          </div>
+          <div>
+            <div class="text-xs font-mono text-fg-3 mb-1">Memory Path</div>
+            <div class="text-xs font-mono text-fg-2 break-all">memory/fin-acquisition</div>
+          </div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- MCP Servers (F10) -->
+        <div>
+          <div class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-3">MCP Servers (F10)</div>
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="mcp-dot" style="background:#00e676"></span>
+                <span class="text-xs font-mono text-fg-2">finmentum-db</span>
+              </div>
+              <span class="text-xs font-mono text-slo-ok">ready</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="mcp-dot" style="background:#00e676"></span>
+                <span class="text-xs font-mono text-fg-2">1password</span>
+              </div>
+              <span class="text-xs font-mono text-slo-ok">ready</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="mcp-dot" style="background:#00e676"></span>
+                <span class="text-xs font-mono text-fg-2">google-workspace</span>
+              </div>
+              <span class="text-xs font-mono text-slo-ok">ready</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="mcp-dot" style="background:#00e676"></span>
+                <span class="text-xs font-mono text-fg-2">brave-search</span>
+              </div>
+              <span class="text-xs font-mono text-slo-ok">ready</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="mcp-dot" style="background:#00e676"></span>
+                <span class="text-xs font-mono text-fg-2">browserless</span>
+              </div>
+              <span class="text-xs font-mono text-slo-ok">ready</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- F09: Migration tracker -->
+        <div>
+          <div class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-3">Embedding Migration (F09)</div>
+          <div class="bg-bg-s2 border border-white/5 rounded-lg p-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-mono text-accent-gold bg-accent-gold/10 border border-accent-gold/20 px-2 py-0.5 rounded">dual-write</span>
+              <button class="text-xs text-fg-3 hover:text-accent-pink transition-colors">pause</button>
+            </div>
+            <div class="progress-bar mb-1.5">
+              <div class="progress-fill" style="width:100%;background:linear-gradient(to right,#d4a574,#ffb300)"></div>
+            </div>
+            <div class="text-xs text-fg-3 font-mono">started 13:08:01 UTC</div>
+            <div class="text-xs text-fg-3 font-mono mt-1">vec_memories → vec_memories_v2</div>
+          </div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- Quick actions -->
+        <div class="space-y-2">
+          <button class="w-full text-xs text-fg-2 bg-bg-s2 border border-white/5 rounded-lg px-3 py-2 hover:bg-bg-s3 hover:border-accent-pink/20 transition-colors text-left flex items-center gap-2">
+            <i data-lucide="refresh-cw" class="w-3 h-3 text-fg-3"></i> Restart Agent
+          </button>
+          <button class="w-full text-xs text-fg-2 bg-bg-s2 border border-white/5 rounded-lg px-3 py-2 hover:bg-bg-s3 transition-colors text-left flex items-center gap-2">
+            <i data-lucide="terminal" class="w-3 h-3 text-fg-3"></i> Open Console
+          </button>
+          <a href="mockup-fleet.html" class="block w-full text-xs text-fg-3 bg-bg-s2 border border-white/5 rounded-lg px-3 py-2 hover:bg-bg-s3 transition-colors flex items-center gap-2">
+            <i data-lucide="arrow-left" class="w-3 h-3"></i> Back to Fleet
+          </a>
+        </div>
+      </aside>
+
+      <!-- CENTER PANEL: Turn timeline + waterfall -->
+      <div class="panel bg-bg-deep border-r border-white/5">
+        <div class="p-5 border-b border-white/5">
+          <div class="flex items-center justify-between">
+            <h2 class="font-display text-sm font-semibold text-fg-1">Turn Timeline</h2>
+            <div class="flex items-center gap-2 text-xs text-fg-3 font-mono">
+              <span class="flex items-center gap-1"><div class="w-1.5 h-1.5 rounded-full bg-accent-pink animate-pulse"></div> live</span>
+              <span>·</span>
+              <span>last 5 turns</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Turn list -->
+        <div class="divide-y divide-white/5">
+          <!-- Active turn (turn in progress) -->
+          <div class="turn-item p-4 bg-accent-pink/3 border-l-2 border-accent-pink">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-accent-pink animate-pulse"></span>
+                <span class="text-xs font-mono text-accent-pink">in progress</span>
+                <span class="text-xs font-mono text-fg-3">#fin-acquisition · Ramy</span>
+              </div>
+              <span class="text-xs font-mono text-fg-3">14:18:41 UTC</span>
+            </div>
+            <p class="text-sm text-fg-2 truncate">"Can you pull the Q2 pipeline metrics from MySQL and compare against..."</p>
+            <div class="flex items-center gap-3 mt-2 text-xs text-fg-3 font-mono">
+              <span class="flex items-center gap-1"><i data-lucide="zap" class="w-3 h-3"></i> tool_call.mysql_query</span>
+              <span class="text-accent-gold">~12s elapsed</span>
+            </div>
+          </div>
+
+          <!-- Completed turn (waterfall expanded) -->
+          <div id="sample-turn-row" class="turn-item active p-4 cursor-pointer" onclick="toggleWaterfall()">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-slo-ok"></span>
+                <span class="text-xs font-mono text-slo-ok">complete</span>
+                <span class="text-xs font-mono text-fg-3">#fin-acquisition</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono text-fg-3">19,211ms end-to-end</span>
+                <span class="text-xs font-mono text-fg-3">14:12:50 UTC</span>
+                <i data-lucide="chevron-down" class="w-3 h-3 text-fg-3" id="waterfall-chevron"></i>
+              </div>
+            </div>
+            <p class="text-sm text-fg-2 truncate">"Analyse the acquisition funnel and flag any dropoff above 15%..."</p>
+
+            <!-- F12: TRACE WATERFALL (expanded) -->
+            <div id="waterfall-panel" class="mt-4">
+              <div class="text-xs font-mono text-fg-3 mb-3 uppercase tracking-wider">Trace Waterfall (F12) · turn discord:1502153247673155664</div>
+              <div id="waterfall-chart"></div>
+            </div>
+          </div>
+
+          <!-- Other turns -->
+          <div class="turn-item p-4">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-slo-ok"></span>
+                <span class="text-xs font-mono text-slo-ok">complete</span>
+              </div>
+              <span class="text-xs font-mono text-fg-3">13:58:12 UTC · 8,420ms</span>
+            </div>
+            <p class="text-sm text-fg-2 truncate">"Update the lead scoring model — Ramy mentioned the threshold changed to 72..."</p>
+          </div>
+          <div class="turn-item p-4">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-slo-ok"></span>
+                <span class="text-xs font-mono text-slo-ok">complete</span>
+              </div>
+              <span class="text-xs font-mono text-fg-3">13:41:08 UTC · 6,180ms</span>
+            </div>
+            <p class="text-sm text-fg-2 truncate">"Summarise the Finmentum weekly digest and post to #fin-weekly..."</p>
+          </div>
+          <div class="turn-item p-4">
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-slo-ok"></span>
+                <span class="text-xs font-mono text-slo-ok">complete</span>
+              </div>
+              <span class="text-xs font-mono text-fg-3">13:22:37 UTC · 4,811ms</span>
+            </div>
+            <p class="text-sm text-fg-2 truncate">"What's the current MRR from the finmentum-db? Break it down by tier..."</p>
+          </div>
+        </div>
+
+        <!-- F07: TOOL LATENCY SPLIT PANEL -->
+        <div class="p-5 border-t border-white/5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-display text-sm font-semibold text-fg-1">Tool Latency Split (F07)</h2>
+            <span class="text-xs font-mono text-fg-3">24h · execution vs roundtrip</span>
+          </div>
+          <div class="text-xs text-fg-3 font-mono mb-3 flex items-center gap-4">
+            <span class="flex items-center gap-1.5"><span class="w-8 h-2 rounded bg-accent-cyan/60 inline-block"></span> execution_ms</span>
+            <span class="flex items-center gap-1.5"><span class="w-8 h-2 rounded border border-accent-cyan/40 inline-block"></span> roundtrip_ms</span>
+            <span class="flex items-center gap-1.5"><span class="w-8 h-2 rounded border-dashed border border-slo-warn/60 inline-block" style="border-style:dashed"></span> SLO</span>
+          </div>
+
+          <div id="latency-chart"></div>
+
+          <div class="mt-4 bg-bg-s2/50 border border-white/5 rounded-lg p-3">
+            <div class="text-xs font-mono text-fg-3 mb-1.5">Parallel tool call rate</div>
+            <div class="flex items-center gap-3">
+              <div class="progress-bar flex-1">
+                <div class="progress-fill bg-accent-cyan" style="width:28%"></div>
+              </div>
+              <span class="text-xs font-mono text-accent-cyan font-medium">28%</span>
+            </div>
+            <div class="text-xs text-fg-3 font-mono mt-1">of turns use parallel tool calls — opportunity to batch more</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT PANEL: Memory + Perf + Dream Pass -->
+      <aside class="panel bg-bg-s1 p-5">
+
+        <!-- F04: Tier-1 budget meter -->
+        <div class="mb-5">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider">Ctx Budget — Tier 1 (F04)</h3>
+            <span class="text-xs font-mono text-slo-warn font-medium">77.6%</span>
+          </div>
+          <div class="bg-bg-s2 border border-white/5 rounded-lg p-3">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="font-display text-2xl font-semibold text-slo-warn">12,421</span>
+              <span class="text-xs text-fg-3 font-mono">/ 16,000 chars</span>
+            </div>
+            <div class="progress-bar mb-2">
+              <div class="progress-fill" style="width:77.6%;background:linear-gradient(to right,#00e676,#ffb300)"></div>
+            </div>
+            <div class="text-xs text-fg-3 font-mono">SOUL.md 2.1k · MEMORY.md 4.8k · USER.md 1.2k · IDENTITY.md 0.9k · active 3.4k</div>
+          </div>
+        </div>
+
+        <!-- F05: Tool cache gauge -->
+        <div class="mb-5">
+          <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-2">Tool Cache Hit Rate (F05)</h3>
+          <div class="bg-bg-s2 border border-white/5 rounded-lg p-3">
+            <div class="flex items-center justify-between mb-2">
+              <div>
+                <span class="font-display text-2xl font-semibold text-accent-cyan">43%</span>
+                <span class="text-xs text-fg-3 font-mono ml-1">hit rate</span>
+              </div>
+              <div class="text-right">
+                <div class="text-xs font-mono text-fg-1">22.1 MB</div>
+                <div class="text-xs font-mono text-fg-3">/ 100 MB cap</div>
+              </div>
+            </div>
+            <div class="progress-bar mb-3">
+              <div class="progress-fill bg-accent-cyan" style="width:43%"></div>
+            </div>
+            <div class="space-y-1">
+              <div class="flex items-center justify-between text-xs font-mono">
+                <span class="text-fg-3">mysql_query</span>
+                <div class="flex items-center gap-1.5">
+                  <div class="w-16 h-1.5 bg-white/5 rounded overflow-hidden"><div class="h-full bg-accent-cyan/60 rounded" style="width:67%"></div></div>
+                  <span class="text-fg-2">67%</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between text-xs font-mono">
+                <span class="text-fg-3">search_documents</span>
+                <div class="flex items-center gap-1.5">
+                  <div class="w-16 h-1.5 bg-white/5 rounded overflow-hidden"><div class="h-full bg-accent-cyan/60 rounded" style="width:23%"></div></div>
+                  <span class="text-fg-2">23%</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between text-xs font-mono">
+                <span class="text-fg-3">browser_navigate</span>
+                <div class="flex items-center gap-1.5">
+                  <div class="w-16 h-1.5 bg-white/5 rounded overflow-hidden"><div class="h-full bg-accent-cyan/60 rounded" style="width:89%"></div></div>
+                  <span class="text-fg-2">89%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- F08: Prompt bloat + lazy recall -->
+        <div class="mb-5">
+          <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-2">Phase 115 Canaries (F08)</h3>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="bg-bg-s2 border border-white/5 rounded-lg p-3 text-center">
+              <div class="font-display text-xl font-semibold text-slo-ok">0</div>
+              <div class="text-xs font-mono text-fg-3 mt-0.5">prompt bloat</div>
+              <div class="text-xs font-mono text-fg-3/60">warnings 24h</div>
+            </div>
+            <div class="bg-bg-s2 border border-white/5 rounded-lg p-3 text-center">
+              <div class="font-display text-xl font-semibold text-accent-cyan">47</div>
+              <div class="text-xs font-mono text-fg-3 mt-0.5">lazy recall</div>
+              <div class="text-xs font-mono text-fg-3/60">calls 24h</div>
+            </div>
+          </div>
+          <div class="text-xs text-fg-3 font-mono mt-1.5">bloat=0 confirms post-115 enforcement holds · recall=47 (high — Ramy curated)</div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- F14: Memory subsystem panel -->
+        <div class="mb-5">
+          <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider mb-3">Memory Subsystem (F14)</h3>
+          <div class="space-y-2">
+            <div class="flex items-center justify-between bg-bg-s2/60 rounded-lg px-3 py-2">
+              <span class="text-xs font-mono text-fg-2">Total entries</span>
+              <span class="text-xs font-mono text-fg-1 font-medium">5,672</span>
+            </div>
+            <div class="flex items-center justify-between bg-bg-s2/60 rounded-lg px-3 py-2">
+              <span class="text-xs font-mono text-fg-2">Hot tier</span>
+              <span class="text-xs font-mono text-slo-ok">412</span>
+            </div>
+            <div class="flex items-center justify-between bg-bg-s2/60 rounded-lg px-3 py-2">
+              <span class="text-xs font-mono text-fg-2">Warm tier</span>
+              <span class="text-xs font-mono text-accent-cyan">1,840</span>
+            </div>
+            <div class="flex items-center justify-between bg-bg-s2/60 rounded-lg px-3 py-2">
+              <span class="text-xs font-mono text-fg-2">Cold tier</span>
+              <span class="text-xs font-mono text-fg-3">3,420</span>
+            </div>
+          </div>
+          <!-- Tier-1 files -->
+          <div class="mt-3 space-y-1.5">
+            <div class="flex items-center justify-between text-xs font-mono">
+              <span class="text-fg-3">SOUL.md</span>
+              <div class="flex items-center gap-2">
+                <span class="text-fg-3">2.1k chars</span>
+                <button class="text-fg-3 hover:text-accent-cyan transition-colors"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between text-xs font-mono">
+              <span class="text-fg-3">MEMORY.md</span>
+              <div class="flex items-center gap-2">
+                <span class="text-fg-3">4.8k chars</span>
+                <button class="text-fg-3 hover:text-accent-cyan transition-colors"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between text-xs font-mono">
+              <span class="text-fg-3">IDENTITY.md</span>
+              <div class="flex items-center gap-2">
+                <span class="text-fg-3">0.9k chars</span>
+                <button class="text-fg-3 hover:text-accent-cyan transition-colors"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
+              </div>
+            </div>
+          </div>
+          <!-- Migration drift indicator -->
+          <div class="mt-3 bg-bg-s2/60 border border-white/5 rounded-lg px-3 py-2">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs font-mono text-fg-3">v1 → v2 migration delta</span>
+              <span class="text-xs font-mono text-slo-ok">Δ0</span>
+            </div>
+            <div class="text-xs font-mono text-fg-3/60">vec_memories == vec_memories_v2 · no drift</div>
+          </div>
+          <!-- Last consolidation -->
+          <div class="mt-2 text-xs font-mono text-fg-3">
+            <div>Last consolidation: daily 2026-05-08 03:00 UTC <span class="text-slo-ok">+142 entries</span></div>
+            <div>Weekly: 2026-05-05 · Monthly: 2026-05-01</div>
+          </div>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- F15: Dream-pass queue -->
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider">Dream Pass Queue (F15)</h3>
+            <span class="text-xs font-mono text-fg-3">depth: 3</span>
+          </div>
+
+          <div class="bg-bg-s2 border border-white/5 rounded-lg p-3 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-mono text-fg-2">Next scheduled</span>
+              <span class="text-xs font-mono text-accent-gold">in 6h 41m</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-mono text-fg-2">Priority passes 24h</span>
+              <span class="text-xs font-mono text-fg-1">1</span>
+            </div>
+            <div class="text-xs font-mono text-fg-3 mt-2">D-10 veto window: none pending</div>
+          </div>
+
+          <!-- Last 3 dream events -->
+          <div class="space-y-0">
+            <div class="dream-row">
+              <div class="w-1 flex-shrink-0 rounded-full bg-accent-gold/60 self-stretch"></div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between mb-0.5">
+                  <span class="text-xs font-mono text-fg-3">2026-05-08 03:00</span>
+                  <span class="text-xs font-mono text-slo-ok">priority</span>
+                </div>
+                <div class="text-xs text-fg-2">+12 wikilinks · 3 promotions · 1 consolidation · theme: Q2 pipeline analysis</div>
+              </div>
+            </div>
+            <div class="dream-row">
+              <div class="w-1 flex-shrink-0 rounded-full bg-fg-3/30 self-stretch"></div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between mb-0.5">
+                  <span class="text-xs font-mono text-fg-3">2026-05-07 03:00</span>
+                  <span class="text-xs font-mono text-fg-3">scheduled</span>
+                </div>
+                <div class="text-xs text-fg-2">+7 wikilinks · 1 promotion · theme: lead scoring</div>
+              </div>
+            </div>
+            <div class="dream-row">
+              <div class="w-1 flex-shrink-0 rounded-full bg-fg-3/30 self-stretch"></div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between mb-0.5">
+                  <span class="text-xs font-mono text-fg-3">2026-05-06 03:00</span>
+                  <span class="text-xs font-mono text-fg-3">scheduled</span>
+                </div>
+                <div class="text-xs text-fg-2">+4 wikilinks · 0 promotions · theme: funnel dropoff</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Veto button (D-10) -->
+          <button class="w-full mt-3 text-xs font-mono text-slo-warn bg-slo-warn/5 border border-slo-warn/20 rounded-lg px-3 py-2 hover:bg-slo-warn/10 transition-colors flex items-center justify-center gap-2">
+            <i data-lucide="shield-off" class="w-3 h-3"></i>
+            Veto Pending Promotion
+          </button>
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- F13: Cross-agent IPC inbox -->
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-xs font-mono text-fg-3 uppercase tracking-wider">IPC Inbox (F13)</h3>
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-slo-ok animate-pulse"></span>
+              <span class="text-xs font-mono text-slo-ok">heartbeat OK</span>
+            </div>
+          </div>
+          <div class="space-y-1.5 mb-3">
+            <div class="bg-bg-s2/60 border border-white/5 rounded-lg px-3 py-2">
+              <div class="flex items-center justify-between mb-0.5">
+                <span class="text-xs font-mono text-accent-cyan">from: Admin Clawdy</span>
+                <span class="text-xs font-mono text-slo-ok">delivered</span>
+              </div>
+              <div class="text-xs text-fg-2 truncate">send_to_agent: "Ramy's pipeline report ready — see #fin-weekly"</div>
+              <div class="text-xs font-mono text-fg-3 mt-0.5">14:08:32 UTC · 340ms delivery</div>
+            </div>
+            <div class="bg-bg-s2/60 border border-white/5 rounded-lg px-3 py-2">
+              <div class="flex items-center justify-between mb-0.5">
+                <span class="text-xs font-mono text-accent-cyan">from: research</span>
+                <span class="text-xs font-mono text-slo-ok">delivered</span>
+              </div>
+              <div class="text-xs text-fg-2 truncate">delegate_task: "Cross-ref funnel data with latest Finmentum leads"</div>
+              <div class="text-xs font-mono text-fg-3 mt-0.5">13:52:14 UTC · 290ms delivery</div>
+            </div>
+            <div class="bg-bg-s2/60 border border-slo-warn/20 rounded-lg px-3 py-2">
+              <div class="flex items-center justify-between mb-0.5">
+                <span class="text-xs font-mono text-accent-cyan">from: fin-research</span>
+                <span class="text-xs font-mono text-slo-warn">pending</span>
+              </div>
+              <div class="text-xs text-fg-2 truncate">ask_agent: "What's the MRR breakdown by tier for Q2?"</div>
+              <div class="text-xs font-mono text-fg-3 mt-0.5">13:41:07 UTC · awaiting reply</div>
+            </div>
+          </div>
+          <div class="text-xs font-mono text-fg-3">chokidar inbox watch: active · 3 messages 24h</div>
+        </div>
+
+      </aside>
+    </div>
+  </div>
+
+<script>
+// F12: Trace waterfall data
+const spans = [
+  { name: "context_assemble", durationMs: 89, sloMs: 300, status: "healthy", start: 0 },
+  { name: "first_token", durationMs: 1840, sloMs: 2000, status: "healthy", start: 89 },
+  { name: "first_visible_token", durationMs: 2120, sloMs: 2200, status: "healthy", start: 89 },
+  { name: "tool_call.mysql_query", durationMs: 12420, sloMs: 5000, status: "breach", start: 1929, cached: false },
+  { name: "tool_call.search_documents", durationMs: 1840, sloMs: 1500, status: "amber", start: 14349, cached: true },
+  { name: "typing_indicator", durationMs: 8000, sloMs: null, status: null, start: 10000 },
+  { name: "end_to_end", durationMs: 19211, sloMs: 30000, status: "healthy", start: 0 },
+];
+
+const totalMs = 19211;
+
+function getSloColor(status) {
+  if (status === 'breach') return '#ff1744';
+  if (status === 'amber') return '#ffb300';
+  if (status === 'healthy') return '#00e676';
+  return '#6a6a78';
+}
+
+function renderWaterfall() {
+  const el = document.getElementById('waterfall-chart');
+  const labelW = 180;
+  const msLabel = 32;
+  const html = spans.map((span, i) => {
+    const leftPct = (span.start / totalMs) * 100;
+    const widthPct = Math.max(0.5, (span.durationMs / totalMs) * 100);
+    const color = getSloColor(span.status);
+    const cachedBadge = span.cached ? '<span class="text-fg-3/60 ml-1">cache</span>' : '';
+    const sloLabel = span.sloMs ? `SLO ${span.sloMs >= 1000 ? (span.sloMs/1000).toFixed(1)+'s' : span.sloMs+'ms'}` : '';
+    return `
+      <div class="waterfall-row" style="height:32px;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+        <div style="width:${labelW}px;flex-shrink:0;text-align:right">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#6a6a78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">${span.name}</span>
+        </div>
+        <div style="flex:1;position:relative;height:20px">
+          <div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:4px;background:rgba(255,255,255,0.05);border-radius:2px"></div>
+          <div style="position:absolute;left:${leftPct}%;width:${widthPct}%;height:20px;top:0;background:${color}22;border:1px solid ${color}66;border-radius:3px;display:flex;align-items:center;justify-content:center;min-width:4px"></div>
+          ${span.sloMs ? `<div style="position:absolute;left:${Math.min((span.sloMs/totalMs)*100,99)}%;top:0;bottom:0;width:1px;background:${color}40;border-left:1px dashed ${color}40"></div>` : ''}
+        </div>
+        <div style="width:${msLabel+40}px;flex-shrink:0;display:flex;align-items:center;gap:4px">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${color};font-weight:500">${span.durationMs >= 1000 ? (span.durationMs/1000).toFixed(2)+'s' : span.durationMs+'ms'}</span>
+          ${span.status === 'breach' ? `<span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#ff1744;background:rgba(255,23,68,0.1);border:1px solid rgba(255,23,68,0.3);padding:0 4px;border-radius:3px">breach</span>` : ''}
+          ${span.cached ? `<span style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#6a6a78;background:rgba(255,255,255,0.05);padding:0 4px;border-radius:3px">cached</span>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="background:rgba(18,18,26,0.5);border:1px solid rgba(255,255,255,0.05);border-radius:8px;padding:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#6a6a78">0ms</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#6a6a78">19.2s total</span>
+      </div>
+      ${html}
+      <div style="margin-top:8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#6a6a78">
+        tool_call.mysql_query 12.4s = 64.7% of total · SLO 5s breached by 2.5×
+      </div>
+    </div>`;
+}
+
+let waterfallOpen = true;
+function toggleWaterfall() {
+  const panel = document.getElementById('waterfall-panel');
+  const chev = document.getElementById('waterfall-chevron');
+  waterfallOpen = !waterfallOpen;
+  panel.style.display = waterfallOpen ? 'block' : 'none';
+  chev.style.transform = waterfallOpen ? 'rotate(180deg)' : '';
+}
+
+// F07: Tool latency bars
+const tools = [
+  { name: "mysql_query", execMs: 98, roundtripMs: 12420, sloMs: 5000 },
+  { name: "search_documents", execMs: 22, roundtripMs: 1840, sloMs: 1500 },
+  { name: "browser_navigate", execMs: 1240, roundtripMs: 2100, sloMs: 2000 },
+  { name: "read_file", execMs: 5, roundtripMs: 4820, sloMs: 1500 },
+  { name: "google_calendar", execMs: 890, roundtripMs: 1200, sloMs: 2000 },
+];
+
+function renderLatencyChart() {
+  const el = document.getElementById('latency-chart');
+  const maxMs = Math.max(...tools.map(t => t.roundtripMs));
+  el.innerHTML = tools.map(t => {
+    const execW = Math.round((t.execMs / maxMs) * 100);
+    const rtW = Math.round((t.roundtripMs / maxMs) * 100);
+    const sloW = Math.round((t.sloMs / maxMs) * 100);
+    const sloColor = t.roundtripMs > t.sloMs ? '#ff1744' : '#00e676';
+    return `
+      <div class="latency-bar-wrap">
+        <div class="latency-label" title="${t.name}">${t.name}</div>
+        <div class="latency-track">
+          <div class="latency-exec" style="width:${rtW}%;background:rgba(0,229,255,0.25)"></div>
+          <div class="latency-exec" style="width:${execW}%;background:rgba(0,229,255,0.7);position:absolute;top:0;left:0;height:100%"></div>
+          <div class="latency-roundtrip" style="width:${rtW}%;border-color:rgba(0,229,255,0.4)"></div>
+          <div style="position:absolute;left:${sloW}%;top:-2px;bottom:-2px;width:1px;border-left:1px dashed ${sloColor}60"></div>
+        </div>
+        <div style="width:72px;flex-shrink:0;text-align:right">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:${sloColor}">${t.roundtripMs>=1000?(t.roundtripMs/1000).toFixed(1)+'s':t.roundtripMs+'ms'}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Add gap annotation for mysql_query
+  const annotation = document.createElement('div');
+  annotation.style.cssText = 'margin-top:8px;padding:8px;background:rgba(255,23,68,0.04);border:1px solid rgba(255,23,68,0.15);border-radius:6px';
+  annotation.innerHTML = `<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#ffb300">mysql_query: exec 98ms · roundtrip 12,420ms · gap = 12,322ms prompt-bloat tax</span>`;
+  el.appendChild(annotation);
+}
+
+// Palette
+const paletteItems = [
+  { type: "agent", label: "Jump to Admin Clawdy", action: "agent:Admin Clawdy" },
+  { type: "agent", label: "Jump to research", action: "agent:research" },
+  { type: "action", label: "Show all SLO breaches", action: "filter:slo-breaches" },
+  { type: "action", label: "Restart fin-acquisition", action: "restart:fin-acquisition" },
+  { type: "action", label: "View memory entries", action: "memory:fin-acquisition" },
+  { type: "action", label: "Run perf-comparison", action: "cli:perf-comparison" },
+  { type: "action", label: "Open knowledge graph", action: "nav:graph" },
+];
+
+let paletteSelectedIdx = 0;
+let filteredItems = [...paletteItems];
+
+function openPalette() {
+  document.getElementById('palette-backdrop').classList.add('open');
+  document.getElementById('palette-input').value = '';
+  filteredItems = [...paletteItems];
+  renderPalette(filteredItems);
+  setTimeout(() => document.getElementById('palette-input').focus(), 50);
+}
+function closePalette(e) {
+  if (!e || e.target === document.getElementById('palette-backdrop')) {
+    document.getElementById('palette-backdrop').classList.remove('open');
+  }
+}
+function filterPalette(val) {
+  const q = val.toLowerCase();
+  filteredItems = paletteItems.filter(i => i.label.toLowerCase().includes(q));
+  paletteSelectedIdx = 0;
+  renderPalette(filteredItems);
+}
+function renderPalette(items) {
+  const list = document.getElementById('palette-list');
+  const typeColors = { agent: '#00e5ff', action: '#d4a574' };
+  list.innerHTML = items.map((item, i) => `
+    <div class="palette-item flex items-center gap-3 px-4 py-2.5 ${i === paletteSelectedIdx ? 'selected' : ''}"
+      onclick="executePaletteAction('${item.action}')">
+      <span class="text-xs font-mono px-1.5 py-0.5 rounded" style="color:${typeColors[item.type]||'#a8a8b8'};background:${typeColors[item.type]||'#a8a8b8'}15;border:1px solid ${typeColors[item.type]||'#a8a8b8'}30">${item.type}</span>
+      <span class="text-sm text-fg-1">${item.label}</span>
+    </div>`).join('');
+}
+function handlePaletteKey(e) {
+  if (e.key === 'Escape') { closePalette(null); return; }
+  if (e.key === 'ArrowDown') { paletteSelectedIdx = Math.min(paletteSelectedIdx+1, filteredItems.length-1); renderPalette(filteredItems); return; }
+  if (e.key === 'ArrowUp') { paletteSelectedIdx = Math.max(paletteSelectedIdx-1, 0); renderPalette(filteredItems); return; }
+  if (e.key === 'Enter' && filteredItems[paletteSelectedIdx]) { executePaletteAction(filteredItems[paletteSelectedIdx].action); }
+}
+function executePaletteAction(action) {
+  closePalette(null);
+  if (action.startsWith('agent:')) { window.location.href = 'mockup-fleet.html'; }
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+  if (e.key === '/') {
+    const active = document.activeElement;
+    if (active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA') { e.preventDefault(); openPalette(); }
+  }
+  if (e.key === 'Escape') closePalette(null);
+});
+
+// Initialize
+renderWaterfall();
+renderLatencyChart();
+renderPalette(paletteItems);
+lucide.createIcons();
+</script>
+</body>
+</html>

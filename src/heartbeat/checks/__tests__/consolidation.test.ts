@@ -19,7 +19,7 @@ function buildContext(): CheckContext {
         },
       },
     }),
-    sendToAgent: vi.fn().mockResolvedValue("summarized content"),
+    dispatchTurn: vi.fn().mockResolvedValue("summarized content"),
     getRunningAgents: vi.fn().mockReturnValue(["test-agent"]),
     getContextFillProvider: vi.fn(),
     getSessionLogger: vi.fn(),

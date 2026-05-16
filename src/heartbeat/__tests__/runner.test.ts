@@ -101,11 +101,16 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -204,11 +209,16 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -327,11 +337,16 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -389,11 +404,16 @@ describe("HeartbeatRunner", () => {
       allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
       greetOnRestart: true, // Phase 89 GREET-07
       greetCoolDownMs: 300_000, // Phase 89 GREET-10
+      autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       skills: [],
       soul: undefined,
       identity: undefined,
@@ -436,11 +456,16 @@ describe("HeartbeatRunner", () => {
         allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
         greetOnRestart: true, // Phase 89 GREET-07
         greetCoolDownMs: 300_000, // Phase 89 GREET-10
+        autoCompactAt: 0.7, // Phase 124 D-06
       memoryAutoLoad: true, // Phase 90 MEM-01
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
         skills: [],
         soul: undefined,
         identity: undefined,
@@ -608,6 +633,176 @@ describe("HeartbeatRunner", () => {
 
       // Zone tracker should be cleaned up
       expect(runner.getZoneStatuses().has("agent-a")).toBe(false);
+    });
+  });
+
+  describe("inbox timeout override (Phase 999.12 HB-01)", () => {
+    function makeAgentConfig(name: string, workspace: string, config: HeartbeatConfig): ResolvedAgentConfig {
+      return {
+        name,
+        workspace,
+        memoryPath: workspace,
+        channels: [],
+        model: "sonnet",
+        effort: "low",
+        allowedModels: ["haiku", "sonnet", "opus"],
+        greetOnRestart: true,
+        greetCoolDownMs: 300_000,
+        autoCompactAt: 0.7, // Phase 124 D-06
+        memoryAutoLoad: true,
+        memoryRetrievalTopK: 5,
+        memoryScannerEnabled: true,
+        memoryFlushIntervalMs: 900_000,
+        memoryCueEmoji: "✅",
+        autoIngestAttachments: false, // Phase 999.43 D-09
+        ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+        settingSources: ["project"],
+        autoStart: true,
+        skills: [],
+        soul: undefined,
+        identity: undefined,
+        memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 } },
+        schedules: [],
+        heartbeat: config,
+        skillsPath: "/tmp/skills",
+        admin: false,
+        subagentModel: undefined,
+        threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+        reactions: false,
+        mcpServers: [],
+        slashCommands: [],
+      };
+    }
+
+    it("uses HeartbeatConfig.inboxTimeoutMs for the inbox check when defined", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig({
+        checkTimeoutSeconds: 1,
+        inboxTimeoutMs: 5000,
+      });
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+      });
+
+      // Fake "inbox" check resolves after 1500ms — exceeds fleet-wide
+      // 1000ms timeout (would race-win and produce "timed out") but is
+      // comfortably under the 5000ms inbox-specific override. Without
+      // HB-01 wiring this test FAILs (status critical / "timed out").
+      const inboxFake = createMockCheck(
+        "inbox",
+        { status: "healthy", message: "ok-inbox" },
+        1500,
+      );
+      (runner as any).checks = [inboxFake];
+
+      const agentConfig = makeAgentConfig("agent-a", join(tempDir, "agent-a"), config);
+      runner.setAgentConfigs([agentConfig]);
+
+      const tickPromise = runner.tick();
+      // Advance past the 1500ms check resolution but below 5000ms inbox timeout.
+      vi.advanceTimersByTime(2000);
+      await tickPromise;
+
+      const results = runner.getLatestResults();
+      const agentResults = results.get("agent-a");
+      expect(agentResults).toBeDefined();
+
+      const inboxResult = agentResults!.get("inbox");
+      expect(inboxResult).toBeDefined();
+      expect(inboxResult!.result.status).toBe("healthy");
+      expect(inboxResult!.result.message).toBe("ok-inbox");
+      // It must NOT have timed out.
+      expect(inboxResult!.result.message).not.toContain("timed out");
+    });
+
+    it("uses checkTimeoutSeconds for non-inbox checks even when inboxTimeoutMs is set", async () => {
+      const sessionManager = createMockSessionManager(["agent-a"]);
+      const log = createMockLogger();
+      const config = createDefaultConfig({
+        checkTimeoutSeconds: 1,
+        inboxTimeoutMs: 5000,
+      });
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        checksDir,
+        log,
+      });
+
+      // Non-inbox check that resolves after 3000ms — exceeds 1000ms fleet
+      // timeout but is below the inbox-specific 5000ms override.
+      const slowCheck = createMockCheck(
+        "context-fill",
+        { status: "healthy", message: "ok" },
+        3000,
+      );
+      (runner as any).checks = [slowCheck];
+
+      const agentConfig = makeAgentConfig("agent-a", join(tempDir, "agent-a"), config);
+      runner.setAgentConfigs([agentConfig]);
+
+      const tickPromise = runner.tick();
+      vi.advanceTimersByTime(1100);
+      await tickPromise;
+
+      const results = runner.getLatestResults();
+      const agentResults = results.get("agent-a");
+      const checkResult = agentResults!.get("context-fill");
+      expect(checkResult!.result.status).toBe("critical");
+      expect(checkResult!.result.message).toContain("timed out");
+    });
+  });
+
+  describe("initialize() boot log (Phase 999.8 Plan 03 — HB-04)", () => {
+    it("emits checkCount + checks array + 'heartbeat checks registered' message", async () => {
+      const sessionManager = createMockSessionManager();
+      const log = createMockLogger();
+      const config = createDefaultConfig();
+
+      const runner = new HeartbeatRunner({
+        sessionManager,
+        registryPath: join(tempDir, "registry.json"),
+        config,
+        // Static registry ignores this path — we still pass one for back-compat.
+        checksDir: join(tempDir, "checks"),
+        log,
+      });
+
+      await runner.initialize();
+
+      expect(log.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Phase 108 — added mcp-broker (POOL-07) brought the count to 12.
+          // Phase 99-C — added summarize-pending (drains crashed-session summary backlog) → 13.
+          // Phase 999.47 Plan 02 — added homelab-refresh (hourly inventory poller) → 14.
+          checkCount: 14,
+          checks: expect.arrayContaining([
+            "tier-maintenance",
+            "auto-linker",
+            "inbox",
+            "consolidation",
+            "context-fill",
+            "fs-probe",
+            "homelab-refresh",
+            "mcp-broker",
+            "mcp-reconnect",
+            "summarize-pending",
+            "task-retention",
+            "thread-idle",
+            "trace-retention",
+            "attachment-cleanup",
+          ]),
+        }),
+        "heartbeat checks registered",
+      );
     });
   });
 });

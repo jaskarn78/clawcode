@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode — Tasks</title>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,600,700,800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        display:['"Cabinet Grotesk"','sans-serif'],
+        sans:['Geist','sans-serif'],
+        mono:['"JetBrains Mono"','monospace'],
+      },
+      colors: {
+        bg:{base:'#0e0e12',s1:'#16161c',s2:'#1c1c24',s3:'#252530'},
+        fg:{1:'#f4f4f5',2:'#a1a1aa',3:'#71717a'},
+        accent:{green:'#10b981',blue:'#3b82f6',amber:'#f59e0b',red:'#ef4444',gold:'#eab308',pink:'#ff3366'},
+      },
+    },
+  },
+};
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{font-family:'Geist',sans-serif;background:#0e0e12;color:#f4f4f5;}
+  .font-display{font-family:'Cabinet Grotesk',sans-serif;}
+  .font-mono{font-family:'JetBrains Mono',monospace;}
+  .col-header{font-size:12px;font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:0.08em;color:#71717a;padding:0 4px 10px;display:flex;align-items:center;gap:6px;}
+  .task-card{background:#16161c;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:14px;cursor:grab;transition:border-color 120ms ease,box-shadow 120ms ease;user-select:none;}
+  .task-card:hover{border-color:rgba(255,255,255,0.12);box-shadow:0 4px 16px rgba(0,0,0,0.4);}
+  .task-card.dragging{opacity:0.5;box-shadow:0 12px 40px rgba(0,0,0,0.6);}
+  .kanban-col{min-width:240px;flex-shrink:0;}
+  .kanban-col.drag-over .drop-zone{border-color:rgba(16,185,129,0.4);background:rgba(16,185,129,0.04);}
+  .drop-zone{border:2px dashed transparent;border-radius:10px;min-height:60px;transition:all 150ms ease;}
+  .priority-pill{font-size:10px;font-family:'JetBrains Mono',monospace;padding:2px 7px;border-radius:4px;font-weight:500;}
+  .p-low{background:rgba(113,113,122,0.1);color:#71717a;border:1px solid rgba(113,113,122,0.2);}
+  .p-medium{background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.25);}
+  .p-high{background:rgba(245,158,11,0.1);color:#f59e0b;border:1px solid rgba(245,158,11,0.25);}
+  .p-urgent{background:rgba(239,68,68,0.1);color:#ef4444;border:1px solid rgba(239,68,68,0.25);}
+  .agent-badge{font-size:10px;font-family:'JetBrains Mono',monospace;padding:2px 6px;border-radius:4px;white-space:nowrap;}
+  .modal-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(6px);}
+  .modal-overlay.open{display:flex;}
+  .modal-box{width:min(560px,100%);background:#16161c;border:1px solid rgba(255,255,255,0.08);border-radius:16px;box-shadow:0 24px 48px rgba(0,0,0,0.6);animation:fadeUp 180ms ease;max-height:90vh;overflow-y:auto;}
+  .task-detail-overlay{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,0.5);display:none;align-items:flex-start;justify-content:flex-end;backdrop-filter:blur(4px);}
+  .task-detail-overlay.open{display:flex;}
+  .task-detail-panel{width:min(560px,100vw);background:#16161c;border-left:1px solid rgba(255,255,255,0.06);height:100vh;overflow-y:auto;animation:slideIn 220ms ease;}
+  @keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+  .palette-overlay{position:fixed;inset:0;z-index:600;background:rgba(0,0,0,0.55);display:none;backdrop-filter:blur(6px);}
+  .palette-overlay.open{display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;}
+  .palette-box{width:min(560px,calc(100vw - 32px));background:#1c1c24;border:1px solid rgba(255,255,255,0.1);border-radius:12px;box-shadow:0 32px 64px rgba(0,0,0,0.7);overflow:hidden;}
+  .p-item{transition:background 80ms ease;cursor:pointer;}
+  .p-item:hover,.p-item.sel{background:rgba(255,255,255,0.05);}
+  .mode-pill{display:flex;background:rgba(255,255,255,0.05);border-radius:8px;padding:3px;gap:2px;}
+  .mode-btn{padding:5px 14px;border-radius:6px;font-size:13px;font-weight:500;transition:all 150ms ease;color:#71717a;}
+  .mode-btn.active{background:rgba(255,255,255,0.08);color:#f4f4f5;}
+  .input-field{width:100%;background:#1c1c24;border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 14px;font-size:14px;color:#f4f4f5;outline:none;transition:border-color 150ms ease;font-family:'Geist',sans-serif;}
+  .input-field:focus{border-color:rgba(59,130,246,0.5);}
+  .bottom-nav{display:none;}
+  @media(max-width:767px){.bottom-nav{display:flex !important;}.sidebar{display:none !important;}body{padding-bottom:72px;}.kanban-scroll{overflow-x:auto;}.kanban-board{min-width:900px;}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .fade-in{animation:fadeUp 200ms ease both;}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- COMMAND PALETTE -->
+<div class="palette-overlay" id="palette" onclick="if(event.target===this)closePalette()">
+  <div class="palette-box" onclick="event.stopPropagation()">
+    <div class="flex items-center gap-3 px-4 py-3.5 border-b border-white/5">
+      <i data-lucide="search" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+      <input id="palette-input" placeholder="Search tasks, agents..." autocomplete="off"
+        class="flex-1 bg-transparent text-fg-1 text-[15px] outline-none placeholder-fg-3"
+        oninput="filterPalette(this.value)" onkeydown="paletteKey(event)">
+      <span class="font-mono text-xs text-fg-3 bg-bg-s3 px-1.5 py-0.5 rounded">ESC</span>
+    </div>
+    <div id="p-list" class="py-1.5 max-h-72 overflow-y-auto"></div>
+  </div>
+</div>
+
+<!-- NEW TASK MODAL -->
+<div class="modal-overlay" id="task-modal" onclick="if(event.target===this)closeTaskModal()">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+      <h3 class="font-display text-[18px] font-bold text-fg-1">New Task</h3>
+      <button onclick="closeTaskModal()" class="p-2 hover:bg-white/5 rounded-lg transition-colors">
+        <i data-lucide="x" class="w-4 h-4 text-fg-3"></i>
+      </button>
+    </div>
+    <div class="px-6 py-5 space-y-4">
+      <div>
+        <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Title <span class="text-accent-red">*</span></label>
+        <input class="input-field" placeholder="Investigate Schwab AIP 90-day waiting period">
+      </div>
+      <div>
+        <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Description</label>
+        <textarea class="input-field h-24 resize-none text-[13px]" placeholder="Markdown supported · @mention agents with @agent-name..."></textarea>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Assign to</label>
+          <select class="input-field text-[13px]">
+            <option>fin-acquisition (sonnet)</option>
+            <option>Admin Clawdy (opus)</option>
+            <option>research (sonnet)</option>
+            <option>fin-research (haiku)</option>
+            <option>general (sonnet)</option>
+            <option>projects (sonnet)</option>
+            <option value="subagent">Spawn subagent under fin-acquisition</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Priority</label>
+          <div class="flex gap-1.5">
+            <button class="flex-1 py-2.5 rounded-lg text-[11px] font-medium font-mono border border-white/8 text-fg-3 hover:border-white/15 transition-colors">Low</button>
+            <button class="flex-1 py-2.5 rounded-lg text-[11px] font-medium font-mono border border-accent-blue/50 text-accent-blue bg-accent-blue/5">Med</button>
+            <button class="flex-1 py-2.5 rounded-lg text-[11px] font-medium font-mono border border-white/8 text-fg-3 hover:border-white/15 transition-colors">High</button>
+            <button class="flex-1 py-2.5 rounded-lg text-[11px] font-medium font-mono border border-white/8 text-fg-3 hover:border-white/15 transition-colors">Urgent</button>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Deadline</label>
+          <input type="datetime-local" class="input-field text-[13px]">
+        </div>
+        <div>
+          <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Schedule</label>
+          <select class="input-field text-[13px]">
+            <option>Run now</option>
+            <option>Schedule for later</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Tags</label>
+        <input class="input-field text-[13px]" placeholder="fin, ramy, schwab, aip — comma separated">
+      </div>
+      <div>
+        <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Output destination</label>
+        <select class="input-field text-[13px]">
+          <option>Discord: #fin-acquisition (default)</option>
+          <option>Discord: specific subagent thread</option>
+          <option>Dashboard only (no Discord post)</option>
+        </select>
+      </div>
+    </div>
+    <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/5">
+      <button onclick="closeTaskModal()" class="px-4 py-2 text-[14px] text-fg-2 hover:text-fg-1 transition-colors">Cancel</button>
+      <button onclick="createTask()" class="px-5 py-2.5 bg-accent-green text-white text-[14px] font-medium rounded-xl hover:bg-emerald-400 transition-colors flex items-center gap-2">
+        <i data-lucide="plus" class="w-4 h-4"></i> Create task
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TASK DETAIL PANEL -->
+<div class="task-detail-overlay" id="detail-overlay" onclick="if(event.target===this)closeDetail()">
+  <div class="task-detail-panel" id="detail-panel" onclick="event.stopPropagation()">
+    <div id="detail-content" class="p-6"></div>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+<div class="flex min-h-screen">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar hidden md:flex flex-col w-[220px] flex-shrink-0 bg-bg-s1 border-r border-white/5 sticky top-0 h-screen">
+    <div class="px-5 py-4 border-b border-white/5">
+      <div class="flex items-center gap-2">
+        <span class="font-mono font-semibold text-accent-pink text-[17px]">{/}</span>
+        <span class="font-display font-bold text-fg-1 text-[15px] tracking-tight">ClawCode</span>
+      </div>
+      <div class="flex items-center gap-2 mt-1.5">
+        <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+        <span class="text-[11px] text-fg-3 font-mono">clawdy · live</span>
+      </div>
+    </div>
+    <nav class="flex-1 py-3 px-2">
+      <a href="v2-fleet-advanced.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="layout-grid" class="w-4 h-4"></i> Fleet
+      </a>
+      <a href="v2-conversations.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="message-square" class="w-4 h-4"></i> Conversations
+      </a>
+      <a href="#" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-1 bg-white/5 mb-0.5">
+        <i data-lucide="check-square" class="w-4 h-4 text-accent-green"></i> Tasks
+      </a>
+      <a href="v2-config-editor.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] text-fg-2 hover:text-fg-1 hover:bg-white/4 transition-colors mb-0.5">
+        <i data-lucide="settings" class="w-4 h-4"></i> Config
+      </a>
+    </nav>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1 flex flex-col min-w-0">
+
+    <!-- HEADER -->
+    <header class="bg-bg-s1/90 backdrop-blur border-b border-white/5 px-4 md:px-6 h-14 flex items-center justify-between sticky top-0 z-50">
+      <div class="flex items-center gap-2 text-[13px]">
+        <span class="text-fg-3 hidden md:inline">Fleet</span>
+        <span class="text-fg-3/40 hidden md:inline">/</span>
+        <span class="text-fg-1 font-medium">Tasks</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="mode-pill">
+          <button class="mode-btn" onclick="location.href='v2-fleet-basic.html'">Basic</button>
+          <button class="mode-btn active">Advanced</button>
+        </div>
+        <button onclick="openTaskModal()" class="flex items-center gap-2 text-[13px] font-medium text-white bg-accent-green hover:bg-emerald-400 rounded-lg px-4 py-2 transition-colors">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> New task
+        </button>
+        <button onclick="openPalette()" class="hidden sm:flex items-center gap-2 text-[12px] text-fg-3 bg-bg-s3 border border-white/5 rounded-lg px-3 py-1.5 hover:border-white/10 transition-colors">
+          <i data-lucide="search" class="w-3 h-3"></i><kbd class="font-mono">⌘K</kbd>
+        </button>
+        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-accent-blue to-accent-green flex items-center justify-center text-[11px] font-mono font-semibold text-white">J</div>
+      </div>
+    </header>
+
+    <!-- FILTER BAR -->
+    <div class="px-4 md:px-6 py-3 border-b border-white/5 flex items-center gap-3 overflow-x-auto">
+      <div class="flex items-center gap-2 bg-bg-s2 border border-white/8 rounded-lg px-3 py-1.5 flex-shrink-0">
+        <i data-lucide="filter" class="w-3.5 h-3.5 text-fg-3"></i>
+        <span class="text-[12px] text-fg-3">All agents</span>
+      </div>
+      <div class="flex items-center gap-2 bg-bg-s2 border border-white/8 rounded-lg px-3 py-1.5 flex-shrink-0">
+        <span class="text-[12px] text-fg-3">All priorities</span>
+      </div>
+      <div class="text-[12px] text-fg-3 font-mono ml-auto flex-shrink-0">14 tasks total · 2 running</div>
+    </div>
+
+    <!-- KANBAN BOARD -->
+    <div class="flex-1 kanban-scroll overflow-x-auto">
+      <div class="kanban-board flex gap-4 p-4 md:p-6 fade-in" id="kanban-board">
+        <!-- Columns populated by JS -->
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- MOBILE BOTTOM NAV -->
+<nav class="bottom-nav fixed bottom-0 left-0 right-0 bg-bg-s1/95 backdrop-blur border-t border-white/5 px-2 py-2 z-40">
+  <div class="flex">
+    <a href="v2-fleet-basic.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="layout-grid" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Fleet</span>
+    </a>
+    <a href="v2-conversations.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="message-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Convos</span>
+    </a>
+    <a href="#" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg bg-white/5">
+      <i data-lucide="check-square" class="w-4 h-4 text-accent-green"></i>
+      <span class="text-[10px] text-accent-green font-medium">Tasks</span>
+    </a>
+    <a href="v2-agent-detail.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="settings" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">More</span>
+    </a>
+  </div>
+</nav>
+
+<script>
+const agentColors = {
+  'fin-acquisition': { bg:'rgba(59,130,246,0.1)', text:'#3b82f6', border:'rgba(59,130,246,0.25)' },
+  'Admin Clawdy':    { bg:'rgba(234,179,8,0.1)',  text:'#eab308', border:'rgba(234,179,8,0.25)' },
+  'research':        { bg:'rgba(16,185,129,0.1)', text:'#10b981', border:'rgba(16,185,129,0.25)' },
+  'fin-research':    { bg:'rgba(16,185,129,0.08)', text:'#6ee7b7', border:'rgba(16,185,129,0.2)' },
+  'projects':        { bg:'rgba(113,113,122,0.1)', text:'#a1a1aa', border:'rgba(113,113,122,0.25)' },
+  'general':         { bg:'rgba(113,113,122,0.1)', text:'#a1a1aa', border:'rgba(113,113,122,0.25)' },
+};
+
+const tasks = [
+  { id:1, col:'backlog', title:'Compile Q2 market update for Ramy clients', agent:'research', priority:'medium', deadline:'May 12', update:'1d ago', tags:['research','fin','ramy'] },
+  { id:2, col:'backlog', title:'Review Phase 115 sub-scope 17c implementation plan', agent:'Admin Clawdy', priority:'low', deadline:'May 15', update:'3h ago', tags:['phase-115'] },
+  { id:3, col:'backlog', title:'Draft finmentum newsletter — ETF allocation strategies', agent:'fin-acquisition', priority:'high', deadline:'May 10', update:'2h ago', tags:['fin','newsletter'] },
+  { id:4, col:'scheduled', title:'Daily memory consolidation audit — all agents', agent:'Admin Clawdy', priority:'low', deadline:'Tonight', update:'12h ago', tags:['maintenance'] },
+  { id:5, col:'scheduled', title:'Schwab AIP 90-day rule research', agent:'research', priority:'high', deadline:'May 9', update:'30m ago', tags:['schwab','aip','ramy'] },
+  { id:6, col:'running', title:'Investigate Schwab AIP restrictions for client account', agent:'fin-acquisition', priority:'urgent', deadline:'Today', update:'2m ago', tags:['schwab','aip','fin'] },
+  { id:7, col:'running', title:'Phase 115 migration status check — all 7 agents', agent:'Admin Clawdy', priority:'medium', deadline:'Today', update:'4m ago', tags:['phase-115','migration'] },
+  { id:8, col:'waiting', title:'VTSAX vs FXAIX 5-year performance comparison', agent:'fin-research', priority:'medium', deadline:'May 9', update:'1h ago', tags:['research','fin'] },
+  { id:9, col:'waiting', title:'YTD portfolio return pull — Ramy client accounts', agent:'fin-research', priority:'high', deadline:'Today', update:'3h ago', tags:['fin','ramy'] },
+  { id:10, col:'failed', title:'Fetch Morningstar premium data — auth error', agent:'research', priority:'high', deadline:'May 8', update:'6h ago', tags:['morningstar','blocked'], error:'401 Unauthorized — API key may be expired' },
+  { id:11, col:'done', title:'AWS cost report summary for May', agent:'general', priority:'low', deadline:'May 8', update:'2h ago', tags:['aws','ops'] },
+  { id:12, col:'done', title:'Phase 115 plan sub-scope 17b documentation', agent:'projects', priority:'medium', deadline:'May 8', update:'4h ago', tags:['phase-115'] },
+  { id:13, col:'done', title:'Research FINRA guidance on crypto ETFs — retail', agent:'research', priority:'medium', deadline:'May 7', update:'1d ago', tags:['finra','research'] },
+  { id:14, col:'done', title:'Update clawcode.yaml for Phase 110 Stage 0b cleanup', agent:'Admin Clawdy', priority:'high', deadline:'May 7', update:'2d ago', tags:['phase-110'] },
+];
+
+const columns = [
+  { id:'backlog',   label:'Backlog',   color:'#71717a', bg:'rgba(113,113,122,0.08)' },
+  { id:'scheduled', label:'Scheduled', color:'#3b82f6', bg:'rgba(59,130,246,0.08)' },
+  { id:'running',   label:'Running',   color:'#10b981', bg:'rgba(16,185,129,0.08)' },
+  { id:'waiting',   label:'Waiting',   color:'#f59e0b', bg:'rgba(245,158,11,0.08)' },
+  { id:'failed',    label:'Failed',    color:'#ef4444', bg:'rgba(239,68,68,0.08)' },
+  { id:'done',      label:'Done',      color:'#71717a', bg:'rgba(113,113,122,0.05)' },
+];
+
+const pLabels = { low:'p-low', medium:'p-medium', high:'p-high', urgent:'p-urgent' };
+let dragId = null;
+
+function renderBoard() {
+  const board = document.getElementById('kanban-board');
+  board.innerHTML = columns.map(col => {
+    const colTasks = tasks.filter(t => t.col === col.id);
+    return `<div class="kanban-col" id="col-${col.id}" ondragover="onDragOver(event,this)" ondrop="onDrop(event,'${col.id}')">
+      <div class="col-header">
+        <div style="width:8px;height:8px;border-radius:50%;background:${col.color};flex-shrink:0;"></div>
+        ${col.label}
+        <span style="background:${col.bg};color:${col.color};font-size:10px;padding:1px 6px;border-radius:10px;">${colTasks.length}</span>
+      </div>
+      <div class="drop-zone space-y-2.5" id="zone-${col.id}">
+        ${colTasks.map(task => renderTaskCard(task)).join('')}
+        ${col.id === 'backlog' ? `<button onclick="openTaskModal()" class="w-full py-2.5 rounded-lg border border-dashed border-white/8 text-[12px] text-fg-3 hover:border-white/15 hover:text-fg-2 transition-colors flex items-center justify-center gap-2 min-h-[44px]"><i data-lucide="plus" class="w-3.5 h-3.5"></i> Add task</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  lucide.createIcons();
+}
+
+function renderTaskCard(task) {
+  const ac = agentColors[task.agent] || agentColors['general'];
+  const isRunning = task.col === 'running';
+  const isFailed = task.col === 'failed';
+  return `<div class="task-card ${isRunning ? 'border-l-2 !border-l-accent-green' : isFailed ? 'border-l-2 !border-l-accent-red' : ''}"
+    draggable="true" id="task-${task.id}"
+    ondragstart="onDragStart(event,${task.id})"
+    ondragend="onDragEnd(event)"
+    onclick="openDetail(${task.id})">
+    <div class="flex items-start gap-2 mb-2.5">
+      <i data-lucide="grip-vertical" class="w-3.5 h-3.5 text-fg-3/40 mt-0.5 flex-shrink-0 cursor-grab"></i>
+      <p class="text-[13px] font-medium text-fg-1 leading-snug flex-1">${task.title}</p>
+    </div>
+    ${isFailed ? `<div class="text-[11px] font-mono text-accent-red bg-accent-red/8 border border-accent-red/15 rounded px-2 py-1 mb-2.5">${task.error}</div>` : ''}
+    <div class="flex items-center justify-between mb-2">
+      <span class="agent-badge" style="background:${ac.bg};color:${ac.text};border:1px solid ${ac.border}">${task.agent}</span>
+      <span class="priority-pill ${pLabels[task.priority]}">${task.priority}</span>
+    </div>
+    <div class="flex items-center justify-between text-[11px] font-mono text-fg-3">
+      <span>${task.deadline}</span>
+      <span>${task.update}</span>
+    </div>
+  </div>`;
+}
+
+function openDetail(id) {
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  const ac = agentColors[task.agent] || agentColors['general'];
+  document.getElementById('detail-content').innerHTML = `
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="font-display text-[18px] font-bold text-fg-1 mb-1">${task.title}</h2>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="agent-badge" style="background:${ac.bg};color:${ac.text};border:1px solid ${ac.border}">${task.agent}</span>
+          <span class="priority-pill ${pLabels[task.priority]}">${task.priority}</span>
+          <span class="text-[12px] font-mono text-fg-3">due ${task.deadline}</span>
+        </div>
+      </div>
+      <button onclick="closeDetail()" class="p-2 hover:bg-white/5 rounded-lg transition-colors flex-shrink-0">
+        <i data-lucide="x" class="w-5 h-5 text-fg-3"></i>
+      </button>
+    </div>
+    <div class="flex flex-wrap gap-1.5 mb-5">
+      ${task.tags.map(t => `<span class="text-[11px] font-mono text-fg-3 bg-bg-s3 px-2 py-0.5 rounded">#${t}</span>`).join('')}
+    </div>
+    <div class="space-y-4">
+      <div class="bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-2">Status</h4>
+        <div class="flex items-center gap-2">
+          <div class="w-2 h-2 rounded-full ${task.col === 'running' ? 'bg-accent-green' : task.col === 'failed' ? 'bg-accent-red' : task.col === 'done' ? 'bg-fg-3' : 'bg-accent-amber'}"></div>
+          <span class="text-[14px] font-medium text-fg-1 capitalize">${task.col}</span>
+          <span class="text-[12px] text-fg-3 ml-auto">updated ${task.update}</span>
+        </div>
+        ${task.error ? `<div class="mt-2 text-[12px] font-mono text-accent-red">${task.error}</div>` : ''}
+      </div>
+      <div class="bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">Task history</h4>
+        <div class="space-y-3 text-[13px]">
+          <div class="flex gap-3"><span class="text-fg-3 font-mono text-[11px] w-20 flex-shrink-0">10:42 AM</span><span class="text-fg-2">Task created and assigned to ${task.agent}</span></div>
+          <div class="flex gap-3"><span class="text-fg-3 font-mono text-[11px] w-20 flex-shrink-0">10:43 AM</span><span class="text-fg-2">Agent acknowledged — starting research</span></div>
+          ${task.col === 'running' ? '<div class="flex gap-3"><span class="text-fg-3 font-mono text-[11px] w-20 flex-shrink-0">Now</span><span class="text-accent-green">Agent actively working on task</span></div>' : ''}
+          ${task.col === 'done' ? '<div class="flex gap-3"><span class="text-fg-3 font-mono text-[11px] w-20 flex-shrink-0">Completed</span><span class="text-accent-green">Task completed successfully</span></div>' : ''}
+          ${task.col === 'failed' ? `<div class="flex gap-3"><span class="text-fg-3 font-mono text-[11px] w-20 flex-shrink-0">Failed</span><span class="text-accent-red">${task.error}</span></div>` : ''}
+        </div>
+      </div>
+      <div class="bg-bg-s2 border border-white/6 rounded-xl p-4">
+        <h4 class="text-[12px] font-mono text-fg-3 uppercase tracking-wider mb-3">Agent response</h4>
+        <p class="text-[13px] text-fg-2 leading-relaxed">Working on this task now — pulling the required data from finmentum-db and cross-referencing with available sources. Will post results to ${task.agent === 'fin-acquisition' ? '#fin-acquisition' : '#' + task.agent} when complete.</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 mt-5">
+      <button class="flex-1 py-2.5 bg-accent-amber/10 border border-accent-amber/25 text-accent-amber text-[13px] font-medium rounded-xl hover:bg-accent-amber/15 transition-colors">Reassign</button>
+      <button class="flex-1 py-2.5 bg-accent-red/10 border border-accent-red/25 text-accent-red text-[13px] font-medium rounded-xl hover:bg-accent-red/15 transition-colors">Cancel task</button>
+    </div>`;
+  document.getElementById('detail-overlay').classList.add('open');
+  lucide.createIcons();
+}
+function closeDetail() { document.getElementById('detail-overlay').classList.remove('open'); }
+
+// Drag and drop
+function onDragStart(e, id) { dragId = id; e.dataTransfer.effectAllowed = 'move'; setTimeout(() => document.getElementById('task-' + id)?.classList.add('dragging'), 0); }
+function onDragEnd(e) { document.querySelectorAll('.task-card').forEach(c => c.classList.remove('dragging')); document.querySelectorAll('.kanban-col').forEach(c => c.classList.remove('drag-over')); }
+function onDragOver(e, col) { e.preventDefault(); col.classList.add('drag-over'); }
+function onDrop(e, colId) {
+  e.preventDefault();
+  if (dragId) {
+    const task = tasks.find(t => t.id === dragId);
+    if (task) { task.col = colId; task.update = 'just now'; }
+    dragId = null;
+  }
+  document.querySelectorAll('.kanban-col').forEach(c => c.classList.remove('drag-over'));
+  renderBoard();
+}
+
+function openTaskModal() { document.getElementById('task-modal').classList.add('open'); lucide.createIcons(); }
+function closeTaskModal() { document.getElementById('task-modal').classList.remove('open'); }
+function createTask() {
+  closeTaskModal();
+  const toast = document.createElement('div');
+  toast.className = 'fixed bottom-8 left-1/2 -translate-x-1/2 bg-bg-s1 border border-white/10 rounded-xl px-4 py-3 text-[13px] text-fg-1 flex items-center gap-3 shadow-2xl z-[500]';
+  toast.innerHTML = '<i data-lucide="check" class="w-4 h-4 text-accent-green"></i> Task created and queued for fin-acquisition';
+  document.body.appendChild(toast);
+  lucide.createIcons();
+  setTimeout(() => toast.remove(), 4000);
+}
+
+// Palette
+const pItems = [
+  {icon:'plus',label:'Create new task',fn:openTaskModal},
+  {icon:'layout-grid',label:'Go to Fleet overview',fn:()=>location.href='v2-fleet-advanced.html'},
+  {icon:'message-square',label:'View conversations',fn:()=>location.href='v2-conversations.html'},
+  {icon:'settings-2',label:'Open config editor',fn:()=>location.href='v2-config-editor.html'},
+];
+let pSel=0,pFil=[];
+function openPalette(){document.getElementById('palette').classList.add('open');setTimeout(()=>document.getElementById('palette-input').focus(),50);filterPalette('');}
+function closePalette(){document.getElementById('palette').classList.remove('open');}
+function filterPalette(q){pFil=pItems.filter(i=>i.label.toLowerCase().includes(q.toLowerCase()));pSel=0;renderPalette();}
+function renderPalette(){document.getElementById('p-list').innerHTML=pFil.map((item,i)=>`<div class="p-item flex items-center gap-3 px-4 py-2.5 ${i===pSel?'sel':''}" onclick="selPItem(${i})"><i data-lucide="${item.icon}" class="w-4 h-4 text-fg-3 flex-shrink-0"></i><span class="text-[14px] text-fg-1">${item.label}</span></div>`).join('');lucide.createIcons();}
+function selPItem(i){const item=pFil[i];if(!item)return;closePalette();if(item.fn)item.fn();}
+function paletteKey(e){if(e.key==='Escape')closePalette();else if(e.key==='ArrowDown'){pSel=Math.min(pSel+1,pFil.length-1);renderPalette();}else if(e.key==='ArrowUp'){pSel=Math.max(pSel-1,0);renderPalette();}else if(e.key==='Enter')selPItem(pSel);}
+document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();openPalette();}if(e.key==='Escape'){closePalette();closeDetail();}});
+
+renderBoard();
+</script>
+</body>
+</html>

@@ -120,6 +120,66 @@ export class TaskManager {
   }
 
   /**
+   * Quick 260511-pw3 — schema introspection for cross-agent senders.
+   *
+   * Returns the schemas `target` accepts, filtered against the fleet-wide
+   * registry, with `callerAllowed` indicating whether `caller` is on each
+   * schema's per-target allowlist (`acceptsTasks[schema]`).
+   *
+   * Two-layer model recap:
+   *   - Fleet registry: ~/.clawcode/task-schemas/<name>.yaml (a schema
+   *     EXISTS in the system).
+   *   - Per-agent allowlist: agent config `acceptsTasks: { schema: [callers] }`
+   *     (this target ACCEPTS this schema from these callers).
+   *   Both must be satisfied for `delegate_task` to succeed.
+   *
+   * Used by the `list_agent_schemas` MCP tool so the sender's LLM can
+   * introspect before calling `delegate_task` instead of taking a blind
+   * shot at an unknown schema (the failure mode Admin Clawdy hit on
+   * 2026-05-11 with `bug.report`).
+   */
+  listSchemasForAgent(caller: string, target: string): readonly {
+    readonly name: string;
+    readonly callerAllowed: boolean;
+    readonly registered: boolean;
+  }[] {
+    const targetConfig = this.opts.getAgentConfig(target);
+    if (!targetConfig) return [];
+    const accepts = targetConfig.acceptsTasks ?? {};
+    const out: {
+      name: string;
+      callerAllowed: boolean;
+      registered: boolean;
+    }[] = [];
+    for (const [name, allowedCallers] of Object.entries(accepts)) {
+      out.push({
+        name,
+        callerAllowed: allowedCallers.includes(caller),
+        registered: this.opts.schemaRegistry.get(name) !== null,
+      });
+    }
+    return Object.freeze(out);
+  }
+
+  /**
+   * Quick 260511-pw3 — accepted-schemas list for a target, regardless of
+   * caller. Used as the `data.acceptedSchemas` payload on
+   * `delegate_task` unknown_schema errors so the sender's LLM can choose a
+   * valid schema on retry. Intersects per-agent `acceptsTasks` with the
+   * fleet registry — a schema declared in config but missing the YAML
+   * file is NOT actually delegatable.
+   */
+  acceptedSchemasForTarget(target: string): readonly string[] {
+    const targetConfig = this.opts.getAgentConfig(target);
+    if (!targetConfig) return Object.freeze([]);
+    const accepts = targetConfig.acceptsTasks ?? {};
+    const intersected = Object.keys(accepts).filter(
+      (name) => this.opts.schemaRegistry.get(name) !== null,
+    );
+    return Object.freeze(intersected);
+  }
+
+  /**
    * HAND-01 async-ticket delegation. Runs the 6-step authorization BEFORE
    * any row is written. Returns synchronously once the row is inserted and
    * B's turn is dispatched -- NEVER awaits B's response (Pitfall 1).
@@ -235,7 +295,10 @@ export class TaskManager {
       }
     }
 
-    // Build TurnOrigin for B's turn.
+    // Build TurnOrigin for B's turn. TurnOrigin (zod-inferred) is a non-readonly
+    // type, but Object.freeze produces Readonly<T>; cast away the readonly
+    // modifier — runtime immutability is preserved by the freezes themselves
+    // and the consumer (TurnDispatcher.dispatch) only reads from origin.
     const childOrigin: TurnOrigin = Object.freeze({
       source: Object.freeze({ kind: "task" as const, id: taskId }),
       rootTurnId: rootCausationId,
@@ -244,7 +307,10 @@ export class TaskManager {
         ...(parentRow?.causation_id ? [parentRow.causation_id] : []),
         taskId,
       ]),
-    });
+      // Phase 60 TRIG-08 — TurnOrigin schema requires causationId (default
+      // null for non-trigger flows). Tasks aren't trigger-driven.
+      causationId: null,
+    }) as unknown as TurnOrigin;
 
     // Transition pending -> running BEFORE dispatch (row is "live" while B executes).
     this.opts.store.transition(taskId, "running", { heartbeat_at: nowMs } as Record<string, unknown>);
@@ -330,7 +396,8 @@ export class TaskManager {
       rootTurnId: row.causation_id,
       parentTurnId: row.causation_id,
       chain: Object.freeze([row.causation_id, taskId]),
-    });
+      causationId: null,
+    }) as unknown as TurnOrigin;
     const message = this.formatCompleteMessage(row.task_type, resultPayload);
     void this.opts.turnDispatcher
       .dispatch(resultOrigin, row.caller_agent, message)
@@ -369,7 +436,8 @@ export class TaskManager {
       rootTurnId: row.causation_id,
       parentTurnId: row.causation_id,
       chain: Object.freeze([row.causation_id, taskId]),
-    });
+      causationId: null,
+    }) as unknown as TurnOrigin;
     const message = `Task '${row.task_type}' was CANCELLED by ${cancellerName}`;
     void this.opts.turnDispatcher
       .dispatch(cancelOrigin, row.caller_agent, message)
@@ -487,7 +555,8 @@ export class TaskManager {
       rootTurnId: row.causation_id,
       parentTurnId: row.causation_id,
       chain: Object.freeze([row.causation_id, taskId]),
-    });
+      causationId: null,
+    }) as unknown as TurnOrigin;
     const message = `Task '${row.task_type}' TIMED OUT after ${deadlineMs}ms`;
     void this.opts.turnDispatcher
       .dispatch(timeoutOrigin, row.caller_agent, message)

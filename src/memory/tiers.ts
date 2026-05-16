@@ -16,6 +16,20 @@ export type TierConfig = {
   readonly hotDemotionDays: number;
   readonly coldRelevanceThreshold: number;
   readonly hotBudget: number;
+  /**
+   * Phase 100-fu — structural-importance promotion. A memory with this
+   * many backlinks (or more) is promoted to hot tier even when it is
+   * rarely directly accessed. Captures hub nodes in the wikilink graph
+   * (e.g. a "fin-acquisition" memory referenced by many turn summaries).
+   *
+   * Production audit motivating this signal (fin-acquisition agent):
+   * 1,161 of 1,182 memories sat at access_count=0 despite 7,338 wikilink
+   * edges — heavy-linked hubs were never reachable via the access-based
+   * promotion path because their neighbor seeds rarely landed in the
+   * KNN top-K, so the graph-walk access bumps (commit 387a6b2) couldn't
+   * rescue them.
+   */
+  readonly centralityPromoteThreshold: number;
 };
 
 /** Default tier configuration matching D-05/D-06/D-07/D-09 design decisions. */
@@ -25,17 +39,28 @@ export const DEFAULT_TIER_CONFIG: Readonly<TierConfig> = Object.freeze({
   hotDemotionDays: 7,
   coldRelevanceThreshold: 0.05,
   hotBudget: 20,
+  centralityPromoteThreshold: 5,
 });
 
 /**
- * Determine if a memory should be promoted from warm to hot tier (D-05).
+ * Determine if a memory should be promoted from warm to hot tier.
  *
- * Requires both sufficient access count AND recent access within the window.
+ * Two independent paths qualify a memory for promotion:
+ *
+ *   1. Access-based (D-05): sufficient access count AND recent access
+ *      within the configured window.
+ *   2. Centrality-based (Phase 100-fu): backlink count meets or exceeds
+ *      `config.centralityPromoteThreshold`. Skipped when `backlinkCount`
+ *      is omitted — preserves pre-fix behavior at every existing
+ *      call site.
  *
  * @param accessCount - Number of times the memory has been accessed
  * @param accessedAt - ISO 8601 timestamp of last access
  * @param now - Current reference time
  * @param config - Tier configuration thresholds
+ * @param backlinkCount - Optional. When provided, enables the
+ *   centrality-based promotion path. Omit to keep callers on the
+ *   pre-Phase-100-fu access-only behavior.
  * @returns true if memory qualifies for hot tier promotion
  */
 export function shouldPromoteToHot(
@@ -43,13 +68,30 @@ export function shouldPromoteToHot(
   accessedAt: string,
   now: Date,
   config: TierConfig,
+  backlinkCount?: number,
 ): boolean {
-  if (accessCount < config.hotAccessThreshold) {
-    return false;
+  // Path 1: access-based (D-05). Sufficient access count AND recent
+  // access within the configured window.
+  if (accessCount >= config.hotAccessThreshold) {
+    const daysSinceAccess = differenceInDays(now, new Date(accessedAt));
+    if (daysSinceAccess <= config.hotAccessWindowDays) {
+      return true;
+    }
   }
 
-  const daysSinceAccess = differenceInDays(now, new Date(accessedAt));
-  return daysSinceAccess <= config.hotAccessWindowDays;
+  // Path 2: centrality-based (Phase 100-fu). Heavy-backlink hubs are
+  // structurally important and should reach hot tier even when access
+  // count is low or accessedAt is stale. Gated on backlinkCount being
+  // explicitly supplied so existing call sites stay on the access-only
+  // path.
+  if (
+    backlinkCount !== undefined &&
+    backlinkCount >= config.centralityPromoteThreshold
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**

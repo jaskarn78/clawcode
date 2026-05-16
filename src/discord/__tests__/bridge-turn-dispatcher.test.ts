@@ -24,7 +24,7 @@ describe("Phase 57 Plan 03 — Discord turn origin persistence (daemon path)", (
       const collector = new TraceCollector(store, silentLog);
 
       const sessionManager = {
-        sendToAgent: vi.fn(),
+        dispatchTurn: vi.fn(),
         streamFromAgent: vi.fn(async () => "reply"),
         getTraceCollector: vi.fn(() => collector),
       };

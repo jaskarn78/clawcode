@@ -124,6 +124,18 @@ export class ThreadManager {
     };
 
     registry = await readThreadRegistry(this.registryPath);
+    // Guard against race with SubagentThreadSpawner: if a binding for this
+    // thread was written between step 3's check and now, the spawner won the
+    // race — skip writing a duplicate binding. The session started at step 6
+    // becomes a stale duplicate; routing will use whichever binding exists.
+    const existingNow = getBindingForThread(registry, threadId);
+    if (existingNow) {
+      this.log.debug(
+        { threadId, sessionName: existingNow.sessionName },
+        "binding created by spawner during threadCreate handling, skipping auto-spawn",
+      );
+      return false;
+    }
     const updatedRegistry = addBinding(registry, binding);
     await writeThreadRegistry(this.registryPath, updatedRegistry);
 

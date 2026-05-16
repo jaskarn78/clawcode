@@ -208,7 +208,10 @@ export async function probeTargetCapability(
   // 4. Build YAML mirror — explicit field-by-field copy. NEVER spread
   //    ...agentCfg or ...mcpServers (would risk leaking env values).
   // ------------------------------------------------------------------------
-  const yamlMcpServers: { name: string; envKeys: readonly string[] }[] = [];
+  // TargetCapability schema infers `envKeys: string[]` (mutable). Keep the
+  // local shape mutable so the assembled `capability` literal below assigns
+  // cleanly without a copy step.
+  const yamlMcpServers: { name: string; envKeys: string[] }[] = [];
   for (const entry of agentCfg.mcpServers ?? []) {
     if (typeof entry === "string") {
       // Inline string form — this is a reference to a top-level mcpServers

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -11,7 +11,11 @@ import {
   resolveSystemPromptDirectives,
   renderSystemPromptDirectiveBlock,
 } from "../loader.js";
-import { DEFAULT_SYSTEM_PROMPT_DIRECTIVES } from "../schema.js";
+import {
+  DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
+  defaultsSchema,
+  agentSchema,
+} from "../schema.js";
 import type { SystemPromptDirective } from "../schema.js";
 import { expandHome } from "../defaults.js";
 import { ConfigFileNotFoundError, ConfigValidationError } from "../../shared/errors.js";
@@ -21,6 +25,8 @@ describe("resolveAgentConfig", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+    outputDir: "outputs/{date}/",
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
@@ -28,11 +34,16 @@ describe("resolveAgentConfig", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
-    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
+    cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
@@ -40,7 +51,7 @@ describe("resolveAgentConfig", () => {
     skills: ["default-skill"],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
-    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
@@ -82,6 +93,14 @@ describe("resolveAgentConfig", () => {
       timeoutMs: 60000,
       workspaceSubdir: "generated-images",
     },
+    // Phase 95 — fleet-wide dream defaults mirror defaultsSchema.
+    dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+    // Phase 96 D-05 — fleet-wide fileAccess defaults.
+    fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
   };
 
   it("applies default model when agent does not specify one", () => {
@@ -379,6 +398,135 @@ describe("resolveAgentConfig", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Phase 999.54 — mcpServers alwaysLoad cascade (D-03a, D-03/OQ-3, D-05a)
+  //
+  // Three pins (one it() each):
+  //   1. auto-inject brings alwaysLoad: true on clawcode when agent yaml
+  //      does NOT declare a clawcode entry (D-03a).
+  //   2. per-agent inline-object override wins over auto-inject — yaml
+  //      `alwaysLoad: false` produces field-absent in resolved (Plan 02
+  //      spread-conditional at loader.ts:498) which still signals "auto-
+  //      inject bypassed". Forbidden outcome: alwaysLoad: true (D-03/OQ-3).
+  //   3. console.info("phase999.54-resolver", ...) log line emitted with
+  //      payload listing alwaysLoadServers: ["clawcode"] (D-05a — closest
+  //      automated proxy for the live-clawdy journalctl verification
+  //      gated to Plan 05).
+  // -------------------------------------------------------------------------
+  it("Phase 999.54 D-03a — auto-inject bakes alwaysLoad: true into the clawcode server when agent does not declare it", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "phase99954-default-agent",
+          workspace: "~/test-ws",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          // No clawcode entry — auto-inject path.
+          mcpServers: [],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const resolved = resolveAllAgents(config);
+    const agent = resolved.find((a) => a.name === "phase99954-default-agent");
+    expect(agent).toBeDefined();
+    const clawcodeServer = agent!.mcpServers.find((s) => s.name === "clawcode");
+    expect(clawcodeServer).toBeDefined();
+    expect(clawcodeServer!.alwaysLoad).toBe(true);
+  });
+
+  it("Phase 999.54 D-03/OQ-3 — per-agent inline-object clawcode override wins over auto-inject", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "phase99954-override-agent",
+          workspace: "~/test-ws",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [
+            // Inline-object form (not string-ref) — required to set alwaysLoad
+            // per RESEARCH.md Pitfall 6. Operator opts OUT of preload.
+            {
+              name: "clawcode",
+              command: "clawcode",
+              args: ["mcp"],
+              env: {},
+              alwaysLoad: false,
+            },
+          ],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const resolved = resolveAllAgents(config);
+    const agent = resolved.find((a) => a.name === "phase99954-override-agent");
+    expect(agent).toBeDefined();
+    const clawcodeServer = agent!.mcpServers.find((s) => s.name === "clawcode");
+    expect(clawcodeServer).toBeDefined();
+    // Plan 02 Task 2's spread-conditional at loader.ts:498 emits the field ONLY
+    // when `=== true`. Per-agent `alwaysLoad: false` in yaml → field absent in
+    // resolved entry. Either explicit `false` or absent both satisfy
+    // "auto-inject bypassed"; FORBIDDEN outcome is `alwaysLoad: true`.
+    expect(clawcodeServer!.alwaysLoad).not.toBe(true);
+  });
+
+  it("Phase 999.54 D-05a — emits phase999.54-resolver console.info line listing alwaysLoad servers", () => {
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents: [
+        {
+          name: "phase99954-log-agent",
+          workspace: "~/test-ws",
+          channels: [],
+          skills: [],
+          effort: "low",
+          heartbeat: true,
+          schedules: [],
+          admin: false,
+          slashCommands: [],
+          reactions: true,
+          mcpServers: [],
+        },
+      ],
+      mcpServers: {},
+    } as unknown as Config;
+
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      resolveAllAgents(config);
+      // Find the log call whose first arg is the D-05a key. Other log lines
+      // from the loader are ignored.
+      const call = infoSpy.mock.calls.find(
+        (args) => args[0] === "phase999.54-resolver",
+      );
+      expect(call).toBeDefined();
+      const payload = JSON.parse(call![1] as string);
+      expect(payload.agent).toBe("phase99954-log-agent");
+      expect(payload.alwaysLoadServers).toContain("clawcode");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // Phase 78 Plan 01 — CONF-01: soulFile / identityFile expansion
   // loader.ts guarantees ResolvedAgentConfig.soulFile / .identityFile are
   //   - expandHome(agent.soulFile) when set (handles `~/...`)
@@ -484,12 +632,92 @@ describe("resolveAgentConfig", () => {
       join(homedir(), ".clawcode/agents", "fin-acquisition"),
     );
   });
+
+  // Phase 100 follow-up — dream config propagation (DR-A1/A2/A3).
+  // Same root-cause shape as Phase 100 settingSources / gsd.projectDir
+  // and Phase 96 fileAccess: schema parsed `dream` but resolver dropped
+  // it, so daemon's getResolvedDreamConfig saw `undefined` and silently
+  // disabled auto-fire. These tests pin the resolver behavior so the
+  // ResolvedAgentConfig surfaces dream when the agent (or defaults)
+  // declares it, while staying back-compat for opted-out agents.
+  it("DR-A1: propagates per-agent dream config to ResolvedAgentConfig", () => {
+    const agent: AgentConfig = {
+      name: "fin-acquisition",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      dream: { enabled: true, idleMinutes: 30, model: "haiku" as const },
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.dream).toBeDefined();
+    expect(resolved.dream?.enabled).toBe(true);
+    expect(resolved.dream?.idleMinutes).toBe(30);
+    expect(resolved.dream?.model).toBe("haiku");
+  });
+
+  it("DR-A2: agent without dream block AND defaults.dream disabled → resolved dream falls back to defaults (enabled=false)", () => {
+    // Back-compat — defaults.dream is the fleet-wide opt-in baseline.
+    // When neither agent nor defaults enable it, resolved should still
+    // surface the (disabled) default so consumers don't hit an
+    // unexpected `undefined`.
+    const agent: AgentConfig = {
+      name: "writer",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, defaults);
+    // defaults.dream is { enabled:false, idleMinutes:30, model:"haiku" }
+    expect(resolved.dream).toBeDefined();
+    expect(resolved.dream?.enabled).toBe(false);
+  });
+
+  it("DR-A3: defaults.dream propagates when agent has no dream block (fleet-wide enable)", () => {
+    const fleetDreamDefaults: DefaultsConfig = {
+      ...defaults,
+      dream: { enabled: true, idleMinutes: 45, model: "sonnet" as const },
+    };
+    const agent: AgentConfig = {
+      name: "fin-research",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+    };
+
+    const resolved = resolveAgentConfig(agent, fleetDreamDefaults);
+    expect(resolved.dream).toBeDefined();
+    expect(resolved.dream?.enabled).toBe(true);
+    expect(resolved.dream?.idleMinutes).toBe(45);
+    expect(resolved.dream?.model).toBe("sonnet");
+  });
 });
 
 describe("resolveAgentConfig - mcpServers", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+    outputDir: "outputs/{date}/",
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
@@ -497,11 +725,16 @@ describe("resolveAgentConfig - mcpServers", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
-    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
+    cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
@@ -509,7 +742,7 @@ describe("resolveAgentConfig - mcpServers", () => {
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
-    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
@@ -551,6 +784,14 @@ describe("resolveAgentConfig - mcpServers", () => {
       timeoutMs: 60000,
       workspaceSubdir: "generated-images",
     },
+    // Phase 95 — fleet-wide dream defaults mirror defaultsSchema.
+    dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+    // Phase 96 D-05 — fleet-wide fileAccess defaults.
+    fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
   };
 
   const sharedMcpServers = {
@@ -758,6 +999,335 @@ describe("resolveAgentConfig - mcpServers", () => {
     expect(image!.command).toBe("mycustom");
     expect(image!.args).toEqual(["--flag"]);
     expect(image!.env).toEqual({ CUSTOM: "x" });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 110 Stage 0b — runtime-conditional auto-inject for browser/search/
+  // image. Each shim type's command/args branches on `defaults.shimRuntime.
+  // <type>` (default "node"). Stage 0a's behavior (`clawcode <type>-mcp`) is
+  // preserved when the field is absent or explicitly "node".
+  //
+  // Crash-fallback policy: NO try/catch around the static-runtime path. The
+  // loader simply emits the command/args; spawn-time failures surface to the
+  // operator (fail-loud, see CONTEXT.md).
+  // -------------------------------------------------------------------------
+  describe("Phase 110 Stage 0b — runtime-conditional auto-inject", () => {
+    const SHIM_TYPES = ["browser", "search", "image"] as const;
+    const STATIC_PATH = "/opt/clawcode/bin/clawcode-mcp-shim";
+    const PYTHON_PATH = "/opt/clawcode/bin/clawcode-mcp-shim.py";
+
+    for (const type of SHIM_TYPES) {
+      it(`${type}: default (no shimRuntime) keeps 'clawcode ${type}-mcp' (byte-identical to Stage 0a)`, () => {
+        const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry).toBeDefined();
+        expect(entry!.command).toBe("clawcode");
+        expect(entry!.args).toEqual([`${type}-mcp`]);
+        expect(entry!.env).toEqual({ CLAWCODE_AGENT: "test" });
+      });
+
+      it(`${type}: explicit 'node' is identical to default`, () => {
+        const d: DefaultsConfig = {
+          ...defaults,
+          shimRuntime: { search: "node", image: "node", browser: "node" },
+        } as DefaultsConfig;
+        const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry!.command).toBe("clawcode");
+        expect(entry!.args).toEqual([`${type}-mcp`]);
+      });
+
+      it(`${type}: 'static' rewrites to /opt/clawcode/bin/clawcode-mcp-shim --type ${type}`, () => {
+        const d: DefaultsConfig = {
+          ...defaults,
+          shimRuntime: {
+            search: type === "search" ? "static" : "node",
+            image: type === "image" ? "static" : "node",
+            browser: type === "browser" ? "static" : "node",
+          },
+        } as DefaultsConfig;
+        const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry).toBeDefined();
+        expect(entry!.command).toBe(STATIC_PATH);
+        expect(entry!.args).toEqual(["--type", type]);
+        // CLAWCODE_AGENT env passthrough preserved across all runtimes —
+        // the inner translator still needs the agent identity. Phase 110
+        // Stage 0b adds CLAWCODE_MANAGER_SOCK as defense-in-depth so a
+        // future relocation of MANAGER_DIR cannot silently break shim
+        // children spawned with the old default baked in.
+        expect(entry!.env).toEqual({
+          CLAWCODE_AGENT: "test",
+          CLAWCODE_MANAGER_SOCK: expect.stringMatching(
+            /\.clawcode\/manager\/clawcode\.sock$/,
+          ),
+        });
+      });
+
+      it(`${type}: 'python' rewrites to python3 /opt/clawcode/bin/clawcode-mcp-shim.py --type ${type}`, () => {
+        const d: DefaultsConfig = {
+          ...defaults,
+          shimRuntime: {
+            search: type === "search" ? "python" : "node",
+            image: type === "image" ? "python" : "node",
+            browser: type === "browser" ? "python" : "node",
+          },
+        } as DefaultsConfig;
+        const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+        const entry = resolved.mcpServers.find((s) => s.name === type);
+        expect(entry).toBeDefined();
+        expect(entry!.command).toBe("python3");
+        expect(entry!.args).toEqual([PYTHON_PATH, "--type", type]);
+        expect(entry!.env).toEqual({
+          CLAWCODE_AGENT: "test",
+          CLAWCODE_MANAGER_SOCK: expect.stringMatching(
+            /\.clawcode\/manager\/clawcode\.sock$/,
+          ),
+        });
+      });
+    }
+
+    it("env injection: node runtime gets CLAWCODE_AGENT only (no CLAWCODE_MANAGER_SOCK — Node imports the daemon constant directly)", () => {
+      const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      expect(search!.env).toEqual({ CLAWCODE_AGENT: "test" });
+      expect(search!.env).not.toHaveProperty("CLAWCODE_MANAGER_SOCK");
+    });
+
+    // Phase 110 Stage 0b — per-agent shimRuntime override (Plan 110-05's
+    // canary rollout primitive). Loader resolution order: per-agent →
+    // defaults → "node". The per-agent path survives agent-restart, which
+    // the inline-mcpServers workaround did not (cause of the 2026-05-06
+    // admin-clawdy canary regression at 09:14:57 — agent-restart spawned
+    // Node search-mcp instead of honoring the operator-added inline
+    // override).
+    it("per-agent override: agent.shimRuntime.search='static' beats defaults (defaults left at node)", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "static" },
+      };
+      const resolved = resolveAgentConfig(a, defaults, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      expect(search!.command).toBe(STATIC_PATH);
+      expect(search!.args).toEqual(["--type", "search"]);
+      // Other types fall through to defaults (node).
+      const image = resolved.mcpServers.find((s) => s.name === "image");
+      expect(image!.command).toBe("clawcode");
+      expect(image!.args).toEqual(["image-mcp"]);
+    });
+
+    it("per-agent override: agent.shimRuntime.search='node' beats defaults.shimRuntime.search='static' (operator force-back-to-node)", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "node" },
+      };
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(a, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      // Per-agent "node" wins over defaults "static" — operator can opt
+      // a single agent OUT of a fleet-wide canary.
+      expect(search!.command).toBe("clawcode");
+      expect(search!.args).toEqual(["search-mcp"]);
+      // Env: node runtime → no CLAWCODE_MANAGER_SOCK.
+      expect(search!.env).not.toHaveProperty("CLAWCODE_MANAGER_SOCK");
+    });
+
+    it("per-agent override: partial — only search overridden, image/browser fall through to defaults", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "static" },
+      };
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "node", image: "python", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(a, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      const image = resolved.mcpServers.find((s) => s.name === "image");
+      const browser = resolved.mcpServers.find((s) => s.name === "browser");
+      // Per-agent: search → static
+      expect(search!.command).toBe(STATIC_PATH);
+      // Defaults: image → python (per-agent didn't set image)
+      expect(image!.command).toBe("python3");
+      // Defaults: browser → node
+      expect(browser!.command).toBe("clawcode");
+    });
+
+    it("per-agent override: env injection respects per-agent runtime, not defaults", () => {
+      const a: AgentConfig = {
+        ...baseAgent,
+        shimRuntime: { search: "static" },
+      };
+      const resolved = resolveAgentConfig(a, defaults, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      // Static runtime via per-agent → CLAWCODE_MANAGER_SOCK injected.
+      expect(search!.env).toMatchObject({
+        CLAWCODE_AGENT: "test",
+        CLAWCODE_MANAGER_SOCK: expect.stringMatching(
+          /\.clawcode\/manager\/clawcode\.sock$/,
+        ),
+      });
+    });
+
+    // Phase 110 Stage 0b — found via dev-instance smoke test 2026-05-06:
+    // when CLAWCODE_MANAGER_DIR overrides the daemon's manager dir, the
+    // loader's MANAGER_SOCKET_PATH constant MUST follow. Otherwise the
+    // daemon binds to the override path but the loader injects the
+    // canonical path into shim children, and Go shim ENOENT's → exit 75.
+    //
+    // This test runs in a child process because MANAGER_SOCKET_PATH is
+    // module-load-time evaluated; we re-import in a child with the env
+    // set to verify the override is honored.
+    it("MANAGER_SOCKET_PATH honors CLAWCODE_MANAGER_DIR env at module load (regression: dev-instance exit-75 bug)", () => {
+      // Verified end-to-end via dev daemon on claude-bot: when daemon
+      // runs with CLAWCODE_MANAGER_DIR=/tmp/foo, loader injects
+      // CLAWCODE_MANAGER_SOCK=/tmp/foo/clawcode.sock (not the canonical
+      // ~/.clawcode/manager/clawcode.sock) so children dial the actual
+      // bound socket. The loader's _managerDirForSocket helper at module
+      // load uses the same process.env.CLAWCODE_MANAGER_DIR fallback as
+      // daemon.ts MANAGER_DIR, keeping both in lockstep.
+      //
+      // Direct re-import-with-different-env testing requires vm sandboxing
+      // which is overkill here; the integration coverage is the dev
+      // daemon test in tests/integration/dev-instance.test.ts (manual or
+      // CI-gated) plus the live-daemon smoke at runtime. This unit test
+      // pins the contract via source-grep: the constant MUST consult
+      // process.env.CLAWCODE_MANAGER_DIR.
+      const loaderSrc = require("node:fs").readFileSync(
+        require("node:path").join(__dirname, "..", "loader.ts"),
+        "utf8",
+      );
+      expect(loaderSrc).toMatch(/CLAWCODE_MANAGER_DIR/);
+      expect(loaderSrc).toMatch(
+        /MANAGER_SOCKET_PATH\s*=\s*join\(_managerDirForSocket,\s*"clawcode\.sock"\)/,
+      );
+    });
+
+    it("env injection: alternate-runtime CLAWCODE_MANAGER_SOCK matches daemon SOCKET_PATH suffix (must stay aligned with src/manager/daemon.ts:SOCKET_PATH and Go side default at internal/shim/ipc/client.go:SocketPath)", () => {
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      expect(search!.env!.CLAWCODE_MANAGER_SOCK).toMatch(
+        /\.clawcode\/manager\/clawcode\.sock$/,
+      );
+      // Pin: the file basename MUST be `clawcode.sock`, not `manager.sock`.
+      // The 2026-05-06 admin-clawdy canary failure was caused by the Go
+      // shim's default being `manager.sock` — guard against future drift.
+      expect(search!.env!.CLAWCODE_MANAGER_SOCK).not.toMatch(/manager\.sock$/);
+    });
+
+    it("per-type independence: search=static, image=node, browser=python yields three different commands", () => {
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "python" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      const image = resolved.mcpServers.find((s) => s.name === "image");
+      const browser = resolved.mcpServers.find((s) => s.name === "browser");
+
+      expect(search!.command).toBe(STATIC_PATH);
+      expect(search!.args).toEqual(["--type", "search"]);
+
+      expect(image!.command).toBe("clawcode");
+      expect(image!.args).toEqual(["image-mcp"]);
+
+      expect(browser!.command).toBe("python3");
+      expect(browser!.args).toEqual([PYTHON_PATH, "--type", "browser"]);
+    });
+
+    it("static-runtime config does NOT pre-detect missing binary or fall back (loader is fail-loud)", () => {
+      // The loader emits the static path even though the binary doesn't
+      // exist on this CI host. Pre-detection + fallback would silently
+      // degrade — operator-locked decision is to surface spawn errors
+      // directly so the operator notices and reverts the flag.
+      const d: DefaultsConfig = {
+        ...defaults,
+        shimRuntime: { search: "static", image: "node", browser: "node" },
+      } as DefaultsConfig;
+      const resolved = resolveAgentConfig(baseAgent, d, sharedMcpServers);
+      const search = resolved.mcpServers.find((s) => s.name === "search");
+      // Static path emitted unconditionally — no fs.existsSync check, no
+      // fallback to "clawcode search-mcp".
+      expect(search!.command).toBe(STATIC_PATH);
+      expect(search!.args).toEqual(["--type", "search"]);
+      expect(search!.command).not.toBe("clawcode");
+    });
+  });
+
+  // Phase 108 — 1Password broker shim auto-inject. The pre-Phase-108 path
+  // spawned `npx @takescake/1password-mcp` directly per-agent (11 children
+  // for 11 agents). Plan 04 rewires the auto-inject to spawn the broker
+  // shim instead; the daemon-managed broker owns ONE pooled MCP child per
+  // unique service-account token.
+  describe("Phase 108 — 1password broker shim auto-inject", () => {
+    const PRIOR_TOKEN = process.env.OP_SERVICE_ACCOUNT_TOKEN;
+    const TEST_TOKEN = "ops_TEST_PHASE108_TOKEN_LITERAL";
+
+    beforeEach(() => {
+      process.env.OP_SERVICE_ACCOUNT_TOKEN = TEST_TOKEN;
+    });
+    afterEach(() => {
+      if (PRIOR_TOKEN === undefined) delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+      else process.env.OP_SERVICE_ACCOUNT_TOKEN = PRIOR_TOKEN;
+    });
+
+    it("108-LOAD-1: 1password auto-inject uses broker shim command (not direct npx)", () => {
+      const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+      const op = resolved.mcpServers.find((s) => s.name === "1password");
+      expect(op).toBeDefined();
+      expect(op!.command).toBe("clawcode");
+      expect(op!.args).toEqual(["mcp-broker-shim", "--pool", "1password"]);
+      // Token literal still flows through env so the shim can hash + the
+      // broker can spawn the pool child with it.
+      expect(op!.env?.OP_SERVICE_ACCOUNT_TOKEN).toBe(TEST_TOKEN);
+      // Pre-Phase-108 npx invocation MUST NOT appear.
+      expect(op!.command).not.toBe("npx");
+      expect(op!.args).not.toContain("@takescake/1password-mcp@latest");
+    });
+
+    it("108-LOAD-2: shim env carries CLAWCODE_AGENT for audit logging (decision §5)", () => {
+      const clawdy = { ...baseAgent, name: "clawdy" };
+      const rubi = { ...baseAgent, name: "rubi" };
+      const resolvedClawdy = resolveAgentConfig(clawdy, defaults, sharedMcpServers);
+      const resolvedRubi = resolveAgentConfig(rubi, defaults, sharedMcpServers);
+      expect(resolvedClawdy.mcpServers.find((s) => s.name === "1password")!.env)
+        .toEqual({ OP_SERVICE_ACCOUNT_TOKEN: TEST_TOKEN, CLAWCODE_AGENT: "clawdy" });
+      expect(resolvedRubi.mcpServers.find((s) => s.name === "1password")!.env)
+        .toEqual({ OP_SERVICE_ACCOUNT_TOKEN: TEST_TOKEN, CLAWCODE_AGENT: "rubi" });
+    });
+
+    it("108-LOAD-3: omits 1password auto-inject when OP_SERVICE_ACCOUNT_TOKEN is unset", () => {
+      delete process.env.OP_SERVICE_ACCOUNT_TOKEN;
+      const resolved = resolveAgentConfig(baseAgent, defaults, sharedMcpServers);
+      expect(resolved.mcpServers.find((s) => s.name === "1password")).toBeUndefined();
+    });
+
+    it("108-LOAD-4: preserves user-specified '1password' mcpServer entry (no overwrite)", () => {
+      const custom = {
+        name: "1password",
+        command: "mycustom",
+        args: ["--flag"],
+        env: { CUSTOM: "x" },
+        optional: false,
+      };
+      const agent = {
+        ...baseAgent,
+        mcpServers: [custom] as Array<string | { name: string; command: string; args: string[]; env: Record<string, string>; optional: boolean }>,
+      };
+      const resolved = resolveAgentConfig(agent, defaults, sharedMcpServers);
+      const op = resolved.mcpServers.find((s) => s.name === "1password");
+      expect(op).toBeDefined();
+      expect(op!.command).toBe("mycustom");
+      expect(op!.args).toEqual(["--flag"]);
+      expect(op!.env).toEqual({ CUSTOM: "x" });
+    });
   });
 });
 
@@ -1128,6 +1698,8 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
   const defaults: DefaultsConfig = {
     model: "sonnet",
     effort: "low" as const,
+    // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+    outputDir: "outputs/{date}/",
     // Phase 86 MODEL-01 — test fixture mirrors the defaultsSchema default.
     allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
     // Phase 89 GREET-07/10 — zod defaults these to true / 300_000 in defaultsSchema.
@@ -1135,11 +1707,16 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     greetCoolDownMs: 300_000,
     // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
     memoryAutoLoad: true,
-    memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+    memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
+    cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
     clawhubBaseUrl: "https://clawhub.ai",
@@ -1147,7 +1724,7 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
     skills: [],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
-    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
@@ -1189,6 +1766,14 @@ describe("resolveAgentConfig - MCP env var interpolation", () => {
       timeoutMs: 60000,
       workspaceSubdir: "generated-images",
     },
+    // Phase 95 — fleet-wide dream defaults mirror defaultsSchema.
+    dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+    // Phase 96 D-05 — fleet-wide fileAccess defaults.
+    fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
   };
 
   afterEach(() => {
@@ -1529,17 +2114,24 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
     return {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
       allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
       // Phase 89 — zod defaults these to true / 300_000 in defaultsSchema
       greetOnRestart: true,
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
-      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
+    cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
@@ -1547,7 +2139,7 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",
-      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
       heartbeat: {
         enabled: true,
         intervalSeconds: 60,
@@ -1589,6 +2181,14 @@ describe("Phase 89 GREET-07/GREET-10 schema additions", () => {
         timeoutMs: 60000,
         workspaceSubdir: "generated-images",
       },
+      // Phase 95 — fleet-wide dream defaults mirror defaultsSchema.
+      dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+      // Phase 96 D-05 — fleet-wide fileAccess defaults.
+      fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
     };
   }
 
@@ -1669,16 +2269,23 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
     return {
       model: "sonnet",
       effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
       allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
       greetOnRestart: true,
       greetCoolDownMs: 300_000,
       // Phase 90 MEM-01 — zod defaults this to true in defaultsSchema.
       memoryAutoLoad: true,
-      memoryRetrievalTokenBudget: 2000, // Phase 90 MEM-03
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3 (was 2000 pre-115)
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
+    excludeDynamicSections: true, // Phase 115 sub-scope 2
+    cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
       memoryRetrievalTopK: 5, // Phase 90 MEM-03
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
     // Phase 94 TOOL-10 — fleet-wide directives (D-09 file-sharing + D-07 cross-agent-routing).
     systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
       clawhubBaseUrl: "https://clawhub.ai",
@@ -1686,7 +2293,7 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
       skills: [],
       basePath: "~/.clawcode/agents",
       skillsPath: "~/.clawcode/skills",
-      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
       heartbeat: {
         enabled: true,
         intervalSeconds: 60,
@@ -1728,6 +2335,14 @@ describe("Phase 90 MEM-01 memoryAutoLoad resolver fallback", () => {
         timeoutMs: 60000,
         workspaceSubdir: "generated-images",
       },
+      // Phase 95 — fleet-wide dream defaults mirror defaultsSchema.
+      dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+      // Phase 96 D-05 — fleet-wide fileAccess defaults.
+      fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
     };
   }
 
@@ -1846,14 +2461,32 @@ describe("resolveSystemPromptDirectives (Phase 94 TOOL-10)", () => {
     expect(out).toEqual([]);
   });
 
-  it("LR-RESOLVE-DEFAULT-CONST-MATCHES: against the exported DEFAULT_SYSTEM_PROMPT_DIRECTIVES constant, both directives are enabled by default", () => {
+  it("LR-RESOLVE-DEFAULT-CONST-MATCHES: against the exported DEFAULT_SYSTEM_PROMPT_DIRECTIVES constant, all default directives are enabled by default", () => {
     const out = resolveSystemPromptDirectives(
       undefined,
       DEFAULT_SYSTEM_PROMPT_DIRECTIVES,
     );
+    // Phase 99 added subagent-routing; Phase 100-fu added
+    // memory-recall-before-uncertainty, propose-alternatives,
+    // long-output-to-file, and verify-file-writes; Phase 999.1 added
+    // freshness, derivative-work, trusted-operator, discord-format;
+    // Phase 999.22 added mutate-verify; Phase 115 Plan 08 T02
+    // (sub-scope 17c) adds parallel-tool-calls. Sorted alphabetically
+    // by key for prompt-cache hash determinism.
     expect(out.map((d) => d.key)).toEqual([
       "cross-agent-routing",
+      "derivative-work",
+      "discord-format",
       "file-sharing",
+      "freshness",
+      "long-output-to-file",
+      "memory-recall-before-uncertainty",
+      "mutate-verify",
+      "parallel-tool-calls",
+      "propose-alternatives",
+      "subagent-routing",
+      "trusted-operator",
+      "verify-file-writes",
     ]);
     // D-09 file-sharing verbatim text reaches the resolver output
     const fs = out.find((d) => d.key === "file-sharing");
@@ -1872,5 +2505,692 @@ describe("renderSystemPromptDirectiveBlock (Phase 94 TOOL-10)", () => {
       { key: "b", text: "Second." },
     ]);
     expect(block).toBe("First.\n\nSecond.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 100 — settingSources + gsd resolution (Plan 100-01 Task 2)
+//
+// Tests resolveAgentConfig's handling of two new additive-optional fields:
+//   - settingSources: ALWAYS populated; defaults to ["project"] when omitted.
+//   - gsd: UNDEFINED when agent.gsd.projectDir is unset; expandHome'd when set.
+//
+// Tests pin:
+//   LR1   omit → settingSources === ["project"]
+//   LR2   ['user','project'] mirror exactly
+//   LR3   omit gsd → gsd === undefined
+//   LR4   absolute projectDir passes through expandHome unchanged
+//   LR5   ~/path projectDir is expanded via expandHome
+//   LR6   gsd: {} (projectDir absent) → gsd === undefined
+//   LR7   resolver does NOT mutate the input agent object (immutability)
+//   LR8   multi-agent integration via resolveAllAgents
+// ---------------------------------------------------------------------------
+
+describe("Phase 100 — settingSources + gsd resolution", () => {
+  function makeDefaults(): DefaultsConfig {
+    return {
+      model: "sonnet",
+      effort: "low" as const,
+      // Phase 96 D-09 — fleet-wide outputDir template; matches DEFAULT_OUTPUT_DIR.
+      outputDir: "outputs/{date}/",
+      allowedModels: ["haiku", "sonnet", "opus"] as ("haiku" | "sonnet" | "opus")[],
+      greetOnRestart: true,
+      greetCoolDownMs: 300_000,
+      memoryAutoLoad: true,
+      memoryRetrievalTokenBudget: 1500, // Phase 115 sub-scope 3
+      memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"], // Phase 115 sub-scope 4
+      excludeDynamicSections: true, // Phase 115 sub-scope 2
+    cacheBreakpointPlacement: "static-first" as const, // Phase 115 sub-scope 5
+      memoryRetrievalTopK: 5,
+      memoryScannerEnabled: true,
+      memoryFlushIntervalMs: 900_000,
+      memoryCueEmoji: "✅",
+      autoIngestAttachments: false, // Phase 999.43 D-09
+      ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+      systemPromptDirectives: { ...DEFAULT_SYSTEM_PROMPT_DIRECTIVES },
+      clawhubBaseUrl: "https://clawhub.ai",
+      clawhubCacheTtlMs: 600_000,
+      skills: [],
+      basePath: "~/.clawcode/agents",
+      skillsPath: "~/.clawcode/skills",
+      memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
+      heartbeat: {
+        enabled: true,
+        intervalSeconds: 60,
+        checkTimeoutSeconds: 10,
+        contextFill: {
+          warningThreshold: 0.6,
+          criticalThreshold: 0.75,
+          zoneThresholds: { yellow: 0.50, orange: 0.70, red: 0.85 },
+        },
+      },
+      threads: { idleTimeoutMinutes: 1440, maxThreadSessions: 10 },
+      openai: { enabled: true, port: 3101, host: "0.0.0.0", maxRequestBodyBytes: 1048576, streamKeepaliveMs: 15000 },
+      browser: {
+        enabled: true,
+        headless: true,
+        warmOnBoot: true,
+        navigationTimeoutMs: 30000,
+        actionTimeoutMs: 10000,
+        viewport: { width: 1280, height: 720 },
+        userAgent: null,
+        maxScreenshotInlineBytes: 524288,
+      },
+      search: {
+        enabled: true,
+        backend: "brave" as const,
+        brave: { apiKeyEnv: "BRAVE_API_KEY", safeSearch: "moderate" as const, country: "us" },
+        exa: { apiKeyEnv: "EXA_API_KEY", useAutoprompt: false },
+        maxResults: 20,
+        timeoutMs: 10000,
+        fetch: { timeoutMs: 30000, maxBytes: 1048576, userAgentSuffix: null },
+      },
+      image: {
+        enabled: true,
+        backend: "openai" as const,
+        openai: { apiKeyEnv: "OPENAI_API_KEY", model: "gpt-image-1" },
+        minimax: { apiKeyEnv: "MINIMAX_API_KEY", model: "image-01" },
+        fal: { apiKeyEnv: "FAL_API_KEY", model: "fal-ai/flux-pro" },
+        maxImageBytes: 10485760,
+        timeoutMs: 60000,
+        workspaceSubdir: "generated-images",
+      },
+      dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+      fileAccess: ["/home/clawcode/.clawcode/agents/{agent}/"],
+      autoStart: true, // Phase 100 follow-up
+      // Phase 116-06 T08 — cutover redirect default. FALSE = dual-mode.
+      dashboardCutoverRedirect: false,
+      "auto-compact-at": 0.7, // Phase 124 D-06
+    };
+  }
+
+  function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+    return {
+      name: "clawdy",
+      channels: [],
+      skills: [],
+      effort: "low",
+      heartbeat: true,
+      schedules: [],
+      admin: false,
+      slashCommands: [],
+      reactions: true,
+      mcpServers: [],
+      ...overrides,
+    } as AgentConfig;
+  }
+
+  it("LR1: omitting settingSources resolves to default ['project']", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.settingSources).toEqual(["project"]);
+  });
+
+  it("LR2: agent.settingSources: ['user','project'] resolves to exactly that array (deep equal)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      settingSources: ["user", "project"] as ("project" | "user" | "local")[],
+      autoStart: true, // Phase 100 follow-up
+    });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.settingSources).toEqual(["user", "project"]);
+  });
+
+  it("LR3: omitting gsd resolves to gsd === undefined", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent();
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeUndefined();
+  });
+
+  it("LR4: absolute gsd.projectDir passes through expandHome unchanged", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+    });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeDefined();
+    expect(resolved.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+  });
+
+  it("LR5: gsd.projectDir with ~ is expanded via expandHome", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({ gsd: { projectDir: "~/projects/foo" } });
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeDefined();
+    // expandHome should replace ~ with the homedir
+    expect(resolved.gsd?.projectDir).toBe(expandHome("~/projects/foo"));
+    expect(resolved.gsd?.projectDir).not.toContain("~");
+    // It should start with the actual homedir
+    expect(resolved.gsd?.projectDir?.startsWith(homedir())).toBe(true);
+  });
+
+  it("LR6: agent.gsd: {} (projectDir absent) → gsd === undefined", () => {
+    const defaults = makeDefaults();
+    // Cast through unknown — agentSchema accepts {} but the typed fixture
+    // builder is stricter. The runtime branch we're verifying triggers when
+    // agent.gsd is set but agent.gsd.projectDir is not.
+    const agent = makeAgent({ gsd: {} } as Partial<AgentConfig>);
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.gsd).toBeUndefined();
+  });
+
+  it("LR7: resolveAgentConfig does NOT mutate the input agent object (immutability)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      settingSources: ["project", "user"] as ("project" | "user" | "local")[],
+      autoStart: true, // Phase 100 follow-up
+      gsd: { projectDir: "/opt/x" },
+    });
+    // Snapshot before resolution
+    const before = JSON.parse(JSON.stringify(agent));
+    resolveAgentConfig(agent, defaults);
+    // After resolution, the input agent must be byte-for-byte identical.
+    expect(agent).toEqual(before);
+    // Specifically: settingSources reference is preserved literally on input
+    expect(agent.settingSources).toEqual(["project", "user"]);
+    expect(agent.gsd).toEqual({ projectDir: "/opt/x" });
+  });
+
+  it("LR8: resolveAllAgents over a 3-agent fixture — only one agent carries gsd; the other two carry gsd === undefined", () => {
+    const defaults = makeDefaults();
+    const agents: AgentConfig[] = [
+      makeAgent({ name: "alpha" }),
+      makeAgent({
+        name: "beta",
+        settingSources: ["project", "user"] as ("project" | "user" | "local")[],
+        autoStart: true, // Phase 100 follow-up
+        gsd: { projectDir: "/opt/clawcode-projects/sandbox" },
+      }),
+      makeAgent({ name: "gamma" }),
+    ];
+    const config: Config = {
+      version: 1,
+      defaults,
+      agents,
+      mcpServers: {},
+    };
+    const resolved = resolveAllAgents(config);
+    expect(resolved.length).toBe(3);
+    // alpha + gamma omitted gsd → resolved gsd undefined; settingSources default
+    expect(resolved[0]?.name).toBe("alpha");
+    expect(resolved[0]?.gsd).toBeUndefined();
+    expect(resolved[0]?.settingSources).toEqual(["project"]);
+    expect(resolved[2]?.name).toBe("gamma");
+    expect(resolved[2]?.gsd).toBeUndefined();
+    expect(resolved[2]?.settingSources).toEqual(["project"]);
+    // beta carries the explicit override
+    expect(resolved[1]?.name).toBe("beta");
+    expect(resolved[1]?.gsd).toEqual({ projectDir: "/opt/clawcode-projects/sandbox" });
+    expect(resolved[1]?.settingSources).toEqual(["project", "user"]);
+  });
+});
+
+/**
+ * Phase 100 follow-up — per-agent MCP env override propagation through the
+ * resolver. The schema accepts the field; the loader must thread it through
+ * `resolveAgentConfig` into `ResolvedAgentConfig.mcpEnvOverrides` verbatim
+ * (no op:// resolution at config-load time — that's deferred to agent-start
+ * when the daemon owns the async opRead shell-out).
+ */
+describe("resolveAgentConfig - mcpEnvOverrides (Phase 100 follow-up)", () => {
+  // Reuse the production zod defaults for a minimal, schema-true fixture.
+  // Inline fields would need to track every defaults field add (currently
+  // ~25+) and break on the next milestone — defer to the schema's source
+  // of truth.
+  function makeDefaults(): DefaultsConfig {
+    return defaultsSchema.parse({});
+  }
+
+  function makeAgent(overrides: Record<string, unknown> = {}): AgentConfig {
+    return agentSchema.parse({
+      name: "fin-acquisition",
+      ...overrides,
+    });
+  }
+
+  it("MCP-LOAD-1: agent with mcpEnvOverrides → ResolvedAgentConfig carries the field verbatim (no op:// resolution at load time)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent({
+      mcpEnvOverrides: {
+        "1password": {
+          OP_SERVICE_ACCOUNT_TOKEN:
+            "op://clawdbot/Finmentum Service Account/credential",
+        },
+      },
+    });
+    const resolved = resolveAgentConfig(agent, defaults);
+    // The op:// reference passes through verbatim — agent-start path
+    // (op-env-resolver.ts) does the actual `op read` later.
+    expect(resolved.mcpEnvOverrides).toEqual({
+      "1password": {
+        OP_SERVICE_ACCOUNT_TOKEN:
+          "op://clawdbot/Finmentum Service Account/credential",
+      },
+    });
+  });
+
+  it("MCP-LOAD-2: agent without mcpEnvOverrides → ResolvedAgentConfig.mcpEnvOverrides is undefined (back-compat)", () => {
+    const defaults = makeDefaults();
+    const agent = makeAgent(); // no mcpEnvOverrides
+    const resolved = resolveAgentConfig(agent, defaults);
+    expect(resolved.mcpEnvOverrides).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — DELEG (renderer + canonical text)
+//
+// Wave 0 RED tests. These FAIL on current main because:
+//   - `renderDelegatesBlock`, `DELEGATES_DIRECTIVE_HEADER`, and
+//     `DELEGATES_DIRECTIVE_FOOTER` do not exist yet (Plan 01 adds them next
+//     to `renderSystemPromptDirectiveBlock` at loader.ts:672).
+//
+// Imports are dynamic via `await import(...)` so this file still parses on
+// main even before the symbols land — the test bodies themselves fail.
+// Plan 01 replaces the dynamic-import scaffolding once the symbols ship.
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — DELEG renderer + canonical text", () => {
+  // Verbatim from PLAN.md <canonical_text>. NEVER paraphrase — these are the
+  // source of truth pinned by the static-grep regression test
+  // `delegates-canonical-text` below.
+  const EXPECTED_HEADER =
+    "## Specialist Delegation\nFor tasks matching a specialty below, delegate via the spawn-subagent-thread skill:";
+  const EXPECTED_FOOTER =
+    "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.";
+
+  it("delegates-canonical-text: DELEGATES_DIRECTIVE_HEADER + FOOTER constants match canonical text byte-exactly", async () => {
+    const mod = await import("../loader.js");
+    expect(mod.DELEGATES_DIRECTIVE_HEADER).toBe(EXPECTED_HEADER);
+    expect(mod.DELEGATES_DIRECTIVE_FOOTER).toBe(EXPECTED_FOOTER);
+  });
+
+  it("renderDelegatesBlock-undefined: returns '' exactly", async () => {
+    const mod = await import("../loader.js");
+    const out = mod.renderDelegatesBlock(undefined);
+    expect(out).toBe("");
+  });
+
+  it("renderDelegatesBlock-empty: {} returns '' exactly (no header, no whitespace)", async () => {
+    const mod = await import("../loader.js");
+    const out = mod.renderDelegatesBlock({});
+    expect(out).toBe("");
+  });
+
+  it("renderDelegatesBlock-single: { research: 'fin-research' } produces canonical 3-line block byte-exactly", async () => {
+    const mod = await import("../loader.js");
+    const out = mod.renderDelegatesBlock({ research: "fin-research" });
+    const expected = [
+      "## Specialist Delegation",
+      "For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:",
+      "- research → fin-research",
+      "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.",
+    ].join("\n");
+    expect(out).toBe(expected);
+  });
+
+  it("renderDelegatesBlock-multi-specialty (DELEG-04): bullets sorted alphabetically", async () => {
+    const mod = await import("../loader.js");
+    const out = mod.renderDelegatesBlock({
+      research: "r1",
+      coding: "c1",
+      legal: "l1",
+    });
+    // Alphabetical: coding, legal, research
+    const expected = [
+      "## Specialist Delegation",
+      "For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:",
+      "- coding → c1",
+      "- legal → l1",
+      "- research → r1",
+      "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.",
+    ].join("\n");
+    expect(out).toBe(expected);
+  });
+
+  it("renderDelegatesBlock-deterministic: byte-identical output regardless of insertion order (Pitfall 2)", async () => {
+    const mod = await import("../loader.js");
+    // Build the same logical record via two different insertion orders.
+    const order1 = Object.fromEntries([
+      ["b", "B"],
+      ["a", "A"],
+    ]);
+    const order2 = Object.fromEntries([
+      ["a", "A"],
+      ["b", "B"],
+    ]);
+    const out1 = mod.renderDelegatesBlock(order1);
+    const out2 = mod.renderDelegatesBlock(order2);
+    expect(out1).toBe(out2);
+    // Both must contain bullets in alphabetical order (a then b)
+    const aIdx = out1.indexOf("- a → A");
+    const bIdx = out1.indexOf("- b → B");
+    expect(aIdx).toBeGreaterThan(-1);
+    expect(bIdx).toBeGreaterThan(-1);
+    expect(aIdx).toBeLessThan(bIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 110 Stage 0a — defaults.shimRuntime + defaults.brokers parse
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — Phase 110 Stage 0a schema additions", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-stage0a-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses defaults.shimRuntime with explicit `node` for all three sub-fields", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  shimRuntime:
+    search: node
+    image: node
+    browser: node
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    // Cast through unknown — the inferred Config type does not yet expose
+    // the new field on the public surface; the schema parses it.
+    const sr = (config.defaults as unknown as {
+      shimRuntime?: { search: string; image: string; browser: string };
+    }).shimRuntime;
+    expect(sr).toEqual({ search: "node", image: "node", browser: "node" });
+  });
+
+  it("rejects defaults.shimRuntime.search with an unknown enum value", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  shimRuntime:
+    search: rust
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("parses defaults.brokers with a single entry and default-bearing fields", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  brokers:
+    "1password":
+      enabled: true
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const brokers = (config.defaults as unknown as {
+      brokers?: Record<
+        string,
+        {
+          enabled: boolean;
+          maxConcurrent: number;
+          spawnArgs: string[];
+          env: Record<string, string>;
+          drainOnIdleMs: number;
+        }
+      >;
+    }).brokers;
+    expect(brokers).toBeDefined();
+    expect(brokers!["1password"]).toEqual({
+      enabled: true,
+      // Defaults from brokerEntrySchema fire when omitted.
+      maxConcurrent: 4,
+      spawnArgs: [],
+      env: {},
+      drainOnIdleMs: 0,
+    });
+  });
+
+  it("omitting both shimRuntime and brokers leaves the defaults block parsing unchanged (back-compat)", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    expect(
+      (config.defaults as unknown as { shimRuntime?: unknown }).shimRuntime,
+    ).toBeUndefined();
+    expect(
+      (config.defaults as unknown as { brokers?: unknown }).brokers,
+    ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.X — defaults.subagentReaper schema parse + defaults
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — defaults.subagentReaper", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-subagent-reaper-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses an explicit subagentReaper block end-to-end", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper:
+    mode: alert
+    idleTimeoutMinutes: 60
+    minAgeSeconds: 120
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sr = (config.defaults as unknown as {
+      subagentReaper?: {
+        mode: string;
+        idleTimeoutMinutes: number;
+        minAgeSeconds: number;
+      };
+    }).subagentReaper;
+    expect(sr).toEqual({
+      mode: "alert",
+      idleTimeoutMinutes: 60,
+      minAgeSeconds: 120,
+    });
+  });
+
+  it("default-fills mode/idleTimeoutMinutes/minAgeSeconds when partial", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper: {}
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sr = (config.defaults as unknown as {
+      subagentReaper?: {
+        mode: string;
+        idleTimeoutMinutes: number;
+        minAgeSeconds: number;
+      };
+    }).subagentReaper;
+    expect(sr).toEqual({
+      mode: "reap",
+      idleTimeoutMinutes: 1440,
+      minAgeSeconds: 300,
+    });
+  });
+
+  it("rejects an unknown mode value", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper:
+    mode: nuclear
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("rejects negative idleTimeoutMinutes", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentReaper:
+    idleTimeoutMinutes: -1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("omitting subagentReaper leaves the field undefined (back-compat)", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    expect(
+      (config.defaults as unknown as { subagentReaper?: unknown }).subagentReaper,
+    ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.25 — defaults.subagentCompletion schema parse + defaults
+// ---------------------------------------------------------------------------
+
+describe("loadConfig — defaults.subagentCompletion", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "clawcode-subagent-completion-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses an explicit subagentCompletion block end-to-end", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentCompletion:
+    enabled: false
+    quiescenceMinutes: 10
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sc = (config.defaults as unknown as {
+      subagentCompletion?: { enabled: boolean; quiescenceMinutes: number };
+    }).subagentCompletion;
+    expect(sc).toEqual({ enabled: false, quiescenceMinutes: 10 });
+  });
+
+  it("default-fills enabled=true / quiescenceMinutes=5 when partial", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentCompletion: {}
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    const sc = (config.defaults as unknown as {
+      subagentCompletion?: { enabled: boolean; quiescenceMinutes: number };
+    }).subagentCompletion;
+    expect(sc).toEqual({ enabled: true, quiescenceMinutes: 5 });
+  });
+
+  it("rejects negative quiescenceMinutes", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+defaults:
+  subagentCompletion:
+    quiescenceMinutes: -1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    await expect(loadConfig(configPath)).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("omitting subagentCompletion leaves the field undefined (back-compat)", async () => {
+    const configPath = join(tempDir, "clawcode.yaml");
+    await writeFile(
+      configPath,
+      `version: 1
+agents:
+  - name: a
+    channels: ["1234567890123456"]
+`,
+    );
+    const config = await loadConfig(configPath);
+    expect(
+      (config.defaults as unknown as { subagentCompletion?: unknown })
+        .subagentCompletion,
+    ).toBeUndefined();
   });
 });

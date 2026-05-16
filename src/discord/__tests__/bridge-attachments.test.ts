@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
 import type { Message, Collection, Attachment } from "discord.js";
 import type { DownloadResult, AttachmentInfo } from "../attachment-types.js";
 
@@ -183,9 +184,15 @@ describe("handleMessage attachment integration", () => {
   const mockStreamFromAgent = vi.fn();
   const mockGetAgentConfig = vi.fn();
 
+  // Plan 117-09 — `sessionManager.advisorEvents` (added in 117-04) is now
+  // consumed by the bridge. Supply a real EventEmitter so the listener
+  // registration in streamAndPostResponse does not throw.
+  const fakeAdvisorEvents = new EventEmitter();
+
   const fakeSessionManager = {
     streamFromAgent: mockStreamFromAgent,
     getAgentConfig: mockGetAgentConfig,
+    advisorEvents: fakeAdvisorEvents,
   };
 
   const fakeRoutingTable = {
@@ -213,7 +220,7 @@ describe("handleMessage attachment integration", () => {
 
   it("resolves agent workspace and downloads attachments to {workspace}/inbox/attachments/", async () => {
     const bridge = new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: fakeSessionManager as any,
       botToken: "fake-token",
       log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as any,
@@ -240,7 +247,7 @@ describe("handleMessage attachment integration", () => {
 
   it("does NOT call attachment module when message has no attachments", async () => {
     const bridge = new DiscordBridge({
-      routingTable: fakeRoutingTable,
+      routingTableRef: { current: fakeRoutingTable },
       sessionManager: fakeSessionManager as any,
       botToken: "fake-token",
       log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as any,

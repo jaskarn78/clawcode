@@ -6,6 +6,8 @@ import { WorkspaceError } from "../shared/errors.js";
 import {
   DEFAULT_SOUL,
   DEFAULT_IDENTITY_TEMPLATE,
+  DEFAULT_MEMORY_TEMPLATE,
+  HOMELAB_POINTER_LINE,
   renderIdentity,
 } from "../config/defaults.js";
 import { resolveContent } from "../config/loader.js";
@@ -81,6 +83,46 @@ export async function createWorkspace(
       logger.debug({ agent: name, file: "IDENTITY.md" }, "wrote default IDENTITY.md");
     } else {
       logger.debug({ agent: name, file: "IDENTITY.md" }, "preserving existing IDENTITY.md");
+    }
+
+    // MEMORY.md logic — Phase 999.47 SC-5 forward path.
+    // Mirrors SOUL.md/IDENTITY.md idempotency: only write the default template
+    // when the file does NOT yet exist. MEMORY.md is operator- and
+    // dreaming-writable (see src/memory/types.ts:97 "Phase 95 dreaming
+    // consolidation"), so we MUST preserve existing content on re-runs.
+    //
+    // When an agent ALREADY has a MEMORY.md (e.g. seeded by
+    // scripts/homelab/seed-memory-pointer.sh, or hand-edited by the operator)
+    // we ensure the pointer line is present without otherwise touching the
+    // file — same idempotent append the seeder uses, but in-process.
+    const memoryPath = join(workspace, "MEMORY.md");
+    if (!(await fileExists(memoryPath))) {
+      await writeFile(memoryPath, DEFAULT_MEMORY_TEMPLATE, "utf-8");
+      filesWritten.push(memoryPath);
+      logger.debug(
+        { agent: name, file: "MEMORY.md" },
+        "wrote default MEMORY.md with homelab pointer (Phase 999.47 SC-5)",
+      );
+    } else {
+      const { readFile, appendFile } = await import("node:fs/promises");
+      const existing = await readFile(memoryPath, "utf-8");
+      if (existing.includes(HOMELAB_POINTER_LINE)) {
+        logger.debug(
+          { agent: name, file: "MEMORY.md" },
+          "preserving existing MEMORY.md (pointer already present)",
+        );
+      } else {
+        // Append the pointer line idempotently. Preserve the original body;
+        // ensure a trailing newline before append so the line is on its own
+        // markdown list line.
+        const prefix = existing.endsWith("\n") ? "" : "\n";
+        await appendFile(memoryPath, `${prefix}${HOMELAB_POINTER_LINE}\n`, "utf-8");
+        filesWritten.push(memoryPath);
+        logger.debug(
+          { agent: name, file: "MEMORY.md" },
+          "appended homelab pointer to existing MEMORY.md (Phase 999.47 SC-5)",
+        );
+      }
     }
 
     return {

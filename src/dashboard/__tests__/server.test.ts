@@ -248,6 +248,26 @@ describe("Dashboard Server", () => {
     const res = await fetch(`http://127.0.0.1:${port}/app.js`);
     expect(res.headers.get("content-type")).toContain("application/javascript");
   });
+
+  // Phase 999.8 Plan 02 follow-up — graph-color.js is the ESM module
+  // imported by graph.html. The script type="module" import resolves to
+  // /graph-color.js (relative to /graph). Without this server route the
+  // entire graph script block silently 404s, leaving the canvas blank
+  // and the menu wiring inert. Caught in prod 2026-04-30.
+  it("GET /graph-color.js returns JavaScript with nodeClr export", async () => {
+    const result = await startDashboardServer({
+      port,
+      socketPath: "/tmp/test.sock",
+      pollIntervalMs: 60_000,
+    });
+    closeServer = result.close;
+
+    const res = await fetch(`http://127.0.0.1:${port}/graph-color.js`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/javascript");
+    const body = await res.text();
+    expect(body).toContain("export function nodeClr");
+  });
 });
 
 // ── APPENDED BY Phase 50-00 Wave 0 scaffolding ───────────────────────────────

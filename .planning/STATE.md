@@ -1,46 +1,215 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: v2.6 milestone complete
-stopped_at: Completed 95-03-PLAN.md (Phase 95 SHIP-READY — v2.6 milestone closed)
-last_updated: "2026-04-25T08:55:26.096Z"
-last_activity: 2026-04-25
+milestone: v3.0
+milestone_name: Architectural Surface Expansion + Operator-Pain Backlog
+status: v3.0 + v3.1 BOTH OPEN; Phase 999.43 SHIPPED LIVE on clawdy (auto-ingest Discord attachments + two-axis priority — all 9 SC met, real Discord upload UAT'd); Phase 101 SHIPPED-WITH-CARRYOVERS (RAG engine live, SC-8 PARTIAL pending operator real-truth Pon fixture); Phase 999.47 SHIPPED LIVE; Phase 136 ready for discuss-phase
+stopped_at: Phase 999.43 SHIPPED (5 plans closed; SC-A..SC-I all MET; 32 MCP tools live including clawcode_rag_set_priority; documents-table populated by both real Discord upload + synthetic IPC UAT; 24h soak underway from 15:39 PDT)
+last_updated: "2026-05-16T22:50:00.000Z"
+last_activity: 2026-05-16 -- Phase 999.43 SHIPPED LIVE. Operator authorized deploy + chose Claude-driven UAT. Real Discord upload (image0.jpg by jjagpal at 15:36:45) auto-ingested through the full bridge → IPC → Phase 101 engine path — proves SC-I end-to-end on the deployed daemon. Synthetic IPC UAT at 15:39:25 confirms D-01 multipliers verbatim (agent_weight=1.5 from yaml HIGH, content_weight=0.5 from PDF<100KB LOW). Documents-table provenance row landed with all 8 D-04 fields. Two findings: (1) autoIngestAttachments hot-reload bug — workaround restart; Phase 999.43-fu candidate; (2) synthetic ASCII PDFs fail pdf-parse — use reportlab for fixtures. Daemon live at pid 3792248. Zero new npm/apt deps. Deploy-script Phase 101-fu hardenings verified active.
 progress:
-  total_phases: 8
-  completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
+  total_phases: 83
+  completed_phases: 27
+  total_plans: 159
+  completed_plans: 154
+  percent: 33
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-23 after v2.2 milestone completion)
+See: .planning/PROJECT.md (updated 2026-05-15 — v3.0 opened, v3.1 proposed, v2.9 deploy_pending)
 
-**Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace -- communicating naturally through Discord channels without manual orchestration overhead.
-**Current focus:** Phase 95 — memory-dreaming-autonomous-reflection-and-consolidation
+**Core value:** Persistent, intelligent AI agents that each maintain their own identity, memory, and workspace — communicating naturally through Discord channels without manual orchestration overhead.
+
+**Current focus:** Phase 127 Plan 01 execution (v3.0 Wave 1 next) + Phase 136 LlmRuntimeService seam (v3.1 Wave 1 hard-deadline track, 31 days until 2026-06-15 Anthropic cutover)
 
 ## Current Position
 
-Phase: 95
-Plan: Not started
+**v3.0 Wave 1 (in progress):**
+
+- Phase 126: Plans 01 + 02 SHIPPED (commit `ae3764d`); Plan 03 operator-deploy-gated
+- Phase 127 (stream stall timeout): **Plan 01 SHIPPED local** (6 commits `3db91d5`..`28576a4`). Plan 02 ready for dispatch (daemon-side Discord notification + session-log row + integration test STALL-04). Plan 03 deploy-gated.
+- Phase 128 (clawcode usage accuracy): PARKED 2026-05-15 — SDK pull API absent, fallback hacky. See `.planning/phases/128-clawcode-usage-accuracy-fixes/128-CONTEXT.md` § PARKED for revival trigger.
+- Phase 129 (clawcode status fallbacks): DEFERRED 2026-05-15 — no operator-observable scope. See `.planning/ROADMAP.md` § Phase 129 for revival trigger.
+- Phase 130 (manifest plugin SDK): BACKLOG only — needs discuss-phase
+- Phase 131 (tmux skill port): BACKLOG only — needs discuss-phase
+- Phase 132 (autonomous skill creation): BACKLOG only — needs discuss-phase
+- Phase 133 (clawcode as MCP server): BACKLOG only — needs discuss-phase
+- Phase 134 (MCP broker hot-reload): DEFERRED pending Plan 94-08
+- Phase 135 (Discord voice channel): BACKLOG only — large port, deferred to end of milestone
+
+**v3.1 Wave 1 (parallel — opening 2026-05-15):**
+
+- Phase 136 (LlmRuntimeService seam + AnthropicAgentSdk backend extraction): READY TO START — `/gsd-discuss-phase 136` next; anchor BACKLOG at `.planning/phases/136-llm-runtime-multi-backend/BACKLOG.md`
+- Phase 137 (AnthropicApiKey backend): blocked by 136
+- Phase 138 (Credit telemetry + failover): blocked by 137
+
+**Hard deadline:** 2026-06-15 (31 days). Phases 136/137/138 must merge before that to retain ClawCode affordability under Anthropic's new Agent SDK credit policy.
+
+## Phase 127 — Detailed status
+
+**CONTEXT.md committed (`5414ad3`):** D-01..D-10 locked. D-07 (advisor pause vs threshold-cushion) deferred to plan-research; for now per-model 300000ms Opus override is the fallback.
+
+**3 plans committed (`d8e5b00`):**
+
+- **Plan 01 (autonomous, wave 1) — SHIPPED LOCAL 2026-05-15:** schema + type cascade + loader resolver (phase127-resolver log) + stream-stall tracker module + production wiring in persistent-session-handle.ts iterateUntilResult + AbortController via existing fireInterruptOnce + 6 synthetic stream tests + RELOADABLE_FIELDS classifier. 6 commits `3db91d5`/`fd60504`/`351e572`/`94b48eb`/`f310de3`/`28576a4`. Summary: `.planning/phases/127-no-useful-tokens-stream-timeout/127-01-SUMMARY.md`. **Critical deviation:** plan listed only session-adapter.ts; production routes through persistent-session-handle.ts. Both call sites now share `src/manager/stream-stall-tracker.ts` per feedback_silent_path_bifurcation.md. Predicate extended to recognize input_json_delta.partial_json.
+- **Plan 02 (autonomous, wave 2) — SHIPPED LOCAL 2026-05-15:** sessionLog.recordStall API (JSONL writer at `{memoryDir}/events.jsonl`) + daemon-side onStreamStall callback (Rule 3 deviation: wired at SessionManager.configDeps + buildSessionConfig, NOT daemon.ts) + Discord webhook fire-and-forget via verbatim BACKLOG.md constant + integration test STALL-04 (6→7 tests). 3 commits `615bb09`/`43a2273`/`c7ca0bd`. Summary: `.planning/phases/127-no-useful-tokens-stream-timeout/127-02-SUMMARY.md`. Deviations: (1) wiring location shifted from daemon.ts to SessionManager (singleton adapter has no per-agent identity); (2) `sendAsAgent` corrected to `send` (former is A2A path with EmbedBuilder); (3) payload enrichment inside factory closure (boundary type stays narrow per Plan 01 D-03); (4) sub-test count trimmed to match prompt's 6→7 target.
+- **Plan 03 (autonomous: false, deploy-gated):** operator deploy + journalctl resolver-log grep + synthetic stall probe + Opus advisor false-positive check (D-07) + 24h threshold tuning (D-09).
+
+**Resume command:** `/gsd-execute-phase 127 --no-transition` (kicks off Plan 02; halts before Plan 03 per autonomous:false frontmatter).
+
+## Recent commits (2026-05-15)
+
+- `c7ca0bd` test(127-02-T03): STALL-04 integration test — Discord + sessionLog both receive trip payload
+- `43a2273` feat(127-02-T02): daemon wires onStreamStall callback — Discord + session-log
+- `615bb09` feat(127-02-T01): sessionLog.recordStall API for stall telemetry
+- `bb4b459` docs(127-01): complete no-useful-tokens-stream-timeout plan — STATE update
+- `28576a4` docs(127-01): summary — schema + tracker + synthetic stream tests complete
+- `f310de3` test(127-01-T04): synthetic stream-stall fixture — STALL-01..03 + cleanup
+- `94b48eb` feat(127-01-T03): stream-stall tracker + AbortController trip behavior
+- `351e572` feat(127-01-T05): classify streamStallTimeoutMs as reloadable
+- `fd60504` feat(127-01-T02): loader resolver cascade + phase127-resolver structured log
+- `3db91d5` feat(127-01-T01): add streamStallTimeoutMs schema + ResolvedAgentConfig field
+- `d8e5b00` docs(127): add 3 plans (schema/resolver + daemon wiring + deploy-gated verification)
+- `5414ad3` docs(127): capture phase context for no-useful-tokens stream timeout
+- `5971c46` chore: rename v3.0+v3.1 phase dirs to numeric IDs (127-136)
+- `ae3764d` test(126-02 / 999.57): DEL-20..DEL-24 regression tests pin Plan 01 wiring
+- `a964443` docs(infra): restructure ROADMAP — nest v3.0/v3.1 phase details inline + rename 999.57 → 126
+- `bc70fdb` docs(infra): add Phase 126-142 detail sections + transition STATE.md to v3.0
+- `74dc984` docs(roadmap): promote v3.0 backlog to Phases 126-135 + v3.1 to Phases 136-142
+- `3eb80f3` docs(v2.9,v3.0,v3.1): close v2.9 closeouts + draft v3.0/v3.1 roadmaps
+
+Status: v3.0 + v3.1 BOTH OPEN; Phase 127 Plan 01 + Plan 02 SHIPPED LOCAL (Ramy-active deploy hold on Plan 03); Phase 136 ready for discuss-phase
+Last activity: 2026-05-15 -- Phase 127 Plan 02 SHIPPED LOCAL (daemon-side stall callback + Discord + JSONL); next surface is Phase 136 discuss-phase or Phase 127 Plan 03 deploy-gated verification
+
+## v2.9 Status (deploy_pending — superseded by v3.0)
+
+All 7 v2.9 phases (119-125) code-complete locally per `.planning/milestones/v2.9-MILESTONE-AUDIT.md`. Production visual/soak verification gated on next Ramy-quiet deploy window:
+
+- 119 SC-3 + SC-4 — screenshot + 24h HEARTBEAT_OK=0 soak
+- 121 SC-3 — 24h `seamGapBytes:0` soak
+- 122 SC-2 — 4-channel screenshots
+- 124 — auto-trigger sentinel + dashboard sparkline
+- 125 SC-5 + SC-6 — A/B agreement + first-token < 8 s latency win
+- 999.54 Plan 05 — D-05a journalctl grep + D-06 turn-1 advisor-footer
+
+## v3.0 Phase Map (Wave order per `.planning/milestones/v3.0-ROADMAP.md`)
+
+**Wave 1 — operator-pain hotfix-to-architecture closeouts + small lifts:**
+
+- **Phase 126: Subagent Context Isolation closeout (999.57)** — Plans 02 + 03 (Plan 03 deploy-gated). Renumber DEL-15..DEL-19 collision with existing DEL-15..DEL-18 (from 999.58/999.61) → DEL-20..DEL-24.
+- **Phase 127: No-useful-tokens stream timeout (999.61)** — discuss-phase first; SDK supervisor extension
+- **Phase 128: clawcode usage accuracy fixes (999.4)** — PARKED 2026-05-15 (SDK pull API absent)
+- **Phase 129: clawcode status finish-up fallbacks (999.5)** — DEFERRED 2026-05-15 (no observable scope)
+
+**Wave 2:** Phase 130 (plugin SDK), Phase 131 (tmux skill)
+**Wave 3:** Phase 132 (autonomous skill creation), Phase 133 (clawcode-as-MCP-server)
+**Wave 4:** Phase 134 (MCP broker hot-reload — DEFERRED), Phase 135 (Discord voice)
+
+## v3.1 Phase Map (PROPOSED — `.planning/milestones/v3.1-ROADMAP.md`)
+
+Hard-deadline track before 2026-06-15 Anthropic policy cutover: Phases 136 / 137 / 138.
+Probe-gated: Phases 139 (probe) / 140 (Claude Code interactive backend).
+Strategic: Phases 141 (Codex) / 142 (OpenRouter).
+
+**v2.9 phase map (build order — Waves 1/3/4/5/6/7):**
+
+- Phase 119: A2A Delivery Reliability (A2A-01..04) — Wave 1
+- Phase 120: Dashboard Observability Cleanup (DASH-01..05) — Wave 3, parallel to 119
+- Phase 121: Subagent UX Completion + Chunk-Boundary (SUB-01..02) — Wave 4
+- Phase 122: Discord Table Auto-Wrap Universalization (DISC-01) — Wave 5, sequenced after 119
+- Phase 124: Operator-Triggered Session Compaction (CLI + Discord + policy decoupling) — Wave 5/6, parallel-OK with 122
+- Phase 125: Intelligent Auto-Compaction Strategy (tiered retention) — Wave 6/7, depends on 124
+- Phase 123: MCP Lifecycle Verification Soak (MCP-01..03) — Wave 7 (last; soak window satisfied 2026-05-13, the wait gate is no longer load-bearing)
+
+## Current Session — Post-v2.7 fix wave (2026-05-02)
+
+Three ultraplan PRs landed back-to-back via the cloud `/ultraplan` workflow:
+
+- **PR #3 (`778c8c7`) — Phase 999.29:** dream-pass adapters wired (`getRecentChunks` → `listRecentMemoryChunks`, `getRecentSummaries` → terminated-session+memory hydration, `applyAutoLinks` → graph-edges.json writer). Closes "Wikilinks 0 applied" pattern across all dream embeds.
+- **PR #4 (`d15c8f1`) — Phase 999.28:** MCP probe wrapper group-kill (`detached: true` spawn + `killGroup` cleanup) eliminates `mcp-server-mysql` grandchildren reparenting to PID 1 across 14×60s probe cadence.
+- **PR #5 (`3bbde46`) — Phase 99 unified:** sub-scopes A (`getAgentMemoryDbPath` helper + 8 callsites + CI grep regression pin) + C (pending-summary backlog drain via 30-min × 5 sessions/tick heartbeat) + D (restart-greeting lookback 5 → 25 + summaryMemoryId fallback) + J (closes via A's path fix).
+
+Deploy on clawdy: 2 restarts (one per build wave), 6 agents auto-restored from pre-deploy snapshot each time, 13 heartbeat checks now registered (+ summarize-pending), zero rollbacks.
+
+**Note:** Credential rotation (former Phase 99-G scope) handled by operator outside the GSD workflow as of 2026-05-05.
+
+## Post-v2.7 Continued Activity (2026-05-03 → 2026-05-05)
+
+Nine commits landed beyond the 2026-05-02 fix wave, organized into a hardening + ergonomics wave:
+
+**Infrastructure / hardening:**
+
+- **Phase 109 (commit `8880fe8`, 2026-05-03)** — MCP/Secret Resilience bundle. Four sub-scopes: 109-A broker observability (`rpsLastMin`/`throttleEvents24h`/`lastRetryAfterSec` + `clawcode broker-status` CLI), 109-B orphan-claude reaper (alert mode default; reap-mode behind flag), 109-C `clawcode preflight` (blocks restart if cgroup mem >80% or broker calls inflight), 109-D fleet-stats IPC + `/api/fleet-stats` dashboard endpoint. Driven by 2026-05-03 fleet incident (cgroup at 97.8% MemoryMax, 4 invisible orphan claudes, swap exhausted).
+- **Phase 110 Stage 0a (commit `5aa5ab6`, PR #6, 2026-05-03)** — MCP memory reduction foundational scaffolding. Schema + observability + CLI surface for upcoming shim-runtime swap (Stage 0b) and broker generalization (Stage 1). NO behavior change. Adds `defaults.shimRuntime` per-shim runtime selector, `defaults.brokers` dispatch table, `mcp-broker-shim --type` CLI alias, `McpRuntime` classification in fleet-stats.
+- **Phase 999.33 (commit `eee88c2`, 2026-05-04)** — Bound `preResolveAll` concurrency to 4 in-flight. Boot-storm partial fix layered with Phase 109 mitigations.
+
+**Subagent / relay:**
+
+- **Phase 999.30 (commits `81975aa`, `12f4ac1`, PR #9, 2026-05-04)** — Subagent relay on work-completion, not session-end. Three triggers (explicit `subagent_complete` tool, 5-min quiescence sweep, session-end callback) deduped via `binding.completedAt`. **Note: tagged as `999.25` in commits but renumbered to 999.30 in ROADMAP 2026-05-05** (number collision with shipped boot wake-order priority).
+- **(untagged, commit `716fb46`, PR #7, 2026-05-04)** — Auto-prune spawned subagent threads after inactivity. Companion cleanup to 999.30.
+
+**Ergonomics:**
+
+- **Phase 999.31 (commits `b46acd9`, `709e5ce`, `848a443`, 2026-05-04)** — `/ultra-plan` + `/ultra-review` slash commands at top level (initially under `/get-shit-done`, then routed to native `/ultraplan`, then promoted to top-level).
+- **Phase 999.32 (commit `584a20a`, 2026-05-04)** — Consolidated GSD into single `/gsd-do` entry; removed `/clawcode-probe-fs`.
+
+**Stability fixes:**
+
+- **(untagged, commit `98ff1bc`, PR #8, 2026-05-04)** — Hot-reload reaper dial fix: pass `newConfig` through `ConfigWatcher` so orphan-claude reaper picks up live config changes without daemon restart.
+- **(untagged, commit `bca9400`, PR #10, 2026-05-05)** — Marketplace skip-empty-name: clawhub items with missing/empty `name` no longer crash marketplace UI.
+
+**Phase number collisions resolved 2026-05-05:**
+
+- Phase 109 commit-tag bound to MCP/Secret Resilience bundle (shipped). Original "Image ingest pipeline" scope renumbered to **Phase 113**.
+- Phase 110 commit-tag bound to MCP memory-reduction work (Stage 0a shipped, later stages active). Original "Retroactive 999.x renumbering" scope renumbered to **Phase 114**.
+- Phase 999.25 commit-tag bound to "Agent boot wake-order priority" (shipped 2026-05-01). The 2026-05-04 PR #9 was tagged `feat(999.25)` for "subagent relay on work-completion" but renumbered to **Phase 999.30** in ROADMAP.
+
+## Phase 113 — Image ingest pipeline (SHIPPED 2026-05-07)
+
+**Commits:** `40deda6` (core), `115fdc7` (apiKey:null auth fix), `5dfac40` (PNG media type fix)
+
+**What shipped:**
+
+- `haiku-direct.ts` — `callHaikuDirect` + `callHaikuVision` via `@anthropic-ai/sdk` directly with OAuth Bearer token (`claudeAiOauth.accessToken` from `~/.claude/.credentials.json`). Bypasses `sdk.query()` subprocess entirely — no `ANTHROPIC_API_KEY` inheritance, bills OAuth subscription.
+- `image-resizer.ts` — sharp resize to ≤1568px before vision API call.
+- `vision-pre-pass.ts` — parallel Haiku 4.5 vision calls for all image attachments; injects `<screenshot-analysis>` blocks; empty/failed analyses fall back to existing file-path hint.
+- `summarize-with-haiku.ts` — rewritten to delegate to `callHaikuDirect` (same auth fix).
+- `bridge.ts` — vision pre-pass wired in both thread + channel handlers; `formatDiscordMessage` updated to accept `visionAnalyses` map.
+- `schema.ts` / `types.ts` / `loader.ts` — `vision: { enabled, preserveImage }` per-agent config.
+
+**Prod fixes found during smoke test:**
+
+1. `apiKey: null` required — SDK prioritizes `ANTHROPIC_API_KEY` env over `authToken` when both present.
+2. Always pass `"image/png"` to API — `resizeImageForVision` always outputs PNG regardless of Discord attachment content-type.
+
+**Vision enabled agents:** Admin Clawdy, fin-acquisition, general, projects, research.
 
 ## Performance Metrics
 
-**Velocity:**
+**v2.7 milestone (2026-04-26 → 2026-05-01, 5 days):**
 
-- Total plans completed: 70+ (v1.0-v2.1 across 12 milestones)
-- Average duration: ~3.5 min
-- Total execution time: ~4+ hours
+- 7 phases shipped (100, 103-108) + 1 deferred (101) + 1 dropped (102, 2026-05-05)
+- 5 bundled backlog ships (999.6, 999.12, 999.13, 999.14, 999.15)
+- Phase 108 deploy: 6 iterations, 5 hot-fixes, all caught + fixed live without rollback
+- Final outcome: ~60% MCP child reduction in production via broker pooling
+
+**Post-v2.7 fix wave (2026-05-02, single session):**
+
+- 3 PRs merged via cloud `/ultraplan` (PR #3, #4, #5)
+- 7 sub-scopes/items closed in one wave (Phase 99: A, C, D, J + new 999.28, 999.29)
+- 21 source files touched, 1646+ insertions, 63 deletions
+- 265 new tests added (71 + 9 + 185), 100% pass post-deploy
+- 2 production deploys to clawdy with snapshot/restore preserving 6 running agents both times
 
 **Recent Trend:**
 
-- v2.1 plans: stable 5-32min each (40 plans shipped in ~1 day)
-- Trend: Stable
+- Mid-milestone (Phases 104-105): infrastructure incident response — secrets cache + dispatch fixes shipped within 24h of operator-reported symptoms
+- End-milestone (Phase 108): structural change with 5 hot-fixes during deploy — fail-loud guard pattern (added in first hot-fix) cracked open all downstream bugs
+- Post-v2.7 (2026-05-02): cloud `/ultraplan` workflow proven — 3 PRs in single session via remote agent + local `git am` apply pattern (artifact: `<X.Y>` chat-rendering noise needs pre-clean before patch apply)
 
-*Updated after each plan completion*
+*Updated after each milestone close*
 
 ## Accumulated Context
 
@@ -250,6 +419,161 @@ Recent decisions affecting current work:
 - [Phase 95]: Plan 95-03 — CLI exit-code 0/1/2 contract: 0=completed, 1=failed/IPC-error, 2=skipped. Operator scripts can branch on exit code without parsing JSON. Mirrors Phase 91/92 sync/cutover CLI patterns; extends with 2-for-skipped semantic.
 - [Phase 95]: Plan 95-03 — Discord slash defaults idleBypass:true; CLI defaults idleBypass:false. Operator-driven Discord trigger semantically wants to fire; CLI requires explicit opt-in. Both share the daemon's run-dream-pass IPC handler — only the call-site contract differs.
 - [Phase 95]: Plan 95-03 — 10th application of inline-handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95) and 5th application of pure-IPC-handler blueprint (handleSetModelIpc / handleSetPermissionModeIpc / mcp-probe / handleCutoverButtonActionIpc / handleRunDreamPassIpc). Pattern is now canonical for operator-tier slash commands.
+- [Phase 96]: [Phase 96 Plan 06] 3-value Zod enum extension for authoritativeSide (openclaw|clawcode|deprecated) — additive non-breaking schema migration; v2.4 fixtures parse unchanged.
+- [Phase 96]: [Phase 96 Plan 06] DEPRECATION_ROLLBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000 ms locked at types.ts level; pinned by grep -F (W-2 convention robust to regex meta-chars in arithmetic literals).
+- [Phase 96]: [Phase 96 Plan 06] Asymmetric systemctl-vs-state-update ordering — disable-timer: state-first (graceful systemctl); re-enable-timer: systemctl-first (fatal — rollback semantics demand timer running before claiming state restored).
+- [Phase 96]: [Phase 96 Plan 06] sync run-once exit code 2 (NOT 1) when deprecated — bypasses systemd SuccessExitStatus=1, forces journalctl to surface deprecation as failed unit (operator attention).
+- [Phase 96]: [Phase 96 Plan 06] State-machine guard at CLI layer (not runtime gate): deprecated → clawcode forward-cutover refused with operator-actionable error; operator must re-enable-timer or fresh setup before forward-cutover.
+- [Phase 96]: Plan 96-01: 3-value FsCapabilityStatus enum (ready|degraded|unknown) intentionally diverges from Phase 94's 5-value MCP enum because filesystem capability has no reconnect/failed analog — operator-driven ACL changes don't transition through transient connect states
+- [Phase 96]: Plan 96-01: D-06 boundary check (checkFsCapability) uses exact-match canonical-absPath Map lookup with NO startsWith — ACLs grant per-subtree access so a parent ready snapshot does NOT imply subtree readability; Phase 94 isPathInsideRoots startsWith pattern intentionally avoided
+- [Phase 96]: Plan 96-01: fileAccess Zod schema is 10th additive-optional application (Phase 83/86/89/90/94 blueprint). Schema preserves literal {agent} token; loader resolveFileAccess(agentName, ...) substitutes at call time. v2.5 fixtures parse unchanged (5 fixtures regression-pinned)
+- [Phase 96]: Plan 96-01: SessionHandle gains FsCapabilitySnapshot lazy-init mirror (getFsCapabilitySnapshot/setFsCapabilitySnapshot) — 6th application of post-construction DI mirror pattern (after McpState/FlapHistory/RecoveryAttemptHistory/SupportedCommands/ModelMirror). Stable Map identity contract matches Phase 85 exactly
+- [Phase 96]: Plan 96-01: TS error count REDUCED net 13 (101 → 88) by sweeping up Phase 95's missing dream field while adding fileAccess to test fixtures (Rule 3 cascade pattern matches Phase 89 GREET-10 + Phase 90 MEM-01 precedent)
+- [Phase 96]: Plan 96-02: Renderer at the daemon edge, NOT inside the assembler. Pre-rendered string threaded through ContextSources.filesystemCapabilityBlock additive optional field — preserves assembler purity (Phase 94 D-10 systemPromptDirectives idiom).
+- [Phase 96]: Plan 96-02: <tool_status></tool_status> and <dream_log_recent></dream_log_recent> are positioning sentinels with EMPTY bodies — they wrap NO content today; render ONLY when fs block renders, preserving v2.5 cache-stability invariant.
+- [Phase 96]: Plan 96-02: STRICT empty string on empty snapshot (W-4 ambiguity removed). v2.5 fixtures without fileAccess produce byte-identical stable prefix on Phase 96 deploy.
+- [Phase 96]: Plan 96-02: Flap-stability constants reused by NAME from Phase 94 plan 02 (FS_FLAP_WINDOW_MS = 5*60*1000, FS_FLAP_TRANSITION_THRESHOLD = 3) — cross-domain consistency between tools and filesystem capabilities.
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: Phase 94 5-value ErrorClass enum NOT extended in 96-03. clawcode_list_files maps boundary refusal → 'permission'; depth/entries/size/missing → 'unknown' with rich suggestion. Pin established for 96-04 (share-file) which will face the same choice.
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: Auto-injection site verified at src/manager/session-config.ts:421-440 (NOT non-existent agent-bootstrap.ts per RESEARCH.md Pitfall 1). 96-03 wires clawcode_list_files as the third built-in tool alongside Phase 94 plan 05's two.
+- [Phase 96]: [96-04] Phase 94 5-value ErrorClass enum LOCKED — D-12 4-class taxonomy (size/missing/permission/transient) maps onto existing 5 values via classifyShareFileError; size/missing → unknown with rich suggestion; permission/transient verbatim. NO enum extension.
+- [Phase 96]: [96-04] outputDir runtime expansion (NOT loader) — loader returns literal template; runtime resolveOutputDir expands per-call with fresh ctx. Loader-time expansion would freeze {date} at config-load time.
+- [Phase 96]: [96-04] D-10 directive text BOTH blocks — file-sharing directive contains auto-upload heuristic AND OpenClaw-fallback prohibition (added 2026-04-25 after operator surfaced anti-pattern in #finmentum-client-acquisition).
+- [Phase 96]: [96-04] Sibling pure detectors with DISTINCT dedup keys — detectMissedUpload + detectOpenClawFallback throttle independently via 'missed-upload' vs 'openclaw-fallback' keys; sibling try/catch isolation in firePostTurnDetectors so one detector failure cannot prevent the other.
+- [Phase 96]: Plan 96-05: Status emoji palette LOCKED ✓/⚠/? (NOT ✅/❌ from Phase 85) — filesystem has no failed/reconnecting analog so simpler 3-symbol palette suffices and reads cleaner in monospace CLI; pinned across Discord slash, status-render, probe-fs CLI, fs-status CLI
+- [Phase 96]: Plan 96-05: Cap-budget invariant (Phase 85 Pitfall 9 — Discord 100/guild cap) pinned via vitest PFS-CAP-BUDGET assertion replacing fragile runtime grep on compiled JS — TDD-friendly, runs every test pass even when no compiled JS exists
+- [Phase 96]: Plan 96-05: Daemon IPC handlers extracted as pure-DI module (src/manager/daemon-fs-ipc.ts) — handleProbeFsIpc + handleListFsStatusIpc tested in isolation without spawning the full daemon; mirrors Phase 92 daemon-cutover-button-action discipline; closure-based intercept BEFORE routeMethod preserves stable routeMethod signature
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: fs-probe heartbeat check shape = per-agent execute(ctx) (Phase 85 mcp-reconnect mirror, NOT plan example tick(deps))
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: Reload dispatch = simpler heartbeat-tick fallback (RELOADABLE_FIELDS classification + 60s tick); watcher.ts NOT extended for v1
+- [Phase 96-discord-routing-and-file-sharing-hygiene]: D-01 boot probe APPROXIMATED via TWO-STEP coverage (deploy-runbook Section 4 mandatory fleet probe + first 60s heartbeat tick); no separate session-start probe code path
+- [Phase 100-01]: Apply .min(1) on settingSources array (RESEARCH.md Pitfall 3 — empty array silently disables ALL filesystem settings)
+- [Phase 100-01]: settingSources at ResolvedAgentConfig is ALWAYS populated (defaults to ['project']); gsd is conditional (undefined-when-unset)
+- [Phase 100-01]: Cascade fix: 22 test fixtures got settingSources line after memoryCueEmoji (matches Phase 89/90/96 22-fixture pattern)
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-03 — settingSources + gsd.projectDir classified NON_RELOADABLE (agent-restart-required). 1st application of agent-restart classification in Phase 100; mirrors v2.5 SHARED-01 memoryPath documentation-of-intent pattern. Watcher untouched (Phase 22 reloadable=false contract already correct). DI8 regression pin defends against accidental future promotion to RELOADABLE_FIELDS.
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-03 — Plan 08 SMOKE-TEST runbook hand-off: operator MUST run 'clawcode restart admin-clawdy' after editing settingSources or gsd.projectDir in clawcode.yaml; the watcher emits agent-restart-needed signal but does NOT auto-restart. NOT a daemon restart (would unnecessarily bounce the entire fleet).
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 02 — symmetric-edits Rule 3 enforced for createSession + resumeSession baseOptions; SA5..SA8 parity tests catch any future drift
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 02 — vi.mock @anthropic-ai/claude-agent-sdk at session-adapter test file top establishes the SDK adapter end-to-end test pattern; existing tests unaffected (they don't await import the SDK module)
+- [Phase 100]: Plan 100-05 — Phase 99-M relay extended with optional 'Artifacts written:' line. DI-pure helpers (resolveArtifactRoot + discoverArtifactPaths) preserve failures-swallow contract. Zero behavior change for non-GSD subthreads (parentConfig.gsd === undefined). Relative paths only per RESEARCH Pitfall 8.
+- [Phase 100]: Optional-DI for subagentThreadSpawner (mirrors Phase 87 aclDeniedByAgent + Phase 83 skillsCatalog) — missing spawner emits 'unavailable' reply rather than throwing
+- [Phase 100]: deferReply is FIRST async call in handleGsdLongRunner (RESEARCH.md Pitfall 4) — pinned by GSD-6 invocationCallOrder assertion
+- [Phase 100]: Set-based long-runner detection (GSD_LONG_RUNNERS.has) instead of if-ladder string compares — scales when more long-runners join
+- [Phase 100]: Plan 100-06 — clawcode gsd install CLI subcommand: DI-pure runGsdInstallAction + ensureSymlink + ensureSandbox helpers; idempotent (readlink + stat detection of already-present state); source-paths-immutable invariant pinned by INST14 spy assertion; zero new npm deps (node:fs/promises + node:child_process built-ins). Symlinks PARENT directories to sidestep Issue #14836; targets ~/.claude/commands/gsd as SDK-discoverable surface.
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07: admin-clawdy block placed at END of agents list (after research) — coherent grouping; channels: [] in dev fixture (production yaml carries real ID per Plan 08 runbook); workspace: /tmp/admin-clawdy placeholder; gsd.projectDir byte-matches Plan 06 DEFAULTS.sandboxDir.
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07 [Rule 3 - Blocking deviation]: PR11 (schema.test.ts) updated to encode Plan 07 cascade — admin-clawdy is sole settingSources/gsd carrier; production agents stay implicit-default. Preserves additive-optional schema invariant + CONTEXT.md lock-in. Strictly better coverage than pre-Plan-07 PR11 (catches both directions of drift).
+- [Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow]: Plan 100-07: 8 YML parse-regression tests cover SHAPE, not BEHAVIOR. Plan 04 dispatcher tests handle dispatch-time behavior; Plan 02 session-adapter tests handle SDK-passthrough behavior. YML1..YML8 are the structural pin between the two consumer-side tests.
+- [Phase 100]: [Phase 100]: Plan 100-08 — SMOKE-TEST.md (562 lines, 9 sections, 10 structural tests) is the canonical Phase 100 deploy + UAT runbook for transitioning to clawdy production. autonomous=false because Sections 6-8 require operator interaction in #admin-clawdy on production Discord.
+- [Phase 100]: [Phase 100]: Plan 100-08 — Established structural runbook test pattern at .planning/phases/<N>-*/_tests__/<doc>-doc.test.ts pinning markdown invariants. Repeatable for any future operator-runnable artifact (deploy/migration/smoke runbook). Vitest discovers .planning/__tests__/ via default include pattern (no config edit needed).
+- [Phase 103]: Plan 103-01 — /clawcode-status: 8 hardcoded `n/a` placeholders wired to live telemetry (Compactions, Context %, Tokens, Activation, Queue, Reasoning label, Permissions, lastActivityAt). 3 OpenClaw-only fields dropped (Fast/Elevated/Harness). Substring grep gates pin the absence at file level.
+- [Phase 103]: Plan 103-01 — Compaction counter is in-memory only (Open Q4): resets on daemon restart, informational not persistence-worthy. Bumps ONLY on CompactionManager.compact() resolve via canonical compactForAgent wrapper (Pitfall 3 — rejection cannot inflate count). Closure check pins zero direct .compact() callers in production code.
+- [Phase 103]: Plan 103-01 — HeartbeatRunner injected into SessionManager via setHeartbeatRunner DI setter (mirrors setWebhookManager / setMemoryScanner pattern); not a constructor argument. Daemon wires post-runner-start.
+- [Phase 103]: Plan 103-01 — Activation timestamp mirrored in-memory via activationAtByAgent Map at startAgent — registry remains source of truth for restart recovery, but synchronous status renders don't await readRegistry per request. Cleared on stopAgent alongside compactionCounts (matches in-memory-only semantics).
+- [Phase 103]: rate_limit_snapshots table lives in the per-agent UsageTracker DB rather than a separate SQLite file (one DB handle per agent stays clean)
+- [Phase 103]: rateLimitType stored as TEXT (not SDK 5-value union) so a future SDK union expansion does not drop snapshots (Pitfall 10)
+- [Phase 103]: surpassedThreshold typed as number|undefined per SDK shape (Pitfall 9 — NOT a boolean)
+- [Phase 103]: Persistence is best-effort — SQLite write failures inside record() are logged + swallowed; in-memory state remains source of truth
+- [Phase 103]: Hook positioned BEFORE the result branch in iterateUntilResult — ordering documents intent, result-terminator path is preserved
+- [Phase 103]: 12th application of inline-handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95/96/100/103-03) — pattern is canonical at 12 applications
+- [Phase 103]: IPC method named list-rate-limit-snapshots (NOT colliding with existing rate-limit-status for Discord outbound rate-limiter — Pitfall 5 closure)
+- [Phase 103]: Pure-DI handler module pattern — daemon-rate-limit-ipc.ts mirrors Phase 96 daemon-fs-ipc / Phase 92 cutover-ipc-handlers blueprint (3rd application of dedicated-IPC-module pattern)
+- [Phase 103]: Overage rendered as status-line not progress bar (Open Q3) — credit-pool model doesn't translate to a percentage bar
+- [Phase 999.1]: Used D-PLN-01 strict TDD pattern (RED → GREEN as 2 atomic commits) for 4 new agent-output directives
+- [Phase 999.3]: Plan 01: delegateTo composition contract — sourceConfig (delegate ?? caller) provides inherited fields via spread; parentConfig overrides channels/threads/webhook AFTER spread; disallowedTools recursion guard UNCONDITIONAL outside both branches per D-TCX-03
+- [Phase 999.3]: Plan 01: delegate validation at IPC boundary (manager.getAgentConfig) so verbatim ManagerError surfaces to MCP caller per Phase 85 TOOL-04 pattern; spawner-level re-check is defense-in-depth (DEL-10)
+- [Phase 999.3]: Plan 01: webhook composition splits identity — caller's webhookUrl (channel-bound) + delegate's displayName/avatar (per-message overrides via discord.js client.send), verified at webhook-manager.ts:71-75
+- [Phase 999.2]: Plan 01: Pure rename of SessionManager.sendToAgent → dispatchTurn (D-RNI-01). 7 production call sites + 16 test files + 4 doc-comment files. Static-grep TDD pin via fs.readdirSync walker (no glob dep). DEPRECATED_NAME constructed via array.join() so test file does not self-trigger its own assertion. Zero new typecheck errors (108 baseline preserved).
+- [Phase 999.2]: Plan 02: MCP tool dual-registration via shared-closure pattern (canonical-first registration controls tools/list ordering for LLM picking). IPC stacked-case sharing one body. Deprecated-alias metric via console.info for D-RNX-03 30-day removal trigger.
+- [Phase 999.2]: Plan 03: Pure-DI module daemon-ask-agent-ipc.ts (Phase 103 blueprint) — handleAskAgentIpc owns inbox+dispatch+mirror; escalation kept at daemon edge for SessionManager access (D-SYN-06 unchanged)
+- [Phase 999.2]: Plan 03: Static-grep tests for MCP wrapper text templates instead of McpServer build-and-extract (matches Plan 02 precedent; pure-DI tests pin IPC contract behavior)
+- [Phase 999.2]: Plan 03: post-to-agent per-webhook log+swallow LEFT untouched per Plan Step 3 + Pitfall 7 — broadcast tool, delivered:false IS the structured signal; D-PST-03 satisfied via return shape, not by removing local catch
+- [Phase 999.8]: Plan 01: extracted memory-graph IPC body into pure handler at src/manager/memory-graph-handler.ts (mirrors handleSetModelIpc); LIMIT 500 → configurable LIMIT ? with default 5000 and inclusive [1, 50000] validation
+- [Phase 999.8]: Plan 02: chose Route A (script→module + ESM import) over Route B (globalThis shim) — no external nodeClr consumers, cleaner dependency graph
+- [Phase 999.8]: Plan 03 — Static heartbeat-check registry replaces dynamic readdir+import scan; bundle now contains all 11 checks (was 0 due to tsup splitting:false). Boot log emits checkCount:11 + checks:[...] + 'heartbeat checks registered'.
+- [Phase 999.8]: Plan 03 — NO try/catch around static imports (Pitfall 7); fail-fast at boot is the contract. The prior silent-skip enabled the bug to live in prod for ~10 weeks.
+- [Phase 999.8]: Plan 03 — Lockstep regression test with hand-maintained EXPECTED_FILENAMES forces 3-place updates (import, array entry, test map) when adding a check; future drift becomes a CI failure.
+- [Phase 104-daemon-op-secret-cache-and-retry-backoff]: Wave 0 plants spec-ID-named it.todo scaffolds (vs it.skip or stub it) so vitest reports them as todos rather than failures or false-greens — Wave 1+ replaces each with a real it block
+- [Phase 104-daemon-op-secret-cache-and-retry-backoff]: p-retry@8.0.0 chosen over hand-rolled retry loop — jitter, AbortError contract, and onFailedAttempt hook are exactly what is hardest to get right under boot-storm conditions
+- [Phase 104]: Plan 01 — p-retry v8 RetryContext shape (ctx.error.message + ctx.attemptNumber, NOT err.message); plan's older p-retry signature drift fixed during impl.
+- [Phase 104]: Plan 01 — Rate-limit early bail at attemptNumber>=2 (first retry fires; subsequent rate-limit hits abort via AbortError); trades retry budget against compounding throttle window.
+- [Phase 104]: Plan 01 — Default randomize:true (jitter on by default per Pitfall 1); tests pass randomize:false explicitly for deterministic wall-clock.
+- [Phase 104]: Plan 01 — No fake timers in tests; minTimeout:1/maxTimeout:1 keeps wall-clock <500ms without fighting p-retry's setTimeout-based backoff.
+- [Phase 104]: Plan 02: One SecretsResolver instance threads through 3 callsites + boot pre-resolve via Promise.allSettled; sync wrapper around warmed cache keeps loader sync-by-design
+- [Phase 104]: Plan 04 IPC handler factored into pure module (secrets-ipc-handler.ts) for unit-testability without booting IPC server; closure-intercept-before-routeMethod pattern preserves the 24-arg routeMethod signature
+- [Phase 104]: Plan 03: applySecretsDiff bridge factored into secrets-watcher-bridge.ts (RECOMMENDED) — daemon.ts onChange delegates a single line; tests import production code directly (no shape-drift risk).
+- [Phase 104]: Plan 03: Recovery deps invalidate wired at mcp-reconnect.ts construction site (not daemon.ts) — daemon only calls heartbeatRunner.setSecretsResolver. Threading via CheckContext mirrors setThreadManager / setTaskStore pattern; minimal cross-cutting change.
+- [Phase 105]: Renamed plan's MC-6 to MC-7 due to existing label clash in message-coalescer.test.ts
+- [Phase 105]: POLICY tests are regression locks (pass on main); driver-RED for POLICY lives at daemon boot site verified by build smoke
+- [Phase 105]: Added HARD_CEILING to mocked unbounded recursion in CO-10/CO-11 to prevent vitest worker OOM on current main
+- [Phase 105]: Bridge-side idempotent guard placement (formatCoalescedPayload, not coalescer.addMessage) — Keeps MessageCoalescer content-agnostic per RESEARCH.md Pattern 2; wrapper-detection paired with wrapper-emission
+- [Phase 105]: Layered defense order: depth cap → hasActiveTurn gate → idempotent format — Cap is cheapest (single integer comparison) and runs first; gate is method call so second; format only on actual drain. If both cap and gate would fire, cap wins
+- [Phase 105]: MessageCoalescer.requeue bypasses perAgentCap entirely — Messages were already accepted on initial addMessage; re-checking would silently drop them. Per RESEARCH.md Pitfall 3
+- [Phase 999.13]: Q1 LOCKED YES: conversation-brief date slice → TZ-aware (operator-perceived date)
+- [Phase 999.13]: Q2 LOCKED YES: dream-prompt-builder timestamps → TZ-aware (dream-pass agent reads as agent-visible context)
+- [Phase 999.13]: Q3 LOCKED YES: defaults.timezone gets schema-time IANA TZ pre-validation (5-line zod refinement)
+- [Phase 999.13]: Q4 DEFER: Discord embed timestamps stay UTC — operator-facing tooling, out of scope
+- [Phase 999.13]: DST fixture corrected per RESEARCH.md Pitfall 1: 2026 US fall-back = Nov 1, not Nov 2
+- [Phase 999.13]: delegates field uses z.record(string,string).optional() with superRefine validation against known agent names
+- [Phase 999.13]: delegatesBlock appended to END of stable prefix (after fs capability), empty/undefined short-circuits to '' for prompt-cache hash stability
+- [Phase 999.13]: Optional agentTz?: string parameter (not required) — production callers stay unchanged with host-TZ fallback (correct on single-host clawdy per RESEARCH.md Pitfall 3); tests pass agentTz explicitly
+- [Phase 999.13]: Two-layer bad-IANA defense — schema-time refinement on defaults.timezone (Q3=YES, fail-fast) + runtime try/catch fallback in renderAgentVisibleTimestamp (silent UTC degrade)
+- [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — thrower stubs (real .ts files that throw 'not implemented in Wave 0') chosen over inline declare-module shims for MCP-08/09/10 RED tests. Keeps tsc clean AND tests RED at runtime. Wave 1 replaces stub bodies; types stay byte-stable.
+- [Phase 999.14]: [Phase 999.14]: Plan 00 Wave 0 — startOrphanReaper exposes onTickAfter callback as the seam for MCP-09 sweep wiring; sequence pinned by Test 8 (reap completes BEFORE callback runs). Wave 1 plugs sweepStaleBindings into the seam without re-touching orphan-reaper.
+- [Phase 999.14]: Daemon-wide McpProcessTracker singleton (mirrors SecretsResolver DI) handles per-agent PID register/unregister + boot scan + 60s reaper + shutdown killAll. onTickAfter callback runs MCP-09 sweep AFTER orphan reap (locked sequence).
+- [Phase 999.15]: Wave 0 RED tests pin all TRACK-01..06+08 behaviors via 6 test files (3 new, 3 extended); zero 999.14 GREEN regressions
+- [Phase 999.15]: [Phase 999.15 Plan 01]: Tracker reshape uses immutable-mutation pattern — every updateAgent/replaceMcpPids constructs a new RegisteredAgent reference; callers holding prior entries observe pre-mutation state. SYNC entry write before async cmdline cache enrichment so subsequent sync code sees the new state immediately. isPidAlive treats EPERM as alive (live proc owned by another user is still 'running').
+- [Phase 999.15]: Plan 02 reconciler module + polled discovery + reconcile-before-kill GREEN — 15 RED cases flipped; TRACK-01/02/04/06/08 complete; only Plan 03 IPC+CLI scope remains RED
+- [Phase 106]: Plan 106-03: Append mcp-tracker-snapshot to IPC_METHODS enum (9 lines, mirrors commit a9c39c7); restores clawcode mcp-tracker CLI path (no more -32600 Invalid Request)
+- [Phase 106]: Strip delegates at caller (subagent-thread-spawner) — keeps renderDelegatesBlock pure and primary-agent code path byte-identical
+- [Phase 106]: Destructure-only (no in-place delete) preserves sourceConfig purity for any other consumer holding a reference
+- [Phase 106]: Recursion guard (disallowedTools: spawn_subagent_thread) retained — defense-in-depth alongside DSCOPE invisibility per RESEARCH Pitfall 4
+- [Phase 107]: MemoryStore.cleanupOrphans uses directional SQL (DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories)) — never touches memories. Reversing direction would erase cold-archived memories.
+- [Phase 107]: cleanupOrphans lives on MemoryStore class (not separate utility) — single owner of the SQLite handle, mirrors bumpAccess + getMemoryFileSha256.
+- [Phase 107]: Daemon per-agent failure pushes sentinel { totalAfter: -1 } into results instead of aborting — operator sees both successes and failures in one CLI invocation.
+- [Phase 108]: Shim handshake wire format: { agent, tokenHash } only — token literal hashed in-shim and never sent on socket (SEC-07)
+- [Phase 108]: Shim exit codes: 0 (clean stdin end / SIGTERM), 64 (missing CLAWCODE_AGENT or OP_SERVICE_ACCOUNT_TOKEN), 75 (broker socket close → SDK reconnect)
+- [Phase 108]: BROKER_ERROR_CODE_DRAIN_TIMEOUT pinned to -32002; pool-crash code -32001 reused via documented constant (no cross-import) — both in JSON-RPC server-defined range
+- [Phase 108]: TokenHash validation pattern is /^[a-zA-Z0-9_-]{1,64}$/ (not strict hex) so test fixtures + production hashes both pass; SEC-07 invariants preserved (rejects empty / oversize / control bytes)
+- [Phase 108]: BrokerAgentConnection.rawToken empty in shim path — literal token NEVER traverses unix socket; 108-05 wires daemon-side lookup by hash
+- [Phase 108]: Tracker-before-broker construction order — broker's onPoolSpawn closes over the constructed mcpTracker singleton (no forward-reference gymnastics). Both orderings satisfy 'broker up before agents start' since manager.startAll runs ~2500 lines after either insertion point.
+- [Phase 108]: ShimServer.deps.resolveRawToken added — daemon-side tokenHash → rawToken Map injected at handshake; literal never crosses the socket (Phase 104 SEC-07).
+- [Phase 108]: Heartbeat provider surface intentionally narrow ({getPoolStatus} only) — RED test asserts Object.keys === ['getPoolStatus'] to gate against synthetic password_read consuming 1Password rate-limit budget.
+- [Phase 110]: Postinstall dev-skip when prebuilds/ absent — preserves npm ci on source-checkout while keeping fail-loud on corrupt tarballs (110-03)
+- [Phase 110]: Artifact-name contract clawcode-mcp-shim-linux-<arch> binds go-build.yml uploads to npm-publish.yml downloads (110-03)
+- [Phase 110]: Plan 110-00 Wave 0 build artifacts shipped: 5.7 MB Go MCP spike binary, 4/4 regression tests pass, operator runbook + RSS measurement helper authored. Operator kill-switch gate (admin-clawdy live VmRSS ≤ 15 MB + exit-75 respawn) PENDING — Wave 1 (Plan 110-01) blocked until operator approves.
+- [Phase 110]: Use native zod/v4 z.toJSONSchema() for list-mcp-tools handler instead of zod-to-json-schema npm package — zero new deps, satisfies CLAUDE.md no-new-deps rule, native converter produces correct required[] output
+- [Phase 110]: Inlined STATIC_SHIM_PATH/PYTHON_SHIM_PATH/resolveShimCommand in src/config/loader.ts (single source of truth) so daemon.ts fleet-stats handler imports the same helper that the loader uses — keeps spawn shape and proc-scan regex shape in lockstep when an operator flips defaults.shimRuntime.<type>
+- [Phase 115]: Plan 115-01 quick wins: excludeDynamicSections=true (default-on), memoryRetrievalTokenBudget wired through (default 1500 down from 2000), tag-filter at hybrid-RRF drops session-summary/mid-session/raw-fallback memories (locked default per CONTEXT sub-scope 4)
+- [Phase 115]: Plan 115-03: replaced enforceWarnAndKeep no-op with real drop-lowest-importance enforcement; INJECTED_MEMORY_MAX_CHARS=16K (D-01) + STABLE_PREFIX_MAX_TOKENS=8K (D-02 outer cap with emergency head-tail-truncate fallback); SOUL fingerprint verbatim-protected (never drops); MEMORY.md drops first when over budget
+- [Phase 115]: Plan 115-03 T03: MemoryTier1Source / MemoryTier2Source TypeScript discriminated-union types in src/memory/types.ts use string-literal 'tier' discriminators (avoids colliding with pre-existing MemoryTier hot/warm/cold storage tier and MemorySource string union); union alias exported as TypedMemorySource (NOT MemorySource) to preserve back-compat; ContextSources.identityMemoryAutoloadSource is the field name 115-04 will consume
+- [Phase 115]: Plan 115-03 T04: shipped no-LLM Hermes Phase 1 tool-output prune (src/memory/tool-output-prune.ts pruneToolOutputs replaces old tool outputs with [tool output pruned: <tool> @ <ts>] markers; pure synchronous, <50ms regression-pinned; default keepRecentN=3); CompactionManager.compactToolOutputs() pre-compaction hook; Phases 2 + 3 (LLM mid-summarization + drop oldest) explicitly DEFERRED per CONTEXT.md out-of-scope line 32
+- [Phase 115]: 115-04: cacheBreakpointPlacement enum (static-first | legacy) with default static-first; SDK shape locked; identityMemoryAutoload classified static at outer placement (per advisor + 115-03 design); SECTION_PLACEMENT exhaustive over keyof ContextSources
+- [Phase 115]: Fixed-range int8 quantization at [-1, +1] (NOT per-vector min/max) — sqlite-vec native distance metric requires shared range across all vectors
+- [Phase 115]: EmbeddingService dispatcher: legacy embed(text) preserved; embedV1 / embedV2Float32 / embedV2 added for migration-aware callers — 7 existing callers stay bit-identical
+- [Phase 115]: Per-agent migrations table in per-agent DB (key=embeddingV2); pause/status/rollback all per-agent — Phase 90 isolation lock preserved
+- [Phase 115]: Plan 115-05: extended Phase 95 D-04 with sister applyDreamResultD10 entry point (5-row D-10 hybrid policy) instead of replacing applyDreamResult — preserves D-04 surfacing-only invariant and pinned regression tests
+- [Phase 115]: Plan 115-05: dream-veto-pending JSONL persistence at ~/.clawcode/manager/dream-veto-pending.jsonl (mirrors consolidation-run-log.ts) instead of per-agent SQLite — fleet-wide cron sweep simpler to operate
+- [Phase 115]: Plan 115-05: dreamResultSchema gained optional action + targetMode (additive-optional pattern) for Row-3 mutating-detection — legacy LLM responses without these fields treated as additive (Row 2 default)
+- [Phase 115]: Plan 115-05: D-05 priority pass shortens isAgentIdle threshold from configured idleMinutes to PRIORITY_IDLE_MINUTES (5) at tick time — does NOT change cron firing cadence (kept change surface narrow)
+- [Phase 115]: Plan 115-07: per-agent isolation locked at policy layer + verified at runtime via SQL assertions over agent_or_null column (search_documents per-agent, web_search/brave_search/exa_search cross-agent)
+- [Phase 115]: Plan 115-07: live coverage scope is narrower than policy table — search_documents + web_search/_fetch_url + image_generate wired today; mysql_query / brave_search / exa_search / google_workspace_* are policy-only pending broker integration
+- [Phase 115]: Plan 115-07: tool_cache_size_mb deviation — fleet-wide signal goes through closure intercept of case cache IPC, not per-Turn rollups (would have misled per-agent percentile reads)
+- [Phase 115]: Plan 115-08: Premise-inversion in T01 — existing tool_call.<name> span IS execution-side; added tool_roundtrip_ms as separate per-batch wall-clock measurement (LLM emit-tool_use → next parent assistant).
+- [Phase 115]: Plan 115-08: parallel_tool_call_count uses MAX semantics (not SUM) across the turn — sequential turns land 1, parallel batches land N. Subsumes the > 0 'had any tool' check used by tool_use_rate computation while preserving the parallel-vs-serial signal.
+- [Phase 115]: Plan 115-08: tool_use_rate persisted in separate tool_use_rate_snapshots table (not back-written to turn rows) so the metric is independent of turn cadence. PRIMARY KEY (agent, computed_at) makes same-millisecond writes idempotent. Plan 115-09 reads via getLatestToolUseRateSnapshot OR via on-the-fly compute.
+- [Phase 115]: Plan 115-08: PARALLEL-TOOL-01 directive landed in DEFAULT_SYSTEM_PROMPT_DIRECTIVES (parallel-tool-calls key, default-enabled fleet-wide). Text scoped to mutually-orthogonal lookups so dependent calls cannot regress (THREAT-3 mitigation). Operator override wins per Phase 94 D-09/D-10 pattern.
+- [Phase 115]: Plan 115-08: 30% threshold + fin-acq exclusion locked in three sites (CLI literal 0.3, IPC handler 0.30, wave-2-checkpoint.md). Each has a CONTEXT D-12 provenance comment. Future operator changing the threshold MUST touch all three.
+- [Phase 115]: Sub-scope 6-B: PENDING-OPERATOR → de-facto DEFER. Routes to Phase 116 once operator runs audit CLI post-deploy.
+- [Phase 115]: Cross-agent coordinator built as new abstraction (not retrofit). Per-agent runConsolidation preserved verbatim; coordinator wraps fleet-level orchestration.
+- [Phase 115]: Manual rollback semantics — partial-failed batches require explicit operator rollback(runId) call (CONTEXT D-10 three-tier policy).
+- [Phase 999.36]: Sub-bug A typing indicator fix shipped (TYPING_REFRESH_MS=8000, D-05 cadence pin); sub-bugs B+D fixes deferred to Plans 03+02 until 24h+ prod observation confirms D-06 (chunk-boundary seam) and D-12 (premature-fire source)
+- [Phase 999.36]: D-09/D-10: share-file routing rebound to agent identity (sessionName) -> thread binding, NOT workspace
+- [Phase 999.36]: D-11: shared-workspace regression test pins Schwab AIP failure class with actual incident channel IDs
+- [Phase 999.36]: D-02: 4 OTHER workspace-keyed lookups CATALOGUED in DEFERRED-WORKSPACE-LOOKUPS.md, NOT FIXED — operator promotes follow-up if reproduces
+- [Phase ?]: Phase 116 Plan 00: F02 backend uses sibling DEFAULT_MODEL_SLOS + resolveSloFor; existing segment-based sloOverrideSchema preserved, no schema migration
+- [Phase ?]: Phase 116 Plan 00: shadcn/ui scaffolded via manual components.json — shadcn CLI rejects Tailwind 3.4 + parent-directory node_modules; locked New York / neutral / CSS-vars config written by hand
+- [Phase ?]: Plan 116-01: useAgentLatency hook added (30s polling) — observed first_token p50 lives on /api/agents/:name/latency, not /cache (which carries only the SLO threshold)
+- [Phase ?]: Plan 116-01: F05 per-tool cache breakdown deferred to 116-02 — /api/agents/:name/cache returns fleet-wide tool_cache_hit_rate only
+- [Phase ?]: Plan 116-01: SLO breach dismissal bucketed by observed p50 rounded to 500ms (jitter ignored; genuine new spike re-shows)
+- [Phase 117]: Plan 117-11: separate manager/verbose-state.db SQLite file for per-channel verbose toggle (RESEARCH §4.1 + §6 Pitfall 4) — Matches AdvisorBudget own-file precedent; keeps backup/restore semantics independent across stores.
+- [Phase 117]: Plan 117-11: BridgeConfig.verboseState is OPTIONAL (back-compat); pure exported handleVerboseSlash mirrors handleInterruptSlash/handleSteerSlash pattern — Keeps existing structural-stub injection in bridge-advisor-footer.test.ts Case F/F' working via 'as any', avoiding a 4-file test rewrite. handleVerboseSlash extraction allows T07 to test the dispatch logic without instantiating SlashCommandHandler.
 
 ### v2.1 closing decisions (for reference)
 
@@ -292,6 +616,8 @@ Recent decisions affecting current work:
 - 2026-04-24: v2.4 shipped — Phase 91 autonomously executed (6 plans, 6 waves, 10 SYNC reqs, 166/166 sync tests green). Milestone archived to `.planning/milestones/v2.4-ROADMAP.md`. Zero new npm deps preserved via node:child_process.execFile + existing chokidar/yaml/better-sqlite3. Cutover command + 7-day rollback window implemented; `clawcode sync` CLI group with 8 subcommands + /clawcode-sync-status Discord slash. Sync runner + translator ship as systemd user timers with graceful-SSH-fail tolerance.
 - 2026-04-24: v2.5 Cutover Parity Verification opened — Phase 92 added: OpenClaw → ClawCode fin-acquisition cutover parity verifier. Uses Discord message store (not OpenClaw internal sessions, which are absent) as behavior corpus. Emits gap report, auto-applies additive-reversible fixes, gates destructive mutations behind admin-clawdy ephemeral confirmation. `cutover-ready: true` report becomes hard precondition for Phase 91 `sync set-authoritative clawcode --confirm-cutover`. 10 CUT-01..CUT-10 requirements across 6 suggested plans (92-01..92-06). Reuses Phase 85 list-mcp-status IPC, Phase 86 atomic YAML writers, Phase 80 origin_id idempotency. Zero new npm deps expected.
 - 2026-04-24: Phase 93 added — Status-detail parity + ClawHub public-catalog defaults + plugin manifest-URL resilience. Bundles three user-reported fixes from fin-acquisition Discord (2026-04-24): (93-01) restore rich `/clawcode-status` output deferred in Phase 83 EFFORT-07 to match OpenClaw /status (version+commit, model+key-source, fallbacks, context/compactions, session/updated, runtime/runner/think/elevated, activation/queue); (93-02) auto-inject `defaults.clawhubBaseUrl` as synthetic ClawHub source in `loadMarketplaceCatalog` when no explicit marketplaceSources[kind:"clawhub"] present so `/clawcode-skills-browse` surfaces public skills (today: local-only); (93-03) distinguish manifest-404 from manifest-invalid in `downloadClawhubPluginManifest` + `mapFetchErrorToOutcome` so hivemind-style "listed without manifest" emits `manifest-unavailable` outcome with actionable UI copy instead of misleading "manifest is invalid". IN: all three + tests + Discord UI strings. OUT: skill-side OAuth (Phase 90-06), publishing hivemind manifest (registry-side).
+- 2026-04-25: Phase 96 added — Discord routing and file-sharing hygiene. Bundles user-reported issues from #research and #finmentum-client-acquisition (2026-04-25): dual-bot pattern (Clawdy red + Clawdy Code green both responding), agent confabulation about "OpenClaw vs ClawCode contexts", file attachment delivery via webhook with single visual identity (must post as "Clawdy" not "OpenClaw Agents"), agent auto-routing through OpenClaw without explicit user instruction every time, and stale "no workspace access from this side" excuses across multiple agents. Inline pre-phase work this session: (a) clawcode.yaml channel bindings stripped for OpenClaw-routed agents (test-agent + Admin Clawdy retain bindings); (b) `/home/clawcode/.claude/settings.json` disabled `discord@claude-plugins-official` plugin; (c) Discord channel ACLs reverted on 8 OpenClaw channels (Clawdy Code role removed); (d) `/etc/clawcode/openclaw-webhooks.json` populated with webhook id+token for 8 channels (3 newly created via legacy bot); (e) `clawcode_share_file` IPC handler in `daemon.ts` modified to use OpenClaw webhook execute when channel not in agent bindings — WIP edits stashed at `git stash@{0}` for fold-in. Open: webhook display name override (post as Clawdy + correct avatar) + agent prompt/memory updates so agents auto-attempt attach without user instruction + workspace access narrative (clawcode user IS in jjagpal group + has ACLs on .openclaw, but agents recite stale "no access" claim).
+- 2026-05-13: Phase 117 added — Claude Code advisor pattern (multi-backend scaffold, Anthropic complete). Replaces fork-based `ask_advisor` (`daemon.ts:9805`) with `AdvisorService` interface + three backend slots: `AnthropicSdkAdvisor` (native, via SDK `advisorModel` option — in-request server sub-inference, advisor-side prompt caching, executor timing prompt — COMPLETE), `LegacyForkAdvisor` (today's fork code, preserved as `advisor.backend: fork` rollback lever per Phase 110 `defaults.shimRuntime` pattern), `PortableForkAdvisor` (interface-conformant stub, Phase 118 fills in). Seeds `src/llm/CompletionProvider` interface (no impls yet — first lands with 118 consumer). Agent awareness via system-prompt block + capability manifest entry; Discord visibility via 💭 reaction on triggering message + `— consulted advisor (Opus)` footer — in-band only, NO new threads, `subagent-thread` skill untouched. Preserves all operator contracts: `ask_advisor` MCP schema, `AdvisorBudget` 10/day cap, 2000-char truncation, non-idempotent caching flag. 10 plans (117-01..117-10). Reference plan: `/home/jjagpal/.claude/plans/eventual-questing-tiger.md`. Trigger: Anthropic API beta `advisor_20260301` + SDK 0.2.132 `advisorModel` option (`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:4930`) + operator-flagged multi-provider readiness concern.
 
 ### Pending Todos
 
@@ -306,6 +632,7 @@ Recent decisions affecting current work:
 - **SDK pre-1.0 churn risk** — pinning to exact 0.2.97 (not ^0.2.97). If the SDK ships a breaking minor (0.3.x) during v2.2 execution, hold at 0.2.97 and defer bump to a separate milestone.
 - **12 of 15 v1.1 phases missing formal VERIFICATION.md artifacts (docs only)** — legacy carry-over, not blocking v2.2.
 - **Discord 100-command-per-guild cap** — v2.2 adds to the existing ~13 clawcode-* commands + ~20-25 native CC commands = worst case ~40/guild; safe but Phase 87 must keep per-guild dedupe (not per-agent registration).
+- Phase 115-08 producer call sites need porting from session-adapter.ts:iterateWithTracing (test-only path) into persistent-session-handle.ts:iterateUntilResult (production path) — tracked in 116-DEFERRED.md
 
 ### Quick Tasks Completed
 
@@ -317,6 +644,17 @@ Recent decisions affecting current work:
 | 260419-nic | Discord `/clawcode-interrupt` + `/clawcode-steer` slash commands — mid-turn abort + steering via Phase 73 interrupt primitive | 2026-04-19 | 8ff6780 | [260419-nic-add-discord-stop-and-steer-slash-command](./quick/260419-nic-add-discord-stop-and-steer-slash-command/) |
 | 260419-p51 | Multi-agent bearer keys (scope=all) + composite-PK session index + fork-escalation regression pin + spawn-subagent UX docs | 2026-04-19 | edecd6e | [260419-p51-multi-agent-bearer-keys-fork-escalation-](./quick/260419-p51-multi-agent-bearer-keys-fork-escalation-/) |
 | 260419-q2z | Registry atomic write + recovery + `clawcode registry repair` CLI + always-summarize short sessions + graceful shutdown drain (FIX A+B+C) | 2026-04-19 | fa34ef3 | [260419-q2z-registry-atomic-write-graceful-shutdown-](./quick/260419-q2z-registry-atomic-write-graceful-shutdown-/) |
+| 260429-ouw | Webhook table-wrap regression — wrap markdown tables inside webhookManager.send (covers 3 missed Phase 100-fu call sites) | 2026-04-29 | 696bc39 | [260429-ouw-webhook-path-table-wrap-regression-add-w](./quick/260429-ouw-webhook-path-table-wrap-regression-add-w/) |
+| 260501-i3r | Add structured relay-skipped diagnostic logs to relayCompletionToParent silent-return points | 2026-05-01 | 61292ed | [260501-i3r-add-structured-relay-skipped-diagnostic-](./quick/260501-i3r-add-structured-relay-skipped-diagnostic-/) |
+| 260501-j7x | Phase 999.24 — expand /etc/sudoers.d/clawcode on clawdy with CLAWCODE_SERVICE alias (systemctl reload/restart NOPASSWD for clawcode user) | 2026-05-01 | c3dc129 | [260501-j7x-phase-999-24-sudoers-expansion-for-clawc](./quick/260501-j7x-phase-999-24-sudoers-expansion-for-clawc/) |
+| 260501-jld | Phase 999.21 — consolidate 19 `gsd-*` Discord slash commands under `/get-shit-done` (nested subcommands, claudeCommand byte-identical, 594/594 tests pass) | 2026-05-01 | e422045 | [260501-jld-phase-999-21-consolidate-20-gsd-discord-](./quick/260501-jld-phase-999-21-consolidate-20-gsd-discord-/) |
+| 260501-k5s | Phase 999.22 — add fleet-wide `mutate-verify` directive to DEFAULT_SYSTEM_PROMPT_DIRECTIVES (soul guard against hallucinated tool-use claims; 11 → 12 keys, locked-additive verified, 38/38 tests pass) | 2026-05-01 | 67a1f03 | [260501-k5s-phase-999-22-soul-guard-mutate-verify-di](./quick/260501-k5s-phase-999-22-soul-guard-mutate-verify-di/) |
+| 260501-nfe | Phase 999.18 partial fix — switch `relayCompletionToParent` from `dispatch()` (response discarded) to `dispatchStream()` + ProgressiveMessageEditor posting to parent's main channel; addresses the dominant relay-summary-not-posted failure mode discovered during code-trace this session (39/39 spawner tests pass, +2 new relay-skipped reason tags, all 5 quick-task-260501-i3r diagnostic logs preserved byte-identical) | 2026-05-01 | 6ddde6b | [260501-nfe-fix-relay-summary-not-posted-bug-switch-](./quick/260501-nfe-fix-relay-summary-not-posted-bug-switch-/) |
+| 260501-nxm | Fix cached-summary fast-path in restart-greeting — apply API_ERROR_FINGERPRINTS check on stored summary string so legacy "Credit balance is too low" (and other platform-error-shaped) cached summaries get filtered to PLATFORM_ERROR_RECOVERY_MESSAGE. Triggered by 10:03 AM today bug where a /clawcode-restart of Admin Clawdy resurfaced a stale platform-error summary. +17/-1 LOC in restart-greeting.ts, 3 new tests, fingerprint array now consulted at TWO sites (write-time + read-time). | 2026-05-01 | cb82824 | [260501-nxm-fix-cached-summary-fast-path-in-restart-](./quick/260501-nxm-fix-cached-summary-fast-path-in-restart-/) |
+| 260501-x44 | Fix all 121 typecheck errors from TS6/vitest4 upgrade fallout — broaden tsconfig include to legitimize tests/__fakes__, repair schema-vs-resolved type drift on `effort` (4→7 union) and `tiers.centralityPromoteThreshold`, pin vitest 4 mock generics with `vi.fn<Sig>()` for tuple narrowing, fix `outputDir` missing from 7 config fixtures, fix Object.freeze generic + ImageProvider re-export + dead code in usage-embed.ts. 121→1 errors (the 1 = flagged budget.ts:138 TS2367 quarantined for /ultrareview). 4 flagged concerns documented in SUMMARY (budget.ts logic bug, missing clawcode.yaml in tests, 32 pre-existing test failures unrelated to PR, TurnOrigin readonly cast pattern). 50/50 tests in touched files PASS, npm build PASS. | 2026-05-01 | f9ac72f | [260501-x44-fix-all-121-typecheck-errors-so-npm-run-](./quick/260501-x44-fix-all-121-typecheck-errors-so-npm-run-/) |
+| 260511-mfn | Phase 999.7 Item 2 closeout — read-only tool-call latency audit against clawdy production traces.db (168h window), per-tool p50/p95/p99 captured for Admin Clawdy + fin-acquisition. Headline: local file tools (Read/Edit/Grep/Glob/Bash) are tail-dominators at p95 200-700s on both agents, NOT in original 999.7 scope. fin-acq browser_navigate p95 718s, Bash 646s, spawn_subagent_thread 515s, mysql_query 307s (306 calls). Phase 999.7 → SHIPPED. Two non-blocking follow-ups captured: (B) Phase 115-08 producer regression — split-latency columns NULL for 0/63 turns post-deploy because bundle missing session-adapter.ts producer call sites (`trace-collector.ts` defs ARE present); likely stale tsup cache. (C) `clawcode tool-latency-audit` CLI returns `Invalid Request` — probably same root cause as B. No deploy. | 2026-05-11 | dc0e1ad | [260511-mfn-close-out-phase-999-7-item-2-run-tool-la](./quick/260511-mfn-close-out-phase-999-7-item-2-run-tool-la/) |
+| 260511-pw2 | post_to_agent silent-drop diagnostics — extract daemon IPC body to pure-DI handler emitting 6 reason-tagged `post-to-agent skipped` logs (`target-not-found`, `inbox-write-failed`, `no-target-channels`, `no-webhook`, `webhook-send-failed`, `target-not-running`). Response shape gains `ok` + `reason?`; MCP wrapper renders explicit "written to inbox" text so sender's LLM can NEVER mistake the nanoid for a queryable task id (the post-id-looks-task-shaped confusion Admin Clawdy hit). 8 functional + 2 grep sentinels (anti-pattern guard for silent path bifurcation). All 64 tests in touched-surface area pass. No deploy. | 2026-05-11 | 43e2c79 | [260511-pw2-investigate-post-to-agent-silent-drops-b](./quick/260511-pw2-investigate-post-to-agent-silent-drops-b/) |
+| 260511-pw3 | Schema-registry introspection — new `list_agent_schemas(caller, target)` MCP tool returning `[{name, callerAllowed, registered}]` (auto-injected for every agent). `delegate_task` unknown_schema errors now carry `data.acceptedSchemas` and the MCP wrapper renders the accepted list inline so senders can retry without out-of-band schema coordination. New TaskManager methods `listSchemasForAgent` + `acceptedSchemasForTarget`, new IPC method `list-agent-schemas`, ValidationError catch + ManagerError(code=-32602, data=...) translation in `case "delegate-task"`. New `docs/cross-agent-schemas.md` documents the two-layer (fleet registry + per-agent acceptsTasks) model. 5 unit + 5 grep sentinels. Resolves Admin Clawdy's `bug.report` rejection on 2026-05-11. No deploy. | 2026-05-11 | 0fe7fb5 | [260511-pw3-schema-registry-auto-discovery-cross-age](./quick/260511-pw3-schema-registry-auto-discovery-cross-age/) |
 | Phase 83 P01 | 32 | 2 tasks | 13 files |
 | Phase 83 P03 | 17min 22s | 2 tasks | 11 files |
 | Phase 83 P02 | 22min 13s | 2 tasks | 6 files |
@@ -367,9 +705,108 @@ Recent decisions affecting current work:
 | Phase 95 P01 | 30min | 2 tasks | 9 files |
 | Phase 95 P02 | 24min | 2 tasks | 6 files |
 | Phase 95 P03 | 25min | 2 tasks | 12 files |
+| Phase 96 P06 | 28min | 2 tasks | 13 files |
+| Phase 96 P01 | 25min | 3 tasks | 17 files |
+| Phase 96 P02 | 12min | 3 tasks | 3 files |
+| Phase 96-discord-routing-and-file-sharing-hygiene P03 | 18min | 2 tasks | 5 files |
+| Phase 96 P04 | 23min | 3 tasks | 9 files |
+| Phase 96 P05 | 14min | 3 tasks | 12 files |
+| Phase 96-discord-routing-and-file-sharing-hygiene P07 | 9 min | 3 tasks | 6 files |
+| Phase 100-01 P01 | 14min | 2 tasks | 27 files |
+| Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P03 | 5min | 1 tasks | 2 files |
+| Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P02 | 16min | 2 tasks | 4 files |
+| Phase 100 P05 | 7min | 1 tasks | 2 files |
+| Phase 100 P04 | 9min | 2 tasks | 2 files |
+| Phase 100 P06 | 5min | 2 tasks | 3 files |
+| Phase 100-gsd-via-discord-on-admin-clawdy-operator-self-serve-dev-workflow P07 | 6min | 2 tasks | 3 files |
+| Phase 100 P08 | 5min | 1 tasks | 2 files |
+| Phase 103 P02 | ~22min | 2 tasks | 10 files |
+| Phase 103 P03 | 30min | 2 tasks | 14 files |
+| Phase 999.1 P01 | 4m | 2 tasks | 2 files |
+| Phase 999.3 P01 | 10 | 4 tasks | 5 files |
+| Phase 999.2 P01 | 35min | 2 tasks | 24 files |
+| Phase 999.2 P02 | 11min | 2 tasks | 5 files |
+| Phase 999.2 P03 | 15min | 2 tasks | 6 files |
+| Phase 999.8 P01 | 14min | 2 tasks | 3 files |
+| Phase 999.8 P02 | 20min | 2 tasks | 4 files |
+| Phase 999.8 P03 | 10min | 2 tasks | 7 files |
+| Phase 104-daemon-op-secret-cache-and-retry-backoff P00 | 2min | 3 tasks | 7 files |
+| Phase 104 P01 | 211s | 2 tasks | 2 files |
+| Phase 104 P02 | 6.5min | 3 tasks | 5 files |
+| Phase 104 P04 | 5min | 3 tasks | 4 files |
+| Phase 104 P03 | 6min | 2 tasks | 8 files |
+| Phase 105 P00 | 18 min | 3 tasks | 3 files |
+| Phase 105 P01 | 5 min | 2 tasks | 1 files |
+| Phase 105 P02 | 6 min | 3 tasks | 2 files |
+| Phase 999.13 P00 | 16 min | 3 tasks | 12 files |
+| Phase 999.13 P01 | 22 min | 3 tasks | 6 files |
+| Phase 999.13 P02 | 33 min | 3 tasks | 12 files |
+| Phase 999.14 P00 | 13 min | 6 tasks | 8 files |
+| Phase 999.14 P01 | 35 min | 6 tasks | 10 files |
+| Phase 999.15 P00 | 30 min | 4 tasks | 6 files |
+| Phase 999.15 P01 | 25 min | 3 tasks | 5 files |
+| Phase 999.15 P02 | 33 min | 5 tasks | 5 files |
+| Phase 999.15 P03 | 15 min | 3 tasks | 6 files |
+| Phase 999.6 P01 | 12 min | 3 tasks | 3 files |
+| Phase 999.12 P00 | 18 min | 2 tasks | 4 files |
+| Phase 999.12 P01 | 12 min | 3 tasks | 6 files |
+| Phase 106 P00 | 8 min | 3 tasks | 3 files |
+| Phase 106 P03 | 3 min | 1 tasks | 1 files |
+| Phase 106 P01 | 3 min | 1 tasks | 1 files |
+| Phase 106 P02 | 18 min | 1 tasks | 1 files |
+| Phase 107 P02 | 45m | 3 tasks | 7 files |
+| Phase 108 P00 | 25min | 3 tasks | 8 files |
+| Phase 108 P03 | 9min | 2 tasks | 3 files |
+| Phase 108 P02 | 13m | 2 tasks | 2 files |
+| Phase 108 P04 | 60min | 4 tasks | 12 files |
+| Phase 110 P03 | 7 | 3 tasks | 5 files |
+| Phase 110 P00 | 25min | 2 tasks | 7 files |
+| Phase 110 P01 | 7m | 2 tasks | 4 files |
+| Phase 110 P02 | 20min | 3 tasks | 6 files |
+| Phase 110 P04 | 30 minutes | 3 tasks | 7 files |
+| Phase 115 P01 | 50min | 3 tasks | 12 files |
+| Phase 115 P03 | 95min | 4 tasks | 11 files |
+| Phase 115 P04 | 70min | 3 tasks | 11 files |
+| Phase 115 P06 | 18min | 5 tasks | 15 files |
+| Phase 115 P05 | 40min | 4 tasks | 16 files |
+| Phase 115 P07 | 28 | 4 tasks | 15 files |
+| Phase 115 P08 | 41min | 3 tasks | 17 files |
+| Phase 115 P09 | 28min | 5 tasks | 12 files |
+| Phase 999.36 P00 | 22min | 5 tasks | 5 files |
+| Phase 999.36 P01 | 11 | 5 tasks | 7 files |
+| Phase 116 P01 | 65min | 6 tasks | 11 files |
+| Phase 116 P06 | 85min | 7 tasks | 22 files |
+| Phase 117 P11 | 28min | 7 tasks | 10 files |
 
 ## Session Continuity
 
-Last activity: 2026-04-25
-Stopped at: Completed 95-03-PLAN.md (Phase 95 SHIP-READY — v2.6 milestone closed)
-Resume: Execute 85-02-PLAN.md (two-block prompt-builder MCP tools section — stable prefix tool list + mutable suffix live status table) — Plan 02 can now read `SessionHandle.getMcpState()` directly without reaching into SessionManager internals
+Last activity: 2026-05-13
+Stopped at: Phase 999.47 context gathered
+Resume: Phase 116 is code-complete at the source level. Awaiting operator decisions: (1) deploy clearance — Ramy-active deploy hold continues until operator explicit clearance; (2) cutover flag flip — `clawcode config set defaults.dashboardCutoverRedirect true` once operator has soaked /dashboard/v2/ for one or more sessions and reviewed `/dashboard/v2/audit` to confirm dashboard mutations are captured; (3) decommission follow-up — separate commit removing legacy `src/dashboard/static/*` files + the cutover-flag plumbing once the operator is confident the cutover is durable. See `116-VERIFICATION.md` for the operator handoff checklist + telemetry signals to watch + rollback procedure.
+
+**Open follow-ups (deferred from Phase 116):**
+
+- ~~Phase 115-08 producer port~~ — code DONE 2026-05-11 (commit `a0f30a6`); deployed 2026-05-11 22:55 UTC. **Post-deploy verification surfaced a NEW sub-bug:** producer call sites present in bundle (grep returns 5 vs 0 pre-port) but split-latency columns STILL NULL across 84 tool-use turns in 3-min post-restart window. Port landed in `iterateUntilResult` but producer calls aren't firing on real traffic. Three hypotheses to investigate as follow-up quick task: (1) call sites positioned at wrong message-type branch; (2) `turn` parameter from production callers lacks producer methods — `?.()` silently no-ops (silent-path-bifurcation AGAIN); (3) conditional spread gate `parallelToolCallCount > 0` gating writes. Integration test (`persistent-session-handle-producer-port.test.ts`) passed with non-zero values — production state differs from test state. **NOT a Phase 116 blocker** — F07 has graceful fallback for null columns per plan's deviation handling.
+- F19 swim-lane timeline → 116-DEFERRED.md (promotion criteria: 2× operator demand reports OR F12 reveals multi-agent timing gap).
+- F14 in-UI memory editor → 116-DEFERRED.md (promotion criteria: operator workflow friction OR `clawcode memory edit` invocations exceed 10/day).
+- Pre-existing slash-command test failures (~17-19) carried forward across the entire Phase 116 chain. Awaiting the dedupe task 116-04 surfaced.
+
+**Operator note:** Plan 116-06 introduced no new top-level dependencies (bare SVG for the heatmap, existing shadcn Sheet/Popover/Table primitives reused). All new components are client-side. No deploy performed; commits are code-only. Ramy-active deploy hold continues.
+
+## Open Bugs (post-999.15 deploy)
+
+- **mcp-tracker CLI: "Invalid Request"** — `clawcode mcp-tracker` IPC call returns Invalid Request from daemon. Likely IPC schema mismatch between client request shape and `daemon.ts:5285+` handler registration. Plan 03 tests passed (mocked IPC), but real production wiring has a gap. Hot-fix: small (probably 1-2 lines schema or method-name correction). Track as 999.15 post-deploy follow-up.
+
+## Open Bugs (post-115-08 deploy, surfaced by quick task 260511-mfn)
+
+- **Phase 115-08 split-latency producers SILENT in production — FIXED 2026-05-11 (commit `a0f30a6` — port shipped, awaiting deploy clearance).** Two parallel session-handle implementations existed in source: `src/manager/session-adapter.ts:1336:iterateWithTracing` (test-only, invoked via `wrapSdkQuery` / `createTracedSessionHandle`) had the 4 producer call sites, but production runs `src/manager/persistent-session-handle.ts:333:iterateUntilResult` (via `daemon.ts:18,2287` → `SdkSessionAdapter` → `template-driver.ts:55,121` → `createPersistentSessionHandle`), which had NO producer calls. So `tool_execution_ms` / `tool_roundtrip_ms` / `parallel_tool_call_count` were silently NULL fleet-wide. **Fix:** quick task 260512 ported the 4 producer call sites verbatim into `iterateUntilResult` (per-tool `addToolExecutionMs` on tool_result, per-batch `addToolRoundtripMs` open/close on parent assistant transitions, `recordParallelToolCallCount` per parent assistant, and final-batch fallbacks inside `closeAllSpans`). Surgical port — no refactor. Added two regression guards: `src/manager/__tests__/producer-call-sites-sentinel.test.ts` (static-grep sentinel pinning the call sites in BOTH files — silent-path-bifurcation anti-pattern guard) and `src/manager/__tests__/persistent-session-handle-producer-port.test.ts` (end-to-end integration test driving the real `iterateUntilResult` through `createPersistentSessionHandle` with a synthetic tool_use→tool_result→result sequence, asserting the persisted TurnRecord carries non-zero values on all three split-latency fields). All 11 new tests pass; 222 tests across `src/manager/__tests__/persistent-session-handle*.test.ts` + `src/performance/__tests__/` pass with zero regressions. The 17 manager-tests failures observed on master are pre-existing (verified by stash) and unrelated. **Deploy:** awaiting operator clearance (Ramy-active hold still in effect). Once deployed, fleet `traces.db` will populate the three columns; F07 in Plan 116-02 can switch from `trace_spans` fallback to direct column reads.
+- **`clawcode tool-latency-audit` CLI: "Invalid Request"** — same flavor as the mcp-tracker bug. May share root cause with the producer regression above OR may be a separate IPC-handler bug; investigation deferred until the producer port lands. Direct SQLite read against agent `traces.db` files is the working fallback. See `.planning/quick/260511-mfn-*/260511-mfn-AUDIT-FINDINGS.md` "Finding C".
+
+## Open Bugs (post-116 deploy, 2026-05-11 22:55 UTC + cache hotfix `5975a1b`)
+
+Audit summary doc: `.planning/phases/116-dashboard-redesign-modern-ui-mobile-basic-advanced/116-POSTDEPLOY-AUDIT.md`.
+
+- **FIXED 2026-05-11 (commits `d7ad15a`, `6809fbc` — awaiting deploy clearance)**:
+  - Bug 1: costs chart legend overflow (subagent series spam). `parentAgentName()` helper added; top-7 + "other" bucketing in `CostDashboard.tsx`.
+  - Bug 2: conversations transcript pane missing. `list-recent-turns` IPC handler extended with optional `sessionId`; `useSessionTurns` hook + `TranscriptPane` added to `ConversationsView`.
+- **STILL OPEN: fleet tile grid + comparison table subagent cardinality.** `/dashboard/v2/` BasicMode and `/dashboard/v2/fleet` use `useAgents()` → `/api/status` which returns the full registry including every subagent thread. With ~100 active threads, both surfaces will balloon similarly to the costs chart did. Knowledge graph agent picker has the same noise. Fix needs a "Show subagents" toggle (default OFF) gated on `parentAgentName(name) === name`. Mini-plan candidate — not rushed into the post-deploy pass. The Bug 1 client helper at `src/dashboard/client/src/lib/agent-name.ts` is the ready-made primitive to use.

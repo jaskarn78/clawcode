@@ -211,4 +211,193 @@ describe("memory-retrieval RRF (Phase 90 MEM-03)", () => {
       expect(results).toEqual([]);
     });
   });
+
+  /**
+   * Phase 100-fu — Option A: include `memories` table in pre-turn retrieval.
+   *
+   * Bug: retrieveMemoryChunks only searched memory_chunks (file-scanner table
+   * for MEMORY.md content). It did NOT search `memories` (where the agent
+   * saves things via memory_save). Conversational memory was invisible in
+   * the pre-turn <memory-context> block. Silent-recall problem.
+   *
+   * Fix: add searchMemoriesVec sibling helper on MemoryStore, fan out both
+   * searches in parallel via Promise.all, RRF-fuse results, tag each result
+   * with `source: "chunk" | "memory"`.
+   */
+  describe("retrieveMemoryChunks — memories table fan-out (Phase 100-fu)", () => {
+    let store: MemoryStore;
+
+    beforeEach(() => {
+      store = new MemoryStore(":memory:");
+    });
+
+    afterEach(() => {
+      store.close();
+    });
+
+    it("PMR-A1: chunks-only search yields results all tagged source='chunk'", async () => {
+      const qEmb = await testEmbed("alpha");
+      store.insertMemoryChunk({
+        path: "/ws/memory/note.md",
+        chunkIndex: 0,
+        heading: "N",
+        body: "alpha content",
+        tokenCount: 5,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "n",
+        embedding: qEmb,
+      });
+
+      const results = await retrieveMemoryChunks({
+        query: "alpha",
+        store,
+        embed: async () => qEmb,
+        topK: 5,
+      });
+      expect(results.length).toBeGreaterThan(0);
+      for (const r of results) {
+        expect(r.source).toBe("chunk");
+      }
+    });
+
+    it("PMR-A2: memories-only search yields results all tagged source='memory'", async () => {
+      const qEmb = await testEmbed("delegation pattern");
+      // Empty memory_chunks; insert into memories table only.
+      store.insert(
+        {
+          content: "Use spawn_subagent_thread for delegation patterns.",
+          source: "manual",
+          importance: 0.7,
+          tags: ["pattern", "delegation"],
+          skipDedup: true,
+        },
+        qEmb,
+      );
+
+      const results = await retrieveMemoryChunks({
+        query: "delegation pattern",
+        store,
+        embed: async () => qEmb,
+        topK: 5,
+      });
+      expect(results.length).toBeGreaterThan(0);
+      for (const r of results) {
+        expect(r.source).toBe("memory");
+      }
+      // Memory results carry the saved content as body
+      expect(results[0]!.body).toContain("spawn_subagent_thread");
+    });
+
+    it("PMR-A3: mixed results include both surfaces, RRF-fused", async () => {
+      const qEmb = await testEmbed("hybrid query");
+      // Chunk-side
+      store.insertMemoryChunk({
+        path: "/ws/memory/file.md",
+        chunkIndex: 0,
+        heading: "F",
+        body: "chunk body for hybrid",
+        tokenCount: 5,
+        scoreWeight: 0,
+        fileMtimeMs: Date.now(),
+        fileSha256: "f",
+        embedding: qEmb,
+      });
+      // Memory-side
+      store.insert(
+        {
+          content: "memory body for hybrid",
+          source: "manual",
+          importance: 0.5,
+          tags: ["t"],
+          skipDedup: true,
+        },
+        qEmb,
+      );
+
+      const results = await retrieveMemoryChunks({
+        query: "hybrid query",
+        store,
+        embed: async () => qEmb,
+        topK: 10,
+      });
+      const sources = new Set(results.map((r) => r.source));
+      expect(sources.has("chunk")).toBe(true);
+      expect(sources.has("memory")).toBe(true);
+      // Sorted by fusedScore desc
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1]!.fusedScore).toBeGreaterThanOrEqual(
+          results[i]!.fusedScore,
+        );
+      }
+    });
+
+    it("PMR-A4: token-budget cap applies across combined chunk+memory set", async () => {
+      const qEmb = await testEmbed("budget");
+      // Insert several large chunks AND several large memories.
+      const big = "x".repeat(500);
+      for (let i = 0; i < 4; i++) {
+        store.insertMemoryChunk({
+          path: `/ws/memory/c${i}.md`,
+          chunkIndex: 0,
+          heading: `C${i}`,
+          body: big,
+          tokenCount: 125,
+          scoreWeight: 0,
+          fileMtimeMs: Date.now(),
+          fileSha256: `c${i}`,
+          embedding: qEmb,
+        });
+      }
+      for (let i = 0; i < 4; i++) {
+        store.insert(
+          {
+            content: big,
+            source: "manual",
+            importance: 0.5,
+            tags: [],
+            skipDedup: true,
+          },
+          qEmb,
+        );
+      }
+
+      // tokenBudget=200 -> budget*4 = 800 chars total.
+      const results = await retrieveMemoryChunks({
+        query: "budget",
+        store,
+        embed: async () => qEmb,
+        topK: 20,
+        tokenBudget: 200,
+      });
+      // We must always emit at least the first; subsequent should be cut by budget
+      expect(results.length).toBeGreaterThanOrEqual(1);
+      const totalChars = results.reduce((acc, r) => acc + r.body.length, 0);
+      // First chunk is allowed even if it exceeds; further chunks are not added
+      // once the cumulative length crosses tokenBudget*4. So we expect at most 2.
+      expect(results.length).toBeLessThanOrEqual(2);
+      // Sanity: across both surfaces, not >> budget*4 (allow first to be over)
+      expect(totalChars).toBeLessThanOrEqual(big.length * 2 + 10);
+    });
+
+    it("PMR-A5: empty query and empty store both return [] without throwing", async () => {
+      // Empty query
+      const r1 = await retrieveMemoryChunks({
+        query: "   ",
+        store,
+        embed: testEmbed,
+        topK: 5,
+      });
+      expect(r1).toEqual([]);
+
+      // Empty store, non-empty query
+      const r2 = await retrieveMemoryChunks({
+        query: "anything",
+        store,
+        embed: testEmbed,
+        topK: 5,
+      });
+      expect(r2).toEqual([]);
+    });
+  });
 });

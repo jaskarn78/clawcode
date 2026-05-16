@@ -27,11 +27,16 @@ function makeConfig(name: string): ResolvedAgentConfig {
     allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
+    autoCompactAt: 0.7, // Phase 124 D-06
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -384,6 +389,7 @@ vi.mock("../warm-path-check.js", async () => {
 });
 
 import { runWarmPathCheck, WARM_PATH_TIMEOUT_MS } from "../warm-path-check.js";
+import type { WarmPathResult } from "../warm-path-check.js";
 
 const mockedRunWarmPathCheck = vi.mocked(runWarmPathCheck);
 
@@ -393,31 +399,34 @@ const mockedRunWarmPathCheck = vi.mocked(runWarmPathCheck);
 beforeEach(() => {
   mockedRunWarmPathCheck.mockReset();
   mockedRunWarmPathCheck.mockResolvedValue(
+    // WarmPathResult has mutable fields; Object.freeze produces Readonly<T>.
+    // Recover the declared shape via cast — runtime immutability is preserved
+    // by the freeze, the consumer only reads.
     Object.freeze({
       ready: true,
       durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1, browser: 0 }),
       total_ms: 131,
       errors: Object.freeze([]) as readonly string[],
-    }),
+    }) as unknown as WarmPathResult,
   );
 });
 
-function makeReadyResult(totalMs = 131) {
+function makeReadyResult(totalMs = 131): WarmPathResult {
   return Object.freeze({
     ready: true,
     durations_ms: Object.freeze({ sqlite: 50, embedder: 80, session: 1, browser: 0 }),
     total_ms: totalMs,
     errors: Object.freeze([]) as readonly string[],
-  });
+  }) as unknown as WarmPathResult;
 }
 
-function makeFailureResult(errors: readonly string[], totalMs = 85) {
+function makeFailureResult(errors: readonly string[], totalMs = 85): WarmPathResult {
   return Object.freeze({
     ready: false,
     durations_ms: Object.freeze({ sqlite: 20, embedder: 65, session: 0, browser: 0 }),
     total_ms: totalMs,
     errors: Object.freeze([...errors]) as readonly string[],
-  });
+  }) as unknown as WarmPathResult;
 }
 
 describe("startAgent warm-path gate (Phase 56)", () => {
@@ -930,6 +939,97 @@ describe("SessionManager session-boundary summarization (Phase 66)", () => {
     const after = manager.getActiveConversationSessionId(agentName);
 
     expect(after).toBe(before);
+  }, 30_000);
+
+  // ── Phase 99-C: pending-summary backlog drain ──────────────────────────────
+  // summarizePendingSessions should pick up sessions that ended/crashed
+  // without ever being summarized (status='ended' OR 'crashed' AND
+  // summary_memory_id IS NULL with at least one turn) and run summarizeSession
+  // on each via the same wiring the stop-path / crash-path use.
+  it("summarizePendingSessions drains the backlog and writes summary memories", async () => {
+    const agentName = "summarize-pending";
+    const config = makeIsolatedConfig(agentName);
+    await manager.startAgent(agentName, config);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    const memStore = manager.getMemoryStore(agentName)!;
+
+    // Seed 3 ended-no-summary sessions (each with 4 turns to exceed minTurns=3).
+    const seeded: string[] = [];
+    for (let s = 0; s < 3; s++) {
+      const session = convStore.startSession(agentName);
+      seeded.push(session.id);
+      for (let i = 0; i < 4; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: i % 2 === 0 ? "user" : "assistant",
+          content: `pending session ${s} turn ${i} body`,
+        });
+      }
+      convStore.endSession(session.id);
+    }
+
+    // Sanity: the backlog query sees the 3 seeded sessions.
+    expect(
+      convStore.listPendingSummarySessions(agentName, 10).map((x) => x.id),
+    ).toEqual(expect.arrayContaining(seeded));
+
+    const insertSpy = vi.spyOn(memStore, "insert");
+    const result = await manager.summarizePendingSessions(agentName, 10);
+
+    expect(result.attempted).toBe(3);
+    expect(result.summarized).toBe(3);
+    expect(result.skipped).toBe(0);
+
+    // Each session got a session-summary memory entry.
+    const summaryInserts = insertSpy.mock.calls.filter((c) =>
+      (c[0] as { tags?: readonly string[] }).tags?.includes(
+        "session-summary",
+      ),
+    );
+    expect(summaryInserts.length).toBe(3);
+
+    // After draining, every seeded session is now status='summarized' with
+    // a summary_memory_id populated.
+    for (const id of seeded) {
+      const after = convStore.getSession(id)!;
+      expect(after.status).toBe("summarized");
+      expect(after.summaryMemoryId).toBeTruthy();
+    }
+    // Backlog is now empty.
+    expect(convStore.listPendingSummarySessions(agentName, 10)).toHaveLength(0);
+  }, 30_000);
+
+  it("summarizePendingSessions returns zeroed counts when stores aren't open", async () => {
+    // No startAgent — memoryStore / conversationStore not in the maps.
+    const r = await manager.summarizePendingSessions("never-started", 5);
+    expect(r).toEqual({ attempted: 0, summarized: 0, skipped: 0 });
+  });
+
+  it("summarizePendingSessions respects the limit argument", async () => {
+    const agentName = "summarize-pending-limit";
+    const config = makeIsolatedConfig(agentName);
+    await manager.startAgent(agentName, config);
+
+    const convStore = manager.getConversationStore(agentName)!;
+    for (let s = 0; s < 5; s++) {
+      const session = convStore.startSession(agentName);
+      for (let i = 0; i < 4; i++) {
+        convStore.recordTurn({
+          sessionId: session.id,
+          role: "user",
+          content: `lim ${s}.${i}`,
+        });
+      }
+      convStore.endSession(session.id);
+    }
+
+    const r = await manager.summarizePendingSessions(agentName, 2);
+    expect(r.attempted).toBe(2);
+    // 3 sessions remain pending after the capped tick.
+    expect(
+      convStore.listPendingSummarySessions(agentName, 10).length,
+    ).toBe(3);
   }, 30_000);
 });
 
@@ -1579,6 +1679,10 @@ describe("restartAgent greeting emission (Phase 89)", () => {
       memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
       ...overrides,
     };
   }
@@ -2058,5 +2162,146 @@ describe("SessionManager — memory-file flush timer (Phase 90 MEM-04)", () => {
       _memoryFileFlushTimers: ReadonlyMap<string, unknown>;
     })._memoryFileFlushTimers;
     expect(timers.has("mf-stop")).toBe(false);
+  });
+});
+
+/* =========================================================================
+ *  Phase 999.15 polled discovery (TRACK-02 + TRACK-08 #1).
+ *
+ *  All cases below FAIL at Wave 0 because:
+ *    - The current MCP discovery block in session-manager.ts:721-766 is the
+ *      fire-and-forget "1s settle + single attempt" form. Plan 02 replaces
+ *      it with a polled wait (6 attempts × 5s, minAge=5s).
+ *    - tracker.register signature changes to (name, claudePid, mcpPids).
+ *    - SessionManager constructor learns about an mcpTracker test injection.
+ *
+ *  Tests rely on vi.useFakeTimers (already enabled in beforeEach above).
+ *  No 999.14 cases above are modified — strict append.
+ * =======================================================================*/
+
+import { McpProcessTracker } from "../../mcp/process-tracker.js";
+
+describe("Phase 999.15 polled discovery (TRACK-02)", () => {
+  let adapter2: MockSessionAdapter;
+  let tmpDir2: string;
+  let registryPath2: string;
+  let mgr: SessionManager;
+  let trackerRegisterSpy: ReturnType<typeof vi.fn>;
+
+  // Mock proc-scan so polled-discovery sees scripted PIDs across attempts.
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    adapter2 = createMockAdapter();
+    tmpDir2 = await mkdtemp(join(tmpdir(), "sm-test-pd-"));
+    registryPath2 = join(tmpDir2, "registry.json");
+
+    // Build a tracker fake (we don't need real /proc walking; we pin call shape).
+    trackerRegisterSpy = vi.fn(async () => {});
+    const trackerFake = {
+      patterns: /mcp-server/,
+      register: trackerRegisterSpy,
+      killAgentGroup: vi.fn(async () => {}),
+      killAll: vi.fn(async () => {}),
+      list: vi.fn(() => []),
+      listForAgent: vi.fn(() => []),
+      unregister: vi.fn(() => []),
+    } as unknown as McpProcessTracker;
+
+    mgr = new SessionManager({
+      adapter: adapter2,
+      registryPath: registryPath2,
+      backoffConfig: TEST_BACKOFF,
+      mcpTracker: trackerFake,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await mgr.stopAll();
+    } catch {
+      /* tests may not have started agents */
+    }
+    await rm(tmpDir2, { recursive: true, force: true });
+    vi.useRealTimers();
+    // Tear down per-test vi.spyOn installations on shared procScan module so
+    // SM-{1..4} cases don't leak call history into one another (Wave 0 plumbing
+    // gap — fixed at Plan 02 GREEN per Rule 1: broken test mock state).
+    vi.restoreAllMocks();
+  });
+
+  it("SM-1 (T-04): sink-based discovery registers tracker once sink populates", async () => {
+    // FIND-123-A.next T-04 — the /proc-walk has been replaced by reading
+    // handle.getClaudePid() from the per-agent sink populated by
+    // makeDetachedSpawn. The mock simulates the SDK callback by flipping
+    // claudePidValue mid-poll via __testSetClaudePid.
+    const procScan = await import("../../mcp/proc-scan.js");
+    vi.spyOn(procScan, "discoverAgentMcpPids").mockResolvedValue([201, 202]);
+
+    const config = { ...makeConfig("agent-poll"), workspace: tmpDir2, memoryPath: tmpDir2 };
+    await mgr.startAgent("agent-poll", config);
+
+    // Sink stays null for the first 2 polling slices (SDK hasn't emitted
+    // a spawn callback yet); flip on the 3rd slice to a stable PID.
+    const handle = mgr.getSessionHandle("agent-poll") as unknown as {
+      __testSetClaudePid: (pid: number | null) => void;
+    };
+    await vi.advanceTimersByTimeAsync(5_000); // attempt 1 — null
+    await vi.advanceTimersByTimeAsync(5_000); // attempt 2 — null
+    handle.__testSetClaudePid(200);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await vi.runOnlyPendingTimersAsync();
+
+    // tracker.register MUST be called once with the 3-arg signature
+    // (name, claudePid, mcpPids); claudePid sourced from the sink.
+    expect(trackerRegisterSpy).toHaveBeenCalledTimes(1);
+    const args = trackerRegisterSpy.mock.calls[0]!;
+    expect(args[0]).toBe("agent-poll");
+    expect(args[1]).toBe(200);
+    expect([...(args[2] as number[])].sort()).toEqual([201, 202]);
+  });
+
+  it("SM-2 (T-04): sink-based discovery aborts when agent is disposed mid-wait", async () => {
+    const procScan = await import("../../mcp/proc-scan.js");
+    vi.spyOn(procScan, "discoverAgentMcpPids").mockResolvedValue([201]);
+
+    const config = { ...makeConfig("agent-dispose"), workspace: tmpDir2, memoryPath: tmpDir2 };
+    await mgr.startAgent("agent-dispose", config);
+    // Sink intentionally stays null — simulates an SDK spawn that is
+    // slower than the operator stop. The polled loop iterates with no PID
+    // until sessions.has(name) flips false on stopAgent, then exits.
+
+    // First polling slice elapses with null sink (no register yet).
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(trackerRegisterSpy).not.toHaveBeenCalled();
+
+    // Operator stop during the wait. AFTER stop, simulate the SDK finally
+    // spawning — the loop's sessions.has check must short-circuit so the
+    // PID never lands in the tracker for an already-stopped agent.
+    await mgr.stopAgent("agent-dispose");
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(trackerRegisterSpy).not.toHaveBeenCalled();
+  });
+
+  it("SM-3 (T-04): after 30s (6 attempts) with sink still null, exits without register", async () => {
+    // FIND-123-A.next T-04 — sink never populated (SDK spawn failed or
+    // delayed past the 30s budget) means the polled loop exits gracefully
+    // and the periodic reaper takes over.
+    const config = { ...makeConfig("agent-budget"), workspace: tmpDir2, memoryPath: tmpDir2 };
+    await mgr.startAgent("agent-budget", config);
+    // Do NOT call __testSetClaudePid — sink stays null for the full budget.
+
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    await vi.runOnlyPendingTimersAsync();
+
+    // No register because no PID ever appeared in the sink.
+    expect(trackerRegisterSpy).not.toHaveBeenCalled();
   });
 });

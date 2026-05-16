@@ -7,6 +7,7 @@ import { checkForDuplicate, mergeMemory } from "./dedup.js";
 import { extractWikilinks } from "./graph.js";
 import { calculateImportance } from "./importance.js";
 import { autoLinkMemory } from "./similarity.js";
+import { int8ToBuffer } from "./embedder-quantize.js";
 import type {
   MemoryEntry,
   MemoryTier,
@@ -23,6 +24,21 @@ type PreparedStatements = {
   readonly updateAccess: Statement;
   readonly deleteMemory: Statement;
   readonly deleteVec: Statement;
+  /**
+   * Phase 115 D-08 — cascade-delete from `vec_memories_v2`. Same
+   * statement shape as `deleteVec` (DELETE WHERE memory_id = ?), runs
+   * inside the same `db.transaction()` per Phase 107 invariant.
+   * Idempotent — DELETE-WHERE-no-match is a 0-row no-op so this works
+   * for pre-dual-write entries that have no v2 row yet.
+   */
+  readonly deleteVecV2: Statement;
+  /**
+   * Phase 115 D-08 — INSERT OR REPLACE into `vec_memories_v2`. Used by
+   * the dual-write hook in MemoryStore.insertEmbeddingV2 + the migration
+   * runner's batch re-embed loop. `vec_int8(?)` SQL function is required
+   * because sqlite-vec rejects raw Int8Array bindings as float32-shaped.
+   */
+  readonly insertVecV2: Statement;
   readonly listRecent: Statement;
   readonly insertSessionLog: Statement;
   readonly insertLink: Statement;
@@ -37,6 +53,19 @@ type PreparedStatements = {
    * the tag as a substring; content is compared literally.
    */
   readonly findByTagAndContent: Statement;
+  /**
+   * Phase 100-fu — single-row access bump for non-search callers
+   * (GraphSearch graph-walked neighbors). Mirrors `updateAccess`
+   * verbatim — kept as a separate prepared statement so usage sites
+   * are easy to grep and so the SemanticSearch path is unaffected.
+   */
+  readonly bumpAccess: Statement;
+  /**
+   * Phase 100-fu — count inbound wikilink edges for a memory id. Used
+   * by TierManager.refreshHotTier() to surface graph-centrality as a
+   * hot-tier promotion signal independent of direct access count.
+   */
+  readonly getBacklinkCount: Statement;
 };
 
 /**
@@ -89,6 +118,14 @@ export class MemoryStore {
       this.migrateApiKeySessionsTable();
       this.migrateOriginIdColumn();
       this.migrateMemoryChunks();
+      // Phase 115 D-08 — additive embedding-v2 tables (vec_memories_v2 +
+      // vec_memory_chunks_v2 with int8[384] cosine columns) + per-agent
+      // `migrations` state machine table. Idempotent (CREATE TABLE/VIRTUAL
+      // TABLE IF NOT EXISTS). NO migrate-down — operator rolls back via
+      // the embedding-v2 state machine in src/memory/migrations/embedding-v2.ts
+      // (which sets the read flag back to v1 but keeps the v2 column data
+      // for re-attempt — see Phase 115 D-08 rollback path).
+      this.migrateEmbeddingV2Tables();
       this.stmts = this.prepareStatements();
     } catch (error) {
       const message =
@@ -104,10 +141,34 @@ export class MemoryStore {
 
   /**
    * Insert a new memory with its embedding.
-   * Both the memories table and vec_memories table are updated atomically.
+   *
+   * Phase 1-114 contract: writes `memories` + `vec_memories` rows
+   * atomically inside one `db.transaction()`.
+   *
+   * Phase 115 D-08 dual-write extension: when `opts.embeddingV2` is
+   * provided, ALSO writes `vec_memories_v2` inside the SAME transaction.
+   * Phase 107 atomic-cascade invariant: either all THREE rows commit
+   * (memories + vec_memories + vec_memories_v2) or NONE do — a throw
+   * inside the transaction (e.g. v2 INSERT fails) rolls back the v1
+   * write too.
+   *
+   * The opts.embeddingV2 path is consumed by:
+   *   - The wave-4 dual-write hook in MemoryStore callers (when
+   *     EmbeddingV2Migrator.currentWriteVersions() includes "v2").
+   *   - The `insertWithDualWrite` convenience wrapper below (this plan).
    */
-  insert(input: CreateMemoryInput, embedding: Float32Array): MemoryEntry {
+  insert(
+    input: CreateMemoryInput,
+    embedding: Float32Array,
+    opts?: { embeddingV2?: Int8Array },
+  ): MemoryEntry {
     try {
+      if (opts?.embeddingV2 && opts.embeddingV2.length !== 384) {
+        throw new MemoryError(
+          `Phase 115 v2 embedding must be 384-dim int8; got ${opts.embeddingV2.length}`,
+          this.dbPath,
+        );
+      }
       // Phase 80 MEM-02 — origin_id path skips dedup entirely. Idempotency
       // by hash is the contract; content-similarity merging is a different
       // semantic that does not apply to migrated imports.
@@ -129,7 +190,13 @@ export class MemoryStore {
             embedding,
           });
 
-          // Re-extract links after merge
+          // Re-extract links after merge.
+          //
+          // Phase 115 D-08 — when dedup merges into an existing memory
+          // and the caller also passed a v2 embedding, write the v2
+          // row for the EXISTING memory id atomically inside this same
+          // transaction. mergeMemory() updates the v1 vec; we mirror
+          // that for v2 (INSERT OR REPLACE so re-merge is idempotent).
           this.db.transaction(() => {
             const mergedTargets = extractWikilinks(input.content);
             this.stmts.deleteLinksFrom.run(dedupResult.existingId);
@@ -139,6 +206,12 @@ export class MemoryStore {
               if (exists) {
                 this.stmts.insertLink.run(dedupResult.existingId, targetId, targetId, mergeNow);
               }
+            }
+            if (opts?.embeddingV2) {
+              this.stmts.insertVecV2.run(
+                dedupResult.existingId,
+                int8ToBuffer(opts.embeddingV2),
+              );
             }
           })();
 
@@ -206,6 +279,14 @@ export class MemoryStore {
           return;
         }
         this.stmts.insertVec.run(id, embedding);
+        // Phase 115 D-08 — atomic dual-write. v2 row written inside the
+        // SAME transaction as v1 + memories. A throw here (e.g. vec_int8
+        // type rejection, disk-full) rolls back the v1 + memories
+        // writes too — Phase 107 atomic-cascade invariant preserved
+        // for the insert side, mirroring the delete side.
+        if (opts?.embeddingV2) {
+          this.stmts.insertVecV2.run(id, int8ToBuffer(opts.embeddingV2));
+        }
 
         // Extract wikilinks and create edges to existing targets
         const targets = extractWikilinks(input.content);
@@ -295,6 +376,17 @@ export class MemoryStore {
   /**
    * Delete a memory from both memories and vec_memories tables.
    * Returns true if the memory existed and was deleted.
+   *
+   * Phase 115 D-08 — cascade EXTENDED to also delete from
+   * `vec_memories_v2` inside the same `db.transaction()`. Phase 107
+   * VEC-CLEAN-* atomic-cascade invariant preserved across BOTH v1 and v2
+   * vec tables — either all three rows go (memories + vec_memories +
+   * vec_memories_v2) or none do.
+   *
+   * The v2 `DELETE FROM vec_memories_v2` runs even when no v2 row exists
+   * for `id` (DELETE-WHERE-no-match is a 0-row no-op in SQLite). This is
+   * the right semantics: pre-dual-write entries have no v2 row, but the
+   * delete must still cascade idempotently.
    */
   delete(id: string): boolean {
     try {
@@ -304,6 +396,10 @@ export class MemoryStore {
         deleted = result.changes > 0;
         if (deleted) {
           this.stmts.deleteVec.run(id);
+          // Phase 115 D-08 — cascade to v2. Idempotent — DELETE-WHERE-no-
+          // match is a 0-row no-op. The transaction wrapper guarantees
+          // atomicity per Phase 107 VEC-CLEAN-02.
+          this.stmts.deleteVecV2.run(id);
         }
       })();
       return deleted;
@@ -445,6 +541,330 @@ export class MemoryStore {
   }
 
   /**
+   * Phase 115 D-08 — write a v2 (bge-small-int8) embedding for an existing
+   * memory id. Idempotent — INSERT OR REPLACE so the dual-write hook can
+   * call this on every memory write without checking for an existing v2
+   * row first. The migration runner's batch re-embed also uses this path.
+   *
+   * Atomicity: the caller is responsible for wrapping in a transaction if
+   * dual-write is required (memories + vec_memories + vec_memories_v2 all
+   * inside one transaction per Phase 107 lock). The standard call site
+   * is `insertWithDualWrite` below, which wraps both v1 + v2 writes.
+   *
+   * Throws MemoryError if the embedding length doesn't match 384 — vec0
+   * column type `int8[384]` is enforced at write time.
+   */
+  insertEmbeddingV2(memoryId: string, embedding: Int8Array): void {
+    if (embedding.length !== 384) {
+      throw new MemoryError(
+        `Phase 115 v2 embedding must be 384-dim int8; got ${embedding.length}`,
+        this.dbPath,
+      );
+    }
+    try {
+      this.stmts.insertVecV2.run(memoryId, int8ToBuffer(embedding));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to write v2 embedding for ${memoryId}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 D-08 — write a v2 chunk embedding. Mirror of
+   * `insertEmbeddingV2` for the chunks side. Used by the migration
+   * runner's chunk re-embed loop AND by memory-scanner during
+   * dual-write phase (deferred to follow-on plan 115-09; this plan
+   * ships the storage primitive).
+   */
+  insertChunkEmbeddingV2(chunkId: string, embedding: Int8Array): void {
+    if (embedding.length !== 384) {
+      throw new MemoryError(
+        `Phase 115 v2 chunk embedding must be 384-dim int8; got ${embedding.length}`,
+        this.dbPath,
+      );
+    }
+    try {
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO vec_memory_chunks_v2 (chunk_id, embedding) VALUES (?, vec_int8(?))`,
+        )
+        .run(chunkId, int8ToBuffer(embedding));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to write v2 chunk embedding for ${chunkId}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 115 D-08 — combined dual-write helper. Thin wrapper over
+   * `insert(input, embedding, { embeddingV2 })`. All three rows
+   * (memories + vec_memories + vec_memories_v2) commit inside ONE
+   * `db.transaction()` — either all three land or none do. Phase 107
+   * atomic-cascade invariant preserved across the insert side
+   * (matching the delete side).
+   *
+   * If the v2 INSERT throws (e.g. vec_int8 type rejection, disk-full),
+   * the v1 + memories writes roll back too. Regression-pinned by
+   * `embedding-v2-cascade-delete.test.ts` insert-atomicity test.
+   */
+  insertWithDualWrite(
+    input: CreateMemoryInput,
+    embeddingV1: Float32Array,
+    embeddingV2: Int8Array,
+  ): MemoryEntry {
+    return this.insert(input, embeddingV1, { embeddingV2 });
+  }
+
+  /**
+   * Phase 115 D-08 — return memories that have a v1 vec_memories row but
+   * NO v2 vec_memories_v2 row. The migration runner pulls these in
+   * batches to embed + write v2 vectors for historical entries.
+   *
+   * Sorted by id ASC so a `lastCursor`-based resume is deterministic
+   * (id > last_cursor; LIMIT N).
+   *
+   * Returns memory_id + content; the runner only needs content to embed.
+   */
+  listMemoriesMissingV2Embedding(
+    limit: number,
+    afterCursor: string | null,
+  ): ReadonlyArray<Readonly<{ id: string; content: string }>> {
+    const stmt = afterCursor
+      ? this.db.prepare(
+          `SELECT m.id, m.content FROM memories m
+           WHERE m.id IN (SELECT memory_id FROM vec_memories)
+             AND m.id NOT IN (SELECT memory_id FROM vec_memories_v2)
+             AND m.id > ?
+           ORDER BY m.id ASC
+           LIMIT ?`,
+        )
+      : this.db.prepare(
+          `SELECT m.id, m.content FROM memories m
+           WHERE m.id IN (SELECT memory_id FROM vec_memories)
+             AND m.id NOT IN (SELECT memory_id FROM vec_memories_v2)
+           ORDER BY m.id ASC
+           LIMIT ?`,
+        );
+    const rows = afterCursor
+      ? (stmt.all(afterCursor, limit) as Array<{ id: string; content: string }>)
+      : (stmt.all(limit) as Array<{ id: string; content: string }>);
+    return Object.freeze(rows.map((r) => Object.freeze({ ...r })));
+  }
+
+  /**
+   * Phase 115 D-08 — total count of memories MISSING a v2 embedding.
+   * Used by the migration runner to compute progressTotal for status
+   * reporting. Counted ONCE at migration start; subsequent batches
+   * track progressProcessed against this total.
+   */
+  countMemoriesMissingV2Embedding(): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM memories m
+         WHERE m.id IN (SELECT memory_id FROM vec_memories)
+           AND m.id NOT IN (SELECT memory_id FROM vec_memories_v2)`,
+      )
+      .get() as { n: number };
+    return row.n;
+  }
+
+  /**
+   * Phase 115 D-08 — return v2 chunks missing a v2 embedding (for the
+   * future plan-115-09 chunks-side migration). Same cursor-based resume
+   * shape as listMemoriesMissingV2Embedding.
+   */
+  listChunksMissingV2Embedding(
+    limit: number,
+    afterCursor: string | null,
+  ): ReadonlyArray<Readonly<{ id: string; body: string }>> {
+    const stmt = afterCursor
+      ? this.db.prepare(
+          `SELECT c.id, c.body FROM memory_chunks c
+           WHERE c.id IN (SELECT chunk_id FROM vec_memory_chunks)
+             AND c.id NOT IN (SELECT chunk_id FROM vec_memory_chunks_v2)
+             AND c.id > ?
+           ORDER BY c.id ASC
+           LIMIT ?`,
+        )
+      : this.db.prepare(
+          `SELECT c.id, c.body FROM memory_chunks c
+           WHERE c.id IN (SELECT chunk_id FROM vec_memory_chunks)
+             AND c.id NOT IN (SELECT chunk_id FROM vec_memory_chunks_v2)
+           ORDER BY c.id ASC
+           LIMIT ?`,
+        );
+    const rows = afterCursor
+      ? (stmt.all(afterCursor, limit) as Array<{ id: string; body: string }>)
+      : (stmt.all(limit) as Array<{ id: string; body: string }>);
+    return Object.freeze(rows.map((r) => Object.freeze({ ...r })));
+  }
+
+  /**
+   * Phase 115 D-08 — count of vec_memories_v2 rows. Used by the
+   * dashboard / `clawcode memory migrate-embeddings status` to surface
+   * progress in absolute terms. Mirrors the `vec_memories` count path
+   * elsewhere in the file.
+   */
+  countVecMemoriesV2(): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM vec_memories_v2")
+      .get() as { n: number };
+    return row.n;
+  }
+
+  /**
+   * Phase 100-fu — bump access_count + accessed_at for a single memory id.
+   *
+   * Surfaced because GraphSearch's graph-walked neighbors were returned to
+   * callers but never bumped — leaving heavily-linked nodes stuck at
+   * access_count=0 forever and unable to qualify for hot-tier promotion
+   * (production evidence: fin-acquisition agent had 1,161 of 1,182
+   * memories at access_count=0 despite 7,338 wikilink edges).
+   *
+   * Mirrors the UPDATE shape that SemanticSearch.search() uses on its KNN
+   * top-K. Non-existent ids are a silent no-op (UPDATE-WHERE-id=missing
+   * affects 0 rows). When `accessedAt` is omitted, defaults to `new Date()`.
+   *
+   * Callers MUST NOT use this to double-bump a row already bumped by
+   * SemanticSearch.search() in the same logical lookup — keep the bump
+   * exactly one-per-search-call per memory id.
+   */
+  bumpAccess(memoryId: string, accessedAt?: string): void {
+    this.stmts.bumpAccess.run(
+      accessedAt ?? new Date().toISOString(),
+      memoryId,
+    );
+  }
+
+  /**
+   * Phase 107 VEC-CLEAN-03 — remove orphan vec_memories entries.
+   *
+   * Detects rows in `vec_memories` whose `memory_id` is NOT in `memories`
+   * (orphans accumulated from historical CHECK-constraint table-recreation
+   * migrations at store.ts migrateSchema/migrateEpisodeSource, or any future
+   * delete path that bypasses `MemoryStore.delete`). Returns
+   * `{ removed, totalAfter }` so the operator sees both the patch count
+   * and the post-cleanup `vec_memories` total.
+   *
+   * Atomicity: DELETE + COUNT run inside a single `db.transaction()`. A
+   * mid-transaction throw rolls back the DELETE (regression-tested in
+   * `src/memory/__tests__/store-orphan-cleanup.test.ts`).
+   *
+   * Idempotent: running twice removes 0 the second time.
+   *
+   * **Directional invariant (CRITICAL — RESEARCH.md pitfall 3):** the
+   * SQL only deletes from `vec_memories`, NEVER from `memories`. The
+   * cold-archive flow (`episode-archival.ts:53-66`) intentionally leaves
+   * `memories` rows present after deleting their `vec_memories` row —
+   * that's the OPPOSITE of an orphan (memory present + vec absent), and
+   * must be preserved. Reversing the SQL direction would erase
+   * cold-archived memories.
+   */
+  cleanupOrphans(): { removed: number; totalAfter: number } {
+    return this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          "DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories)",
+        )
+        .run();
+      // Phase 115 D-08 — extend orphan cleanup to vec_memories_v2.
+      // Same directional invariant: only deletes from `vec_memories_v2`,
+      // NEVER from `memories` (cold-archive shape preserved per Phase
+      // 107). The v2 cleanup runs in the SAME transaction as v1 cleanup
+      // so a mid-cleanup throw rolls back BOTH (regression-pinned by
+      // store-orphan-cleanup.test.ts atomic test).
+      const v2Result = this.db
+        .prepare(
+          "DELETE FROM vec_memories_v2 WHERE memory_id NOT IN (SELECT id FROM memories)",
+        )
+        .run();
+      const afterRow = this.db
+        .prepare("SELECT COUNT(*) AS n FROM vec_memories")
+        .get() as { n: number };
+      return {
+        // Phase 115 — `removed` is the COMBINED count across v1 + v2 so
+        // operator-facing CLI output (`clawcode memory cleanup-orphans`)
+        // surfaces total cleanup work done. The `totalAfter` continues to
+        // report the v1 count to preserve the pre-115 contract — v2 count
+        // is exposed separately via the v2-specific stats path
+        // (sub-scope 16c dashboard hook in a later wave).
+        removed:
+          (result.changes as number) + (v2Result.changes as number),
+        totalAfter: afterRow.n,
+      };
+    })();
+  }
+
+  /**
+   * Phase 115 D-08 — split cleanupOrphans counter for v2 dashboard wiring.
+   * Same DB transaction shape but reports per-table changes for operator
+   * visibility (sub-scope 16c). Returns `{ v1Removed, v2Removed, v1Total,
+   * v2Total }`. Idempotent. Use this in preference to `cleanupOrphans` when
+   * the caller needs per-version counts.
+   *
+   * Atomicity: BOTH v1 + v2 deletes happen in the same `db.transaction()`.
+   * A mid-transaction throw rolls back both (verified by the atomicity
+   * regression in `embedding-v2-cascade-delete.test.ts`).
+   */
+  cleanupOrphansSplit(): {
+    v1Removed: number;
+    v2Removed: number;
+    v1Total: number;
+    v2Total: number;
+  } {
+    return this.db.transaction(() => {
+      const v1 = this.db
+        .prepare(
+          "DELETE FROM vec_memories WHERE memory_id NOT IN (SELECT id FROM memories)",
+        )
+        .run();
+      const v2 = this.db
+        .prepare(
+          "DELETE FROM vec_memories_v2 WHERE memory_id NOT IN (SELECT id FROM memories)",
+        )
+        .run();
+      const v1Total = (
+        this.db
+          .prepare("SELECT COUNT(*) AS n FROM vec_memories")
+          .get() as { n: number }
+      ).n;
+      const v2Total = (
+        this.db
+          .prepare("SELECT COUNT(*) AS n FROM vec_memories_v2")
+          .get() as { n: number }
+      ).n;
+      return {
+        v1Removed: v1.changes as number,
+        v2Removed: v2.changes as number,
+        v1Total,
+        v2Total,
+      };
+    })();
+  }
+
+  /**
+   * Phase 100-fu — return the number of inbound wikilink edges that
+   * point at `memoryId`. Used by the tier manager to detect hub nodes
+   * (memories with many backlinks) for graph-centrality promotion.
+   *
+   * Returns 0 for memories with no backlinks AND for memory IDs that
+   * do not exist — both cases produce a single COUNT(*) row of `0`
+   * because the WHERE clause matches no rows.
+   */
+  getBacklinkCount(memoryId: string): number {
+    const row = this.stmts.getBacklinkCount.get(memoryId) as
+      | { n: number }
+      | undefined;
+    return row?.n ?? 0;
+  }
+
+  /**
    * List memories filtered by tier, ordered by accessed_at descending.
    * Returns a frozen array of MemoryEntry objects.
    */
@@ -452,8 +872,8 @@ export class MemoryStore {
     try {
       const rows = this.db
         .prepare(
-          `SELECT id, content, source, importance, access_count, tags,
-                  created_at, updated_at, accessed_at, tier, source_turn_ids
+          `SELECT id, content, source, updated_at, accessed_at, importance,
+                  access_count, tags, created_at, tier, source_turn_ids
            FROM memories WHERE tier = ? ORDER BY accessed_at DESC LIMIT ?`,
         )
         .all(tier, limit) as MemoryRow[];
@@ -463,6 +883,48 @@ export class MemoryStore {
         error instanceof Error ? error.message : "Unknown error";
       throw new MemoryError(
         `Failed to list memories by tier ${tier}: ${message}`,
+        this.dbPath,
+      );
+    }
+  }
+
+  /**
+   * Phase 999.8 follow-up (2026-04-30) — promotion-scan-specific list of
+   * warm memories. Orders by inbound backlink count DESC (centrality)
+   * with accessed_at DESC as the secondary sort. The vanilla `listByTier`
+   * orders only by accessed_at, which biases against rarely-accessed-but-
+   * heavily-linked hub memories — exactly the shape Phase 100-fu's
+   * centrality-based promotion path targets. Without this, the LIMIT
+   * window of `refreshHotTier` keeps surfacing recently-touched memories
+   * with low backlink counts and the high-link hubs never get scanned.
+   *
+   * Used by `TierManager.refreshHotTier`. Not used elsewhere; if a future
+   * caller needs hot/cold variants, generalize the orderBy at that point.
+   */
+  listWarmCandidatesForPromotion(limit: number): readonly MemoryEntry[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT m.id, m.content, m.source, m.updated_at, m.accessed_at,
+                  m.importance, m.access_count, m.tags, m.created_at,
+                  m.tier, m.source_turn_ids
+           FROM memories m
+           LEFT JOIN (
+             SELECT target_id, COUNT(*) AS backlink_count
+             FROM memory_links
+             GROUP BY target_id
+           ) lc ON lc.target_id = m.id
+           WHERE m.tier = 'warm'
+           ORDER BY COALESCE(lc.backlink_count, 0) DESC, m.accessed_at DESC
+           LIMIT ?`,
+        )
+        .all(limit) as MemoryRow[];
+      return Object.freeze(rows.map(rowToEntry));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to list warm promotion candidates: ${message}`,
         this.dbPath,
       );
     }
@@ -974,6 +1436,57 @@ export class MemoryStore {
   }
 
   /**
+   * Phase 115 D-06 + D-07 + D-08 — additive embedding-v2 schema.
+   *
+   * Adds three things, all idempotent (`IF NOT EXISTS`):
+   *
+   *   1. `vec_memories_v2`        — sqlite-vec virtual table for the
+   *                                 bge-small-en-v1.5 + int8 quantized
+   *                                 embeddings. Mirrors `vec_memories`
+   *                                 shape (one row per memory_id, 384-dim)
+   *                                 but with `int8[384]` column type.
+   *   2. `vec_memory_chunks_v2`   — same shape for chunks (one row per
+   *                                 chunk_id, 384-dim int8). Mirrors
+   *                                 `vec_memory_chunks`.
+   *   3. `migrations` table       — per-agent state machine state for the
+   *                                 embedding-v2 migration. One row per
+   *                                 migration `key` (e.g.
+   *                                 `embeddingV2.<agentName>` — for
+   *                                 per-agent DBs the agent prefix is
+   *                                 implicit since the DB IS per-agent).
+   *
+   * Phase 107 VEC-CLEAN-* invariant preserved — see the updated `delete()`
+   * (memory cascade) + `deleteMemoryChunksByPath()` (chunk cascade) + the
+   * extended `cleanupOrphans()` (now scans both v1 and v2 vec tables).
+   *
+   * The `migrations` table lives in each agent's per-agent DB (NOT in a
+   * shared manager DB) per Phase 90's per-agent isolation lock. This makes
+   * pause / status / rollback all per-agent operations.
+   */
+  private migrateEmbeddingV2Tables(): void {
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories_v2 USING vec0(
+        memory_id TEXT PRIMARY KEY,
+        embedding int8[384] distance_metric=cosine
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory_chunks_v2 USING vec0(
+        chunk_id TEXT PRIMARY KEY,
+        embedding int8[384] distance_metric=cosine
+      );
+      CREATE TABLE IF NOT EXISTS migrations (
+        key                  TEXT PRIMARY KEY,
+        phase                TEXT NOT NULL,
+        progress_processed   INTEGER NOT NULL DEFAULT 0,
+        progress_total       INTEGER NOT NULL DEFAULT 0,
+        last_cursor          TEXT,
+        started_at           TEXT,
+        completed_at         TEXT,
+        metadata             TEXT
+      );
+    `);
+  }
+
+  /**
    * Phase 90 MEM-02 — insert one chunk row across all four memory-chunk
    * tables atomically (wrapped in a transaction). Returns the generated
    * chunk id so callers (memory-scanner) can log / cross-reference.
@@ -1057,6 +1570,14 @@ export class MemoryStore {
         this.db
           .prepare(`DELETE FROM vec_memory_chunks WHERE chunk_id = ?`)
           .run(id);
+        // Phase 115 D-08 — cascade chunk delete to v2 vec table inside
+        // the same transaction. Phase 107 atomic-cascade invariant
+        // preserved across BOTH v1 and v2 chunk vec tables. Idempotent
+        // (DELETE-WHERE-no-match is a 0-row no-op for chunks that don't
+        // yet have a v2 vector — pre-dual-write entries).
+        this.db
+          .prepare(`DELETE FROM vec_memory_chunks_v2 WHERE chunk_id = ?`)
+          .run(id);
         this.db
           .prepare(`DELETE FROM memory_chunks_fts WHERE chunk_id = ?`)
           .run(id);
@@ -1067,6 +1588,52 @@ export class MemoryStore {
       this.db.prepare(`DELETE FROM memory_files WHERE path = ?`).run(path);
       return info.changes as number;
     })();
+  }
+
+  /**
+   * List the most recent memory_chunks rows ordered by file_mtime_ms DESC.
+   * Returns the shape consumed by the dream-pass prompt builder
+   * (`{id, path, body, lastModified: Date}`); rowid is the secondary sort
+   * key so chunks of the same file land in deterministic order.
+   */
+  listRecentMemoryChunks(limit: number): readonly Readonly<{
+    id: string;
+    path: string;
+    body: string;
+    lastModified: Date;
+  }>[] {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT id, path, body, file_mtime_ms
+             FROM memory_chunks
+             ORDER BY file_mtime_ms DESC, rowid DESC
+             LIMIT ?`,
+        )
+        .all(limit) as ReadonlyArray<{
+        id: string;
+        path: string;
+        body: string;
+        file_mtime_ms: number;
+      }>;
+      return Object.freeze(
+        rows.map((r) =>
+          Object.freeze({
+            id: r.id,
+            path: r.path,
+            body: r.body,
+            lastModified: new Date(r.file_mtime_ms),
+          }),
+        ),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown error";
+      throw new MemoryError(
+        `Failed to list recent memory chunks: ${message}`,
+        this.dbPath,
+      );
+    }
   }
 
   /**
@@ -1126,6 +1693,86 @@ export class MemoryStore {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Phase 100-fu — cosine-similarity top-K over `vec_memories` (the agent's
+   * own saved memories — written by memory_save / memory.insert). Sibling
+   * to searchMemoryChunksVec, used by retrieveMemoryChunks for the
+   * memories-table fan-out so conversational memory is auto-injected into
+   * the pre-turn <memory-context> block instead of waiting for an explicit
+   * memory_lookup tool call.
+   *
+   * Returns memory_id + distance (smaller = more similar). The vec_memories
+   * table is created in initSchema (line ~597) — no new infra needed.
+   */
+  searchMemoriesVec(
+    queryEmbedding: Float32Array,
+    limit: number,
+  ): ReadonlyArray<Readonly<{ memory_id: string; distance: number }>> {
+    try {
+      return this.db
+        .prepare(
+          `SELECT memory_id, distance FROM vec_memories
+           WHERE embedding MATCH ? AND k = ? ORDER BY distance`,
+        )
+        .all(queryEmbedding, limit) as ReadonlyArray<{
+        memory_id: string;
+        distance: number;
+      }>;
+    } catch {
+      // Empty table or no matches — vec0 occasionally throws on empty MATCH.
+      // Treat as zero results so callers (retrieveMemoryChunks) can fall
+      // through to the chunks side without crashing.
+      return [];
+    }
+  }
+
+  /**
+   * Phase 100-fu — hydrate a memory by id for the retrieval pipeline.
+   * Returns the saved content + tags + importance for projection into the
+   * MemoryRetrievalResult shape. Null on miss so the fuser can silently
+   * skip stale ids (matches getMemoryChunk semantics).
+   *
+   * Distinct from getById(): this lookup does NOT bump access_count or
+   * accessed_at — pre-turn auto-retrieval should not pollute the recency
+   * signal that promotion logic depends on.
+   */
+  getMemoryForRetrieval(
+    memoryId: string,
+  ): Readonly<{
+    memory_id: string;
+    content: string;
+    tags: readonly string[];
+    importance: number;
+  }> | null {
+    const row = this.db
+      .prepare(
+        `SELECT id AS memory_id, content, tags, importance
+         FROM memories WHERE id = ?`,
+      )
+      .get(memoryId) as
+      | {
+          memory_id: string;
+          content: string;
+          tags: string;
+          importance: number;
+        }
+      | undefined;
+    if (!row) return null;
+    let parsedTags: readonly string[] = [];
+    try {
+      const t = JSON.parse(row.tags);
+      if (Array.isArray(t)) parsedTags = Object.freeze(t.map(String));
+    } catch {
+      /* malformed tags → empty */
+    }
+    return Object.freeze({
+      memory_id: row.memory_id,
+      content: row.content,
+      tags: parsedTags,
+      importance: row.importance,
+    });
   }
 
   /**
@@ -1190,6 +1837,19 @@ export class MemoryStore {
       `),
       deleteMemory: this.db.prepare(`DELETE FROM memories WHERE id = ?`),
       deleteVec: this.db.prepare(`DELETE FROM vec_memories WHERE memory_id = ?`),
+      // Phase 115 D-08 — cascade-delete prepared statements for v2 vec
+      // table. Same shape as v1 — no JOIN/CTE; the DELETE WHERE memory_id = ?
+      // form fires the prepared statement once per cascade.
+      deleteVecV2: this.db.prepare(
+        `DELETE FROM vec_memories_v2 WHERE memory_id = ?`,
+      ),
+      // Phase 115 D-08 — INSERT OR REPLACE so dual-write is idempotent.
+      // The vec_int8(?) SQL function is REQUIRED — sqlite-vec rejects raw
+      // Int8Array buffers as float32-shaped binary. The Buffer must be
+      // passed via int8ToBuffer() helper so byteLength is correct.
+      insertVecV2: this.db.prepare(
+        `INSERT OR REPLACE INTO vec_memories_v2 (memory_id, embedding) VALUES (?, vec_int8(?))`,
+      ),
       listRecent: this.db.prepare(`
         SELECT id, content, source, importance, access_count, tags,
                created_at, updated_at, accessed_at, tier, source_turn_ids
@@ -1232,6 +1892,20 @@ export class MemoryStore {
       // verbatim via '='.
       findByTagAndContent: this.db.prepare(
         `SELECT id FROM memories WHERE tags LIKE ? AND content = ? LIMIT 1`,
+      ),
+      // Phase 100-fu — public single-row access bump (see `bumpAccess`
+      // method below). Identical UPDATE shape to `updateAccess` — duplicated
+      // intentionally so the semantic-search path stays untouched and the
+      // call sites are easy to audit.
+      bumpAccess: this.db.prepare(`
+        UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?
+      `),
+      // Phase 100-fu — graph-centrality signal for tier promotion. Counts
+      // inbound wikilink edges (rows in memory_links targeting this id).
+      // Uses the existing idx_memory_links_target index so the lookup is
+      // O(log n) per call.
+      getBacklinkCount: this.db.prepare(
+        "SELECT COUNT(*) AS n FROM memory_links WHERE target_id = ?",
       ),
     };
   }

@@ -225,6 +225,11 @@ EnvironmentFile=-/etc/clawcode/env
 
 # Restart policy
 Restart=on-failure
+# Phase 999.23 — treat exit 129 (SIGHUP-clean-shutdown) as a restart trigger.
+# Daemon's SIGHUP handler exits 129 (128 + SIGHUP=1) so systemd restarts the
+# daemon instead of leaving it dead. Closes the 2026-05-01 outage where an
+# agent ran kill -HUP and the daemon died silently with no restart.
+RestartForceExitStatus=129
 RestartSec=10
 StartLimitBurst=5
 StartLimitIntervalSec=60

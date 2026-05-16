@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { agentSchema, browserConfigSchema, configSchema, defaultsSchema, IDEMPOTENT_TOOL_DEFAULTS, imageConfigSchema, mcpServerSchema, openaiEndpointSchema, searchConfigSchema, securityConfigSchema, streamingConfigSchema, MEMORY_AUTOLOAD_MAX_BYTES } from "../schema.js";
 import { RELOADABLE_FIELDS } from "../types.js";
 import { conversationConfigSchema } from "../../memory/schema.js";
@@ -60,6 +63,78 @@ describe("mcpServerSchema", () => {
       command: "",
     });
     expect(result.success).toBe(false);
+  });
+
+  // Phase 100-fu — operator-curated MCP annotations
+  it("MCP-DESC-1: mcpServerSchema accepts description + accessPattern fields", () => {
+    const result = mcpServerSchema.safeParse({
+      name: "finmentum-db",
+      command: "mcporter",
+      description: "Postgres SELECT",
+      accessPattern: "read-only",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBe("Postgres SELECT");
+      expect(result.data.accessPattern).toBe("read-only");
+    }
+  });
+
+  it("MCP-DESC-2: missing description / accessPattern parses fine (back-compat)", () => {
+    const result = mcpServerSchema.safeParse({
+      name: "legacy",
+      command: "node",
+      args: ["server.js"],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Both fields are optional — undefined when absent.
+      expect(result.data.description).toBeUndefined();
+      expect(result.data.accessPattern).toBeUndefined();
+    }
+  });
+
+  it("MCP-DESC-3: rejects an invalid accessPattern value", () => {
+    const result = mcpServerSchema.safeParse({
+      name: "bad",
+      command: "node",
+      accessPattern: "delete-everything",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("mcpServerSchema alwaysLoad (Phase 999.54 D-01, D-02)", () => {
+  it("omits alwaysLoad from parsed output when not declared (byte-stable)", () => {
+    const parsed = mcpServerSchema.parse({
+      name: "clawcode",
+      command: "clawcode",
+      args: ["mcp"],
+    });
+    // RESEARCH.md Pitfall 3 — must NOT be `alwaysLoad: undefined` (would break
+    // byte-stable deep-equality). The key MUST be absent from the parsed object.
+    expect(Object.prototype.hasOwnProperty.call(parsed, "alwaysLoad")).toBe(false);
+  });
+
+  it("accepts alwaysLoad: true and round-trips it (D-01)", () => {
+    const parsed = mcpServerSchema.parse({
+      name: "clawcode",
+      command: "clawcode",
+      args: ["mcp"],
+      alwaysLoad: true,
+    });
+    expect(parsed.alwaysLoad).toBe(true);
+  });
+
+  it("rejects stringly-typed alwaysLoad with a zod error (strict boolean, D-02)", () => {
+    expect(() =>
+      mcpServerSchema.parse({
+        name: "clawcode",
+        command: "clawcode",
+        args: ["mcp"],
+        alwaysLoad: "true",
+      }),
+    ).toThrow();
   });
 });
 
@@ -1791,5 +1866,471 @@ describe("RELOADABLE_FIELDS - DREAM entries (Phase 95 DREAM)", () => {
   });
   it("DREAM-RELOAD-2: RELOADABLE_FIELDS contains defaults.dream", () => {
     expect(RELOADABLE_FIELDS.has("defaults.dream")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 100 — agent.settingSources + agent.gsd.projectDir (Plan 100-01)
+//
+// 12th application of the additive-optional schema blueprint
+// (Phases 83/86/89/90/94/95/96). Tests pin:
+//   - PR1   parse-omit:        omitting both fields yields undefined for each
+//   - PR2   parse-project:     ['project'] singleton parses
+//   - PR3   parse-project-user: ['project','user'] parses
+//   - PR4   parse-all-three:   ['user','project','local'] parses (any order)
+//   - PR5   reject-empty:      [] REJECTS at parse time (.min(1) per Pitfall 3)
+//   - PR6   reject-invalid:    ['invalid'] REJECTS (enum constraint)
+//   - PR7   parse-duplicates:  ['project','project'] parses (zod doesn't dedup)
+//   - PR8   parse-gsd-abs:     gsd.projectDir absolute path parses
+//   - PR9   reject-empty-pd:   gsd.projectDir empty string REJECTS (.min(1))
+//   - PR10  parse-gsd-empty:   gsd: {} parses (projectDir optional inside)
+//   - PR11  parse-regression:  in-tree clawcode.yaml parses with all settingSources/gsd undefined
+//   - PR12  type-narrowing:    parsed shape conforms to ('project'|'user'|'local')[]|undefined
+//
+// RESEARCH.md Pitfall 3: settingSources: [] silently disables ALL filesystem
+// settings. Schema MUST use .min(1) on the array to reject empty at parse time.
+// ---------------------------------------------------------------------------
+
+describe("Phase 100 — agent.settingSources + agent.gsd.projectDir", () => {
+  // Minimal-agent fixture matching the existing test style
+  const minimalAgent = (overrides: Record<string, unknown> = {}) => ({
+    name: "x",
+    channels: [],
+    ...overrides,
+  });
+
+  it("PR1: omitting both fields yields settingSources === undefined AND gsd === undefined", () => {
+    const result = agentSchema.parse(minimalAgent());
+    expect(result.settingSources).toBeUndefined();
+    expect(result.gsd).toBeUndefined();
+  });
+
+  it("PR2: settingSources: ['project'] parses to exactly ['project']", () => {
+    const result = agentSchema.parse(minimalAgent({ settingSources: ["project"] }));
+    expect(result.settingSources).toEqual(["project"]);
+  });
+
+  it("PR3: settingSources: ['project','user'] parses to exactly that array", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ settingSources: ["project", "user"] }),
+    );
+    expect(result.settingSources).toEqual(["project", "user"]);
+  });
+
+  it("PR4: settingSources: ['user','project','local'] parses (any order, any subset)", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ settingSources: ["user", "project", "local"] }),
+    );
+    expect(result.settingSources).toEqual(["user", "project", "local"]);
+  });
+
+  it("PR5: settingSources: [] REJECTS at parse time (.min(1) per Pitfall 3)", () => {
+    const parsed = agentSchema.safeParse(minimalAgent({ settingSources: [] }));
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      // The path[0] should reference the settingSources field
+      const onSettingSources = parsed.error.issues.some((i) =>
+        i.path.includes("settingSources"),
+      );
+      expect(onSettingSources).toBe(true);
+    }
+  });
+
+  it("PR6: settingSources: ['invalid'] REJECTS on enum constraint", () => {
+    const parsed = agentSchema.safeParse(
+      minimalAgent({ settingSources: ["invalid"] }),
+    );
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      const onSettingSources = parsed.error.issues.some((i) =>
+        i.path.includes("settingSources"),
+      );
+      expect(onSettingSources).toBe(true);
+    }
+  });
+
+  it("PR7: settingSources: ['project','project'] parses (duplicates allowed — zod doesn't dedup)", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ settingSources: ["project", "project"] }),
+    );
+    // Zod preserves duplicates; documented in JSDoc on the schema field.
+    expect(result.settingSources).toEqual(["project", "project"]);
+  });
+
+  it("PR8: gsd.projectDir absolute path parses; result.gsd.projectDir mirrors input", () => {
+    const result = agentSchema.parse(
+      minimalAgent({ gsd: { projectDir: "/opt/clawcode-projects/sandbox" } }),
+    );
+    expect(result.gsd).toBeDefined();
+    expect(result.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+  });
+
+  it("PR9: gsd.projectDir empty string REJECTS (.min(1) on inner string)", () => {
+    const parsed = agentSchema.safeParse(
+      minimalAgent({ gsd: { projectDir: "" } }),
+    );
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      const onProjectDir = parsed.error.issues.some(
+        (i) => i.path.includes("gsd") && i.path.includes("projectDir"),
+      );
+      expect(onProjectDir).toBe(true);
+    }
+  });
+
+  it("PR10: gsd: {} parses (projectDir is optional inside)", () => {
+    const result = agentSchema.parse(minimalAgent({ gsd: {} }));
+    expect(result.gsd).toEqual({});
+    expect(result.gsd?.projectDir).toBeUndefined();
+  });
+
+  it("PR11: parse-regression — in-tree clawcode.yaml parses; settingSources/gsd are 1:1 (Phase 100 follow-up cascade)", () => {
+    // Catch an accidental required-field cascade in the additive-optional
+    // schema extension. v2.5/v2.6 migrated configs must parse unchanged.
+    //
+    // Phase 100 follow-up — relaxed from "ONLY admin-clawdy" to a per-agent
+    // 1:1 invariant: an agent has BOTH settingSources [project, user] AND
+    // gsd.projectDir, OR it has NEITHER. The follow-up extends GSD capability
+    // to fin-acquisition (operator-driven self-serve workflow); future GSD-
+    // enabled agents follow the same invariant. Non-GSD production agents
+    // (personal, fin-tax, finmentum-content-creator, etc.) stay implicit-
+    // default — CONTEXT.md lock-in: settingSources triggers ~/.claude/commands/
+    // loading; gsd.projectDir tells the SDK where to cd into. Neither works
+    // without the other.
+    const yamlPath = join(process.cwd(), "clawcode.yaml");
+    const raw = readFileSync(yamlPath, "utf-8");
+    const parsed = parseYaml(raw);
+    const result = configSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // 10+ agents currently in clawcode.yaml.
+      expect(result.data.agents.length).toBeGreaterThanOrEqual(10);
+      // Pin: admin-clawdy carries the original Phase 100 GSD config.
+      const adminClawdy = result.data.agents.find((a) => a.name === "admin-clawdy");
+      expect(adminClawdy?.settingSources).toEqual(["project", "user"]);
+      expect(adminClawdy?.gsd?.projectDir).toBe("/opt/clawcode-projects/sandbox");
+      // 1:1 invariant — settingSources [project, user] iff gsd.projectDir set.
+      for (const agent of result.data.agents) {
+        const hasGsd = agent.gsd?.projectDir !== undefined;
+        if (hasGsd) {
+          expect(
+            agent.settingSources,
+            `GSD-enabled agent ${agent.name} missing settingSources [project, user]`,
+          ).toEqual(["project", "user"]);
+        } else {
+          expect(
+            agent.settingSources,
+            `non-GSD agent ${agent.name} unexpectedly carries settingSources`,
+          ).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  it("PR12: type-narrowing — parsed settingSources is ('project'|'user'|'local')[]|undefined", () => {
+    const r = agentSchema.parse(
+      minimalAgent({ settingSources: ["project"] }),
+    );
+    // Compile-time invariant — the assignment fails to type-check if the
+    // schema field's parsed type drifts away from this exact shape.
+    const _check: ("project" | "user" | "local")[] | undefined = r.settingSources;
+    expect(_check).toEqual(["project"]);
+
+    // Same invariant for gsd
+    const r2 = agentSchema.parse(
+      minimalAgent({ gsd: { projectDir: "/abs/path" } }),
+    );
+    const _check2: { projectDir?: string } | undefined = r2.gsd;
+    expect(_check2).toEqual({ projectDir: "/abs/path" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 99 sub-scope N (2026-04-26) — recursion-guard Layer 2: lower the
+// per-agent default thread cap. The default `maxThreadSessions` is shipped
+// at three locations in schema.ts (line 350 — threadsConfigSchema field
+// default; line 1195 — agentSchema.threads block default factory; line 1392
+// — defaultsSchema.threads default factory). All three drop from 10 → 3 so
+// the blast-radius of a runaway subagent chain is capped if Layer 1's
+// disallowedTools is somehow bypassed.
+//
+// RG4 pins the new value at the SCHEMA boundary across all three call sites
+// so a future drift back to 10 is caught by tests, not by an operator
+// noticing 5+ Admin Clawdy clones in Discord.
+// ---------------------------------------------------------------------------
+
+describe("Phase 99-N — recursion-guard Layer 2: maxThreadSessions default lowered to 3", () => {
+  it("RG4a: threadsConfigSchema field default for maxThreadSessions is 3 (was 10)", () => {
+    // Parse an empty object — the schema field default kicks in.
+    const r = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "rg4a-agent" }],
+      defaults: { threads: {} },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.defaults.threads.maxThreadSessions).toBe(3);
+      expect(r.data.defaults.threads.idleTimeoutMinutes).toBe(1440);
+    }
+  });
+
+  it("RG4b: agentSchema.threads block default factory yields maxThreadSessions === 3", () => {
+    const r = agentSchema.safeParse({
+      name: "rg4b-agent",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      // Top-level agent.threads is optional — when present it has the new default.
+      // We assert the parsed shape after applying the agentSchema's default factory.
+      expect(r.data.threads?.maxThreadSessions ?? 3).toBe(3);
+    }
+  });
+
+  it("RG4c: defaultsSchema.threads default factory yields maxThreadSessions === 3", () => {
+    const r = defaultsSchema.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.threads.maxThreadSessions).toBe(3);
+      expect(r.data.threads.idleTimeoutMinutes).toBe(1440);
+    }
+  });
+
+  it("RG4d: explicit maxThreadSessions value wins over default — operator override unchanged", () => {
+    const r = configSchema.safeParse({
+      version: 1,
+      agents: [{ name: "rg4d-agent" }],
+      defaults: { threads: { maxThreadSessions: 7 } },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.defaults.threads.maxThreadSessions).toBe(7);
+    }
+  });
+});
+
+/**
+ * Phase 100 follow-up — per-agent MCP env overrides (vault-scoped 1Password
+ * tokens for the finmentum agent family). Schema must accept the new
+ * `mcpEnvOverrides` field on agentSchema, default to undefined when absent
+ * (back-compat with the existing 15-agent fleet), and reject malformed
+ * shapes (non-string keys / values, non-object entries).
+ */
+describe("agentSchema - mcpEnvOverrides (Phase 100 follow-up)", () => {
+  it("MCP-OVERRIDE-1: agentSchema accepts mcpEnvOverrides field with op:// reference", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": {
+          OP_SERVICE_ACCOUNT_TOKEN:
+            "op://clawdbot/Finmentum Service Account/credential",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(
+        result.data.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN,
+      ).toBe("op://clawdbot/Finmentum Service Account/credential");
+    }
+  });
+
+  it("MCP-OVERRIDE-2: missing field parses fine (back-compat with existing fleet)", () => {
+    const result = agentSchema.safeParse({ name: "test-agent" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mcpEnvOverrides).toBeUndefined();
+    }
+  });
+
+  it("MCP-OVERRIDE-3a: invalid shape (non-string env value) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": { OP_SERVICE_ACCOUNT_TOKEN: 123 },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("MCP-OVERRIDE-3b: invalid shape (empty server name) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "": { OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/SA/credential" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("MCP-OVERRIDE-3c: invalid shape (empty env key) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": { "": "op://clawdbot/SA/credential" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("MCP-OVERRIDE-3d: invalid shape (empty env value) rejected at parse", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      mcpEnvOverrides: {
+        "1password": { OP_SERVICE_ACCOUNT_TOKEN: "" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — DELEG (Pillar A: extendible specialist delegate map)
+// Wave 0 RED tests. These FAIL on current main because:
+//   - agentSchema has no `delegates` field yet (Plan 01 adds it)
+//   - configSchema.superRefine has no delegates-target validation yet
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — DELEG", () => {
+  it("delegates-schema: agentSchema accepts delegates: { research: 'research' }", () => {
+    const result = agentSchema.safeParse({
+      name: "fin-acquisition",
+      delegates: { research: "fin-research" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
+      expect(result.data.delegates).toEqual({ research: "fin-research" });
+    }
+  });
+
+  it("delegates-schema: empty {} parses (no min-keys constraint)", () => {
+    const result = agentSchema.safeParse({
+      name: "test-agent",
+      delegates: {},
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
+      expect(result.data.delegates).toEqual({});
+    }
+  });
+
+  it("delegates-schema: omitted field parses (back-compat — undefined)", () => {
+    const result = agentSchema.safeParse({ name: "test-agent" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
+      expect(result.data.delegates).toBeUndefined();
+    }
+  });
+
+  it("delegates-schema-invalid: rejects empty-string keys", () => {
+    const result = agentSchema.safeParse({
+      name: "test-agent",
+      delegates: { "": "fin-research" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("delegates-schema-invalid: rejects empty-string values", () => {
+    const result = agentSchema.safeParse({
+      name: "test-agent",
+      delegates: { research: "" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("delegates-superRefine-unknown-target: rejects target that doesn't match any agent name", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", delegates: { research: "ghost-agent" } },
+        { name: "fin-research" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const allMessages = result.error.issues.map((i) => i.message).join("\n");
+      // Must mention the offending agent AND the unknown target
+      expect(allMessages).toContain("fin-acquisition");
+      expect(allMessages).toContain("ghost-agent");
+    }
+  });
+
+  it("delegates-superRefine-valid: all-known-targets parse cleanly across N=3 agents", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "fin-acquisition", delegates: { research: "fin-research" } },
+        { name: "fin-tax", delegates: { research: "fin-research", tax: "fin-tax" } },
+        { name: "fin-research" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("delegates-back-compat: existing fixture with no delegates parses byte-identically (success path)", () => {
+    const result = configSchema.safeParse({
+      version: 1,
+      agents: [
+        { name: "test-agent" },
+        { name: "research" },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Phase 999.13 GREEN — delegates is now part of AgentConfig.
+      expect(result.data.agents[0].delegates).toBeUndefined();
+      expect(result.data.agents[1].delegates).toBeUndefined();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — TZ (Pillar B: agent-context timezone rendering — schema bits)
+// Wave 0 RED tests. These FAIL on current main because:
+//   - defaultsSchema has no `timezone` field yet (Plan 02 adds it)
+//   - defaultsSchema has no IANA-TZ pre-validation yet (Plan 02 adds it)
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — TZ", () => {
+  it("defaults-timezone-schema: defaultsSchema accepts timezone: 'America/Los_Angeles'", () => {
+    const result = defaultsSchema.safeParse({
+      timezone: "America/Los_Angeles",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.timezone).toBe("America/Los_Angeles");
+    }
+  });
+
+  it("defaults-timezone-schema: timezone is optional (absence parses cleanly)", () => {
+    const result = defaultsSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.timezone).toBeUndefined();
+    }
+  });
+
+  it("defaults-timezone-iana-validation: rejects 'Pacific/LosAngeles' (typo, invalid IANA)", () => {
+    // Open Question 3 LOCKED YES — Plan 02 must add a try/catch refinement
+    // around new Intl.DateTimeFormat(undefined, { timeZone: tz }).
+    const result = defaultsSchema.safeParse({
+      timezone: "Pacific/LosAngeles",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join("\n");
+      // Operator-friendly error message must call out the bad value
+      expect(messages.toLowerCase()).toMatch(/timezone|iana|invalid/);
+    }
+  });
+
+  it("defaults-timezone-iana-validation: accepts canonical IANA TZs (UTC, America/New_York)", () => {
+    expect(defaultsSchema.safeParse({ timezone: "UTC" }).success).toBe(true);
+    expect(
+      defaultsSchema.safeParse({ timezone: "America/New_York" }).success,
+    ).toBe(true);
+    expect(
+      defaultsSchema.safeParse({ timezone: "Europe/London" }).success,
+    ).toBe(true);
   });
 });

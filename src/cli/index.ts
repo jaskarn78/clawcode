@@ -16,16 +16,25 @@ import { registerStopAllCommand } from "./commands/stop-all.js";
 import { registerStatusCommand } from "./commands/status.js";
 import { registerRoutesCommand } from "./commands/routes.js";
 import { registerHealthCommand } from "./commands/health.js";
+// Phase 999.47 Plan 02 — `clawcode homelab reindex` / `clawcode homelab refresh`.
+import { registerHomelabCommand } from "./commands/homelab.js";
+// Phase 999.43 Plan 04 T03 — `clawcode rag set-priority` / `clawcode rag reclassify`.
+import { registerRagCommand } from "./commands/rag.js";
+import { registerTierTickCommand } from "./commands/tier-tick.js";
 import { registerSchedulesCommand } from "./commands/schedules.js";
 import { registerSkillsCommand } from "./commands/skills.js";
 import { registerSendCommand } from "./commands/send.js";
 import { registerThreadsCommand } from "./commands/threads.js";
 import { registerWebhooksCommand } from "./commands/webhooks.js";
 import { registerForkCommand } from "./commands/fork.js";
+// Phase 124 Plan 01 T-04 — `clawcode session compact <agent>` hybrid
+// compaction primitive (memory-extract + SDK forkSession on disk).
+import { registerSessionCompactCommand } from "./commands/session-compact.js";
 import { registerMcpCommand, registerMcpProbeCommand } from "./commands/mcp.js";
 import { registerBrowserMcpCommand } from "./commands/browser-mcp.js";
 import { registerSearchMcpCommand } from "./commands/search-mcp.js";
 import { registerImageMcpCommand } from "./commands/image-mcp.js";
+import { registerMcpBrokerShimCommand } from "./commands/mcp-broker-shim.js";
 import { registerMemoryCommand } from "./commands/memory.js";
 import { registerUsageCommand } from "./commands/usage.js";
 import { registerDeliveryQueueCommand } from "./commands/delivery-queue.js";
@@ -33,12 +42,27 @@ import { registerSecurityCommand } from "./commands/security.js";
 import { registerSpawnThreadCommand } from "./commands/spawn-thread.js";
 import { registerMcpServersCommand } from "./commands/mcp-servers.js";
 import { registerMcpStatusCommand } from "./commands/mcp-status.js";
+import { registerMcpTrackerCommand } from "./commands/mcp-tracker.js";
+import { registerBrokerStatusCommand } from "./commands/broker-status.js";
+import { registerPreflightCommand } from "./commands/preflight.js";
 import { registerDashboardCommand } from "./commands/dashboard.js";
 import { registerAgentCreateCommand } from "./commands/agent-create.js";
 import { registerRunCommand } from "./commands/run.js";
 import { registerCostsCommand } from "./commands/costs.js";
 import { registerLatencyCommand } from "./commands/latency.js";
 import { registerCacheCommand } from "./commands/cache.js";
+// Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response cache CLI.
+// `clawcode tool-cache {status|clear|inspect}` operator surface.
+// Distinct from `clawcode cache` (Phase 52 prompt-cache hit-rate).
+import { registerToolCacheCommand } from "./commands/tool-cache.js";
+// Phase 115 Plan 08 T03 — sub-scope 17(a/b/c) + 6-A tool-latency methodology
+// audit. `clawcode tool-latency-audit` prints per-agent execution vs
+// roundtrip latency split + tool_use_rate gate for plan 115-09 sub-scope 6-B.
+import { registerToolLatencyAuditCommand } from "./commands/tool-latency-audit.js";
+// Phase 115 Plan 09 T01 — `clawcode perf-comparison` prints the four
+// perf-comparisons artifacts + the sub-scope 6-B gate decision token
+// (SHIP/DEFER/PENDING-OPERATOR). Closeout receipt for the phase.
+import { registerPerfComparisonCommand } from "./commands/perf-comparison.js";
 import { registerToolsCommand } from "./commands/tools.js";
 import { registerBenchCommand } from "./commands/bench.js";
 import { registerContextAuditCommand } from "./commands/context-audit.js";
@@ -54,6 +78,15 @@ import { registerMigrateOpenclawCommand } from "./commands/migrate-openclaw.js";
 import { registerSyncCommand } from "./commands/sync.js";
 import { registerCutoverCommand } from "./commands/cutover.js";
 import { registerDreamCommand } from "./commands/dream.js";
+// Phase 96 Plan 05 — filesystem-capability operator surfaces. Both invoke
+// the SAME daemon IPC primitives ('probe-fs' for clawcode probe-fs, and
+// 'list-fs-status' for clawcode fs-status) used by the Discord slash
+// /clawcode-probe-fs (single source of truth — Discord/CLI parity invariant).
+import { registerProbeFsCommand } from "./commands/probe-fs.js";
+import { registerFsStatusCommand } from "./commands/fs-status.js";
+// Phase 100 Plan 06 — operator-driven GSD install (symlinks + sandbox bootstrap).
+// Local-only; production deploy on clawdy is operator-run per Plan 08 runbook.
+import { registerGsdInstallCommand } from "./commands/gsd-install.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 
 /**
@@ -150,16 +183,21 @@ registerStopAllCommand(program);
 registerStatusCommand(program);
 registerRoutesCommand(program);
 registerHealthCommand(program);
+registerHomelabCommand(program);
+registerRagCommand(program);
+registerTierTickCommand(program);
 registerSchedulesCommand(program);
 registerSkillsCommand(program);
 registerSendCommand(program);
 registerThreadsCommand(program);
 registerWebhooksCommand(program);
 registerForkCommand(program);
+registerSessionCompactCommand(program);
 registerMcpCommand(program);
 registerBrowserMcpCommand(program);
 registerSearchMcpCommand(program);
 registerImageMcpCommand(program);
+registerMcpBrokerShimCommand(program);
 registerMemoryCommand(program);
 registerUsageCommand(program);
 registerDeliveryQueueCommand(program);
@@ -167,6 +205,9 @@ registerSecurityCommand(program);
 registerSpawnThreadCommand(program);
 registerMcpServersCommand(program);
 registerMcpStatusCommand(program);
+registerMcpTrackerCommand(program);
+registerBrokerStatusCommand(program);
+registerPreflightCommand(program);
 registerMcpProbeCommand(program);
 registerDashboardCommand(program);
 registerAgentCreateCommand(program);
@@ -174,6 +215,12 @@ registerRunCommand(program);
 registerCostsCommand(program);
 registerLatencyCommand(program);
 registerCacheCommand(program);
+// Phase 115 Plan 07 sub-scope 15 — registers `clawcode tool-cache`.
+registerToolCacheCommand(program);
+// Phase 115 Plan 08 T03 — registers `clawcode tool-latency-audit`.
+registerToolLatencyAuditCommand(program);
+// Phase 115 Plan 09 T01 — registers `clawcode perf-comparison`.
+registerPerfComparisonCommand(program);
 registerToolsCommand(program);
 registerBenchCommand(program);
 registerContextAuditCommand(program);
@@ -189,6 +236,11 @@ registerMigrateOpenclawCommand(program);
 registerSyncCommand(program);
 registerCutoverCommand(program);
 registerDreamCommand(program);
+// Phase 96 Plan 05 — filesystem capability operator surfaces.
+registerProbeFsCommand(program);
+registerFsStatusCommand(program);
+// Phase 100 Plan 06 — `clawcode gsd install` operator-driven pre-flight.
+registerGsdInstallCommand(program);
 
 // Only parse when run as CLI entry point (not when imported by tests).
 // Check for common CLI invocation patterns: direct .ts/.js execution,

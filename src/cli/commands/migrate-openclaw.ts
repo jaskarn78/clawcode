@@ -32,6 +32,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { cliLog, cliError, green, yellow, red, dim } from "../output.js";
 import { translateAgentMemories } from "../../migration/memory-translator.js";
+import { getAgentMemoryDbPath } from "../../shared/agent-paths.js";
 import { MemoryStore } from "../../memory/store.js";
 import { EmbeddingService } from "../../memory/embedder.js";
 import {
@@ -745,7 +746,7 @@ export async function runApplyAction(
         if (!existsSync(memDir)) {
           mkdirSync(memDir, { recursive: true });
         }
-        const dbPath = join(memDir, "memories.db");
+        const dbPath = getAgentMemoryDbPath(agentPlan.targetMemoryPath);
         const store = new MemoryStore(dbPath);
         try {
           const embedder = getMigrationEmbedder();

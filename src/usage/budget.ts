@@ -135,7 +135,8 @@ export class EscalationBudget {
       if (ratio >= 1.0) {
         return "exceeded"; // Can't get higher than exceeded
       }
-      if (ratio >= 0.8 && highest !== "exceeded") {
+      // highest is "warning" | null here (early return on "exceeded" above)
+      if (ratio >= 0.8) {
         highest = "warning";
       }
     }

@@ -4,17 +4,21 @@ import type { Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { DocumentStore } from "../store.js";
 
-/** Create a deterministic 384-dim embedding for testing. */
-function fakeEmbedding(seed: number): Float32Array {
-  const arr = new Float32Array(384);
+/**
+ * Create a deterministic 384-dim Int8 embedding for testing.
+ *
+ * Phase 101 D-09 (CF-2): DocumentStore embeddings are int8[384] (bge-small
+ * int8 from embedV2). Pre-existing tests previously used Float32Array
+ * (v1 MiniLM); flipped to Int8Array as part of the greenfield-for-v2
+ * migration. The pattern mirrors what `EmbeddingService.embedV2()` returns
+ * at runtime.
+ */
+function fakeEmbedding(seed: number): Int8Array {
+  const arr = new Int8Array(384);
   for (let i = 0; i < 384; i++) {
-    arr[i] = Math.sin(seed * (i + 1) * 0.01);
+    // Map sin([-1,1]) → int8 [-127,127] range.
+    arr[i] = Math.round(Math.sin(seed * (i + 1) * 0.01) * 127);
   }
-  // L2 normalize
-  let norm = 0;
-  for (let i = 0; i < 384; i++) norm += arr[i] * arr[i];
-  norm = Math.sqrt(norm);
-  for (let i = 0; i < 384; i++) arr[i] /= norm;
   return arr;
 }
 

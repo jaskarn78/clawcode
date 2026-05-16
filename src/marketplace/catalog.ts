@@ -255,9 +255,12 @@ export async function loadMarketplaceCatalog(
   // Synthetic source is appended (after locals, before legacy/explicit
   // sources are processed). Public access only — no authToken. opts.sources
   // is NEVER mutated; we build a new array for the iteration.
-  const sourcesArr: Array<(typeof opts.sources)[number]> = Array.from(
-    opts.sources,
-  );
+  // `opts.sources` is a union of two readonly array shapes. `Array.from`
+  // can't pick a single overload across the union, so spread into a new
+  // array typed as the union's element type. Behaviour is identical to
+  // `Array.from(opts.sources)` — same iteration order, same elements.
+  type SourceElement = (typeof opts.sources)[number];
+  const sourcesArr: SourceElement[] = [...(opts.sources as readonly SourceElement[])];
   const hasExplicitClawhub = sourcesArr.some(
     (s) =>
       typeof s === "object" &&
@@ -293,6 +296,20 @@ export async function loadMarketplaceCatalog(
             : {}),
         });
         for (const item of resp.items) {
+          // Defensive: skip entries whose `name` is missing/empty. The
+          // ClawHub registry treats `name` as required but real-world
+          // 2026-05-04 traffic surfaced an item with `name === undefined`
+          // (caught by the daemon error log: "Cannot read properties of
+          // undefined (reading 'localeCompare')" at the Step-3 sort).
+          // Skipping at ingestion keeps the sort total + the operator
+          // still sees the rest of the catalog instead of an empty list.
+          if (typeof item.name !== "string" || item.name.length === 0) {
+            opts.log?.warn(
+              { source: source.baseUrl, item: { ...item, name: item.name } },
+              "loadMarketplaceCatalog: clawhub item missing name; skipping",
+            );
+            continue;
+          }
           // Local wins — skip if name collision.
           if (byName.has(item.name)) continue;
           byName.set(item.name, clawhubItemToEntry(item, source));
@@ -360,8 +377,13 @@ export async function loadMarketplaceCatalog(
   }
 
   // --- Step 3: deterministic sort -----------------------------------
-  const entries = [...byName.values()].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
+  // Defensive: filter out entries with missing `name` BEFORE the sort.
+  // Step 1 + Step 2 ingestion already filter on `name`, but a future
+  // source path could regress; a missing name here would crash the
+  // entire operator-facing /clawcode-skills-browse with an opaque
+  // "Cannot read properties of undefined (reading 'localeCompare')".
+  const entries = [...byName.values()]
+    .filter((e) => typeof e.name === "string" && e.name.length > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
   return Object.freeze(entries);
 }

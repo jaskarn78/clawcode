@@ -84,7 +84,7 @@ export function registerRunCommand(program: Command): void {
       }
 
       const bridge = new DiscordBridge({
-        routingTable,
+        routingTableRef: { current: routingTable },
         sessionManager: manager,
         botToken,
         log,

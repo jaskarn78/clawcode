@@ -1,0 +1,325 @@
+---
+phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix
+plan: 02
+subsystem: discord-bridge
+tags: [coalescer, queue-full, recursion-cap, idempotent, hot-path, storm-fix]
+
+# Dependency graph
+requires:
+  - phase: 105-00
+    provides: CO-7, CO-9, CO-10, CO-11, MC-7 RED tests + createBridge sessionManager.hasActiveTurn mock
+  - phase: 100-fu-message-coalescer
+    provides: MessageCoalescer + DiscordBridge.streamAndPostResponse drain block (the storm site)
+  - phase: 60-trigger-engine
+    provides: SessionManager.hasActiveTurn(name) accessor at session-manager.ts:1474
+provides:
+  - "Idempotent formatCoalescedPayload — single-pending pre-wrapped content returns unchanged"
+  - "MAX_DRAIN_DEPTH=3 hard recursion cap on streamAndPostResponse drain block"
+  - "hasActiveTurn drain-deferral gate — defer drain when in-flight turn occupies the queue"
+  - "MessageCoalescer.requeue(name, msgs) — push-back without perAgentCap re-check"
+  - "Bounded log output during QUEUE_FULL storm scenarios (≤MAX_DRAIN_DEPTH info + 1 warn)"
+affects: [105-03]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - "Static class constants (COMBINED_PREFIX, MAX_DRAIN_DEPTH) for behavior-naming"
+    - "Layered defense: depth cap → in-flight gate → idempotent format (any single bypass leaves two more)"
+    - "drainDepth = 0 default parameter on recursive method (stateless, test-friendly, no leak risk)"
+    - "Immutable concat (spread) on requeue, mirroring existing addMessage append style"
+
+key-files:
+  created: []
+  modified:
+    - "src/discord/message-coalescer.ts (added requeue method + doc-comment update)"
+    - "src/discord/bridge.ts (COMBINED_PREFIX + MAX_DRAIN_DEPTH constants, drainDepth parameter, idempotent formatCoalescedPayload, layered drain block with depth cap + hasActiveTurn gate)"
+
+key-decisions:
+  - "Idempotent guard placed bridge-side in formatCoalescedPayload (not coalescer-side in addMessage) — keeps MessageCoalescer content-agnostic per RESEARCH.md Pattern 2 + research recommendation"
+  - "Order in drain block: depth cap FIRST (cheapest, prevents runaway), hasActiveTurn SECOND (gate), drain THIRD. If both cap and gate would fire, cap wins"
+  - "requeue method bypasses cap entirely (not increment-and-warn) — messages were already accepted once on initial addMessage; re-checking would silently drop them on every gate-deferral or cap-hit"
+  - "pending.length === 1 specificity for idempotent guard — multi-pending coalesce of (wrapped + new) is the legitimate 'user sent N msgs while agent worked' feature and must keep working (regression-locked by CO-8)"
+  - "Log levels: cap-hit = warn (operator visibility on real storms), gate-defer = debug (chatty in normal operation, useful only when debugging)"
+
+patterns-established:
+  - "Pattern: layered defense — multiple independent guards so any single bypass leaves the others intact"
+  - "Pattern: requeue semantic for buffer push-back paths (bypass cap because messages were already accepted)"
+
+requirements-completed: [COAL-01, COAL-02, COAL-03, COAL-04]
+
+# Metrics
+duration: 6 min
+completed: 2026-04-30
+---
+
+# Phase 105 Plan 02: COAL GREEN — Coalescer Storm Fix Summary
+
+**Layered defense against the QUEUE_FULL coalescer recursive storm: idempotent wrapper guard, hasActiveTurn drain-deferral gate, MAX_DRAIN_DEPTH=3 cap, and MessageCoalescer.requeue API — Wave 0 RED tests CO-7/CO-9/CO-10/CO-11/MC-7 all flip GREEN, no regressions in CO-1..CO-8 or MC-1..MC-6**
+
+## Performance
+
+- **Duration:** ~6 min
+- **Started:** 2026-04-30T17:50:00Z
+- **Completed:** 2026-04-30T17:58:00Z
+- **Tasks:** 3 (Task 1 requeue, Task 2 bridge, Task 3 verification)
+- **Files modified:** 2 (`src/discord/message-coalescer.ts` +29 lines, `src/discord/bridge.ts` +82/-8 lines)
+
+## Accomplishments
+
+- **MessageCoalescer.requeue** added — bypasses perAgentCap, immutable concat, mirrors existing addMessage append style. Doc-comment updated to enumerate the new method.
+- **Idempotent formatCoalescedPayload** — single pending entry whose content already starts with `[Combined:` returns unchanged. The +54-chars-per-iteration nesting bug from clawdy 09:47–09:58 PT trace is now structurally impossible.
+- **MAX_DRAIN_DEPTH = 3** hard cap on recursive drain depth. On cap-hit: emit one warn, requeue pending, return — next message-arrival drains them at depth 0.
+- **hasActiveTurn drain-deferral gate** — drain block consults `sessionManager.hasActiveTurn(name)` before recursing. If true, requeue and return (debug log). Belt-and-suspenders against any future code path that calls streamAndPostResponse while another turn is mid-flight.
+- **drainDepth = 0 default parameter** on streamAndPostResponse — stateless, test-friendly. All non-recursive call sites unchanged (default 0). Recursive call passes `drainDepth + 1`.
+- All Wave 0 RED tests flip GREEN; no regressions in existing 22 bridge tests + 6 coalescer tests.
+
+## Task Commits
+
+1. **Task 1: requeue method** — `cabcd9d` (`feat(105-02): add MessageCoalescer.requeue bypassing perAgentCap`)
+2. **Task 2: bridge layered defense** — `fb2a98e` (`fix(105-02): coalescer storm — idempotent wrapper + drain gate + depth cap`)
+3. **Task 3: verification only** — no commit (test sweep + build pass)
+
+## Diff Hunks
+
+### `src/discord/message-coalescer.ts` (+29 lines)
+
+```diff
+@@ -8,6 +8,10 @@
+  * Semantics:
+  *   - addMessage(agentName, content, messageId) — appends to agent's pending list
+  *   - takePending(agentName) — atomically returns ALL pending messages for the
+  *     agent + clears the list. Caller dispatches the joined payload as ONE turn.
++ *   - requeue(agentName, messages) — Phase 105: prepends messages back into
++ *     the buffer WITHOUT enforcing perAgentCap (these messages were already
++ *     accepted once on initial addMessage; re-checking the cap on push-back
++ *     would silently drop them).
+
+@@ -65,6 +69,31 @@
+   takePending(agentName: string): readonly CoalescedMessage[] {
+     ...
+   }
+
++  /**
++   * Phase 105 — push messages back into the buffer without enforcing
++   * perAgentCap.
++   * ...
++   */
++  requeue(
++    agentName: string,
++    messages: ReadonlyArray<CoalescedMessage>,
++  ): void {
++    if (messages.length === 0) return;
++    const list = this.pending.get(agentName) ?? [];
++    const next: CoalescedMessage[] = [...messages, ...list];
++    this.pending.set(agentName, next);
++  }
+```
+
+### `src/discord/bridge.ts` (+82/-8 lines)
+
+**Class-level constants (new):**
+```diff
+ export class DiscordBridge {
++  private static readonly COMBINED_PREFIX = "[Combined:";
++  private static readonly MAX_DRAIN_DEPTH = 3;
+```
+
+**streamAndPostResponse signature (drainDepth added):**
+```diff
+   private async streamAndPostResponse(
+     message: Message,
+     sessionName: string,
+     formattedMessage: string,
+     turn?: Turn,
++    drainDepth = 0,
+   ): Promise<void> {
+```
+
+**Drain block (replaced — layered defense):**
+```diff
+     const pending = this.messageCoalescer.takePending(sessionName);
+-    if (pending.length > 0) {
+-      const combinedPayload = this.formatCoalescedPayload(pending);
+-      this.log.info(
+-        { agent: sessionName, channel: channelId, count: pending.length },
+-        "draining coalesced messages as combined dispatch",
+-      );
+-      await this.streamAndPostResponse(message, sessionName, combinedPayload, undefined);
+-    }
++    if (pending.length === 0) return;
++
++    // (a) Depth cap — cheapest check first.
++    if (drainDepth >= DiscordBridge.MAX_DRAIN_DEPTH) {
++      this.log.warn(
++        { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
++        "coalescer drain depth cap reached — leaving messages buffered for next arrival",
++      );
++      this.messageCoalescer.requeue(sessionName, pending);
++      return;
++    }
++
++    // (b) hasActiveTurn gate.
++    if (this.sessionManager.hasActiveTurn(sessionName)) {
++      this.log.debug(
++        { agent: sessionName, channel: channelId, count: pending.length },
++        "coalescer drain deferred — turn still in-flight",
++      );
++      this.messageCoalescer.requeue(sessionName, pending);
++      return;
++    }
++
++    // (c) Drain — proceed with combined dispatch.
++    const combinedPayload = this.formatCoalescedPayload(pending);
++    this.log.info(
++      { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
++      "draining coalesced messages as combined dispatch",
++    );
++    await this.streamAndPostResponse(
++      message,
++      sessionName,
++      combinedPayload,
++      undefined,
++      drainDepth + 1,
++    );
+```
+
+**formatCoalescedPayload (idempotent guard added):**
+```diff
+   private formatCoalescedPayload(
+     pending: ReadonlyArray<{ readonly content: string; readonly messageId: string }>,
+   ): string {
++    if (
++      pending.length === 1 &&
++      pending[0].content.startsWith(DiscordBridge.COMBINED_PREFIX)
++    ) {
++      return pending[0].content;
++    }
+     const header = `[Combined: ${pending.length} message${pending.length === 1 ? "" : "s"} received during prior turn]`;
+     ...
+   }
+```
+
+## Wave 0 RED → GREEN Confirmations
+
+| Test | File | Wave 0 status | Plan 02 status | Verification |
+|------|------|---------------|----------------|--------------|
+| CO-7 (idempotent coalesce) | bridge.test.ts | RED — double-wrapped output | **GREEN** | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-7"` |
+| CO-8 (multi-pending preserve+wrap regression lock) | bridge.test.ts | GREEN | **GREEN** (still) | Same describe block run |
+| CO-9 (hasActiveTurn drain defer) | bridge.test.ts | RED — streamFromAgent called 2× | **GREEN** | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-9"` |
+| CO-10 (drain depth cap + warn) | bridge.test.ts | RED — 26 calls, no cap | **GREEN** | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-10"` |
+| CO-11 (storm bounded logs) | bridge.test.ts | RED — 25 info logs | **GREEN** | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-11"` |
+| MC-7 (requeue bypasses cap) | message-coalescer.test.ts | RED — `requeue is not a function` | **GREEN** | `npx vitest run src/discord/__tests__/message-coalescer.test.ts -t "MC-7"` |
+| CO-1..CO-6 (existing) | bridge.test.ts | GREEN | **GREEN** (no regression) | Full file run |
+| MC-1..MC-6 (existing) | message-coalescer.test.ts | GREEN | **GREEN** (no regression) | Full file run |
+
+**Combined run (full bridge + coalescer test files):**
+```
+src/discord/__tests__/bridge.test.ts          → 27 passed (27)
+src/discord/__tests__/message-coalescer.test.ts → 7 passed (7)
+```
+
+**Full impact area run (`src/discord src/triggers`):**
+```
+Test Files  66 passed (66)
+Tests  765 passed (765)
+```
+
+## Build Verification
+
+```
+$ npm run build
+ESM dist/cli/index.js     2.00 MB
+ESM dist/cli/index.js.map 4.99 MB
+ESM ⚡️ Build success in 364ms
+```
+
+**Constants present in build artifact:**
+```
+$ grep -E "MAX_DRAIN_DEPTH|COMBINED_PREFIX|coalescer drain depth cap|coalescer drain deferred" dist/cli/index.js
+      static COMBINED_PREFIX = "[Combined:";
+      static MAX_DRAIN_DEPTH = 3;
+        if (drainDepth >= _DiscordBridge.MAX_DRAIN_DEPTH) {
+            "coalescer drain depth cap reached — leaving messages buffered for next arrival"
+            "coalescer drain deferred — turn still in-flight"
+        if (pending.length === 1 && pending[0].content.startsWith(_DiscordBridge.COMBINED_PREFIX)) {
+```
+
+All four behavioral surfaces (idempotent guard, depth cap, gate, requeue) wired through to the shipped artifact.
+
+## Sanity Grep (post-edit)
+
+```
+$ grep -n "MAX_DRAIN_DEPTH\|COMBINED_PREFIX\|hasActiveTurn\|drainDepth\|messageCoalescer.requeue" src/discord/bridge.ts
+115:   * COMBINED_PREFIX: idempotent guard for formatCoalescedPayload — a single
+121:   * MAX_DRAIN_DEPTH: hard cap on recursive drain depth in streamAndPostResponse.
+122:   * On cap-hit: emit one warn, push pending back via messageCoalescer.requeue,
+125:  private static readonly COMBINED_PREFIX = "[Combined:";
+126:  private static readonly MAX_DRAIN_DEPTH = 3;
+565:    drainDepth = 0,
+755:    //   (b) in-flight   — defer drain when sessionManager.hasActiveTurn=true
+764:    if (drainDepth >= DiscordBridge.MAX_DRAIN_DEPTH) {
+766:        { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+769:      this.messageCoalescer.requeue(sessionName, pending);
+773:    // (b) hasActiveTurn gate — defer drain if a turn is still occupying the
+776:    if (this.sessionManager.hasActiveTurn(sessionName)) {
+781:      this.messageCoalescer.requeue(sessionName, pending);
+788:      { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+799:      drainDepth + 1,
+811:   * already starts with COMBINED_PREFIX is returned unchanged. The storm
+827:      pending[0].content.startsWith(DiscordBridge.COMBINED_PREFIX)
+```
+
+All expected hits present: 2 class constants, drainDepth parameter, depth comparison, two requeue call sites, hasActiveTurn gate call, recursive +1, idempotent guard.
+
+## Decisions Made
+
+- **Bridge-side idempotent guard placement.** Per RESEARCH.md recommendation, `formatCoalescedPayload`'s prefix detection lives in the bridge — not in `MessageCoalescer.addMessage`. The coalescer stays content-agnostic (it's a generic FIFO buffer, not a wrapper-aware policy layer). Bridge-side keeps the wrapper-detection paired with the wrapper-emission, single source of truth.
+- **Layered defense order: cap → gate → format.** The depth cap is the cheapest check (single integer comparison, no method call), so it fires first. The hasActiveTurn gate involves a method call into SessionManager, so it's second. Idempotent format runs only on the actual drain path. If both cap and gate would trigger, cap wins (we stop draining; messages remain buffered).
+- **`requeue` bypasses cap entirely (not warn-and-add).** Per RESEARCH.md Pitfall 3: pushing back via `addMessage` would silently drop messages once the buffer reached cap=50. Since these messages already passed the cap check on initial admission, re-checking is incorrect — they MUST go back in. The warn log lives at the bridge call site (cap-hit context) so the coalescer stays log-free.
+- **`pending.length === 1` specificity.** Multi-pending coalesce of (wrapped-payload + new-arrivals) correctly preserves the inner `[Combined:]` as `(1)` body content under a fresh outer header — that's the legitimate "user sent N messages while agent worked" feature. CO-8 regression-locks this contract; the idempotent guard is narrowly scoped to single-pending re-queue cases (which is the only storm pathway).
+- **No SessionManager pass-through edit needed.** Per Wave 0 RESEARCH and verified during planning: `SessionManager.hasActiveTurn(name)` already exists at `src/manager/session-manager.ts:1474`. The bridge's existing `sessionManager` constructor injection gives it the access it needs — no wiring changes required.
+
+## Deviations from Plan
+
+None — plan executed exactly as written.
+
+The plan provided complete code blocks for all three changes; each landed verbatim with the documented adjustments (added more thorough JSDoc comments around the new constants and the idempotent guard, but no behavioral deviations).
+
+**Total deviations:** 0.
+**Impact:** Plan 02 ready to ship; Wave 0 RED tests all GREEN.
+
+## Issues Encountered
+
+- **Pre-existing unrelated test failures in `src/manager`** (16 tests across bootstrap-integration, daemon-openai, dream-prompt-builder, restart-greeting, session-config, session-manager-set-permission-mode, daemon-warmup-probe). Verified by stashing my changes and re-running `daemon-openai.test.ts` on baseline (commit `c91d999^`) — all 7 failures pre-existed on baseline. **Out of scope for Plan 02 per execute-plan.md scope-boundary rule.** Documented in Wave 0 SUMMARY as a known carry-forward; not regressions caused by this plan.
+
+## User Setup Required
+
+None — Plan 02 is internal refactor only. No environment variables, secrets, accounts, or external service config touched.
+
+## Next Phase Readiness
+
+- **Plan 03 (verify)** ready: post-Plan-02, all 8 new Wave 0 tests are green; the full Wave 0 verification suite (`src/discord` + `src/triggers`) shows 0 failures across 765 tests. Plan 01 (POLICY GREEN) and Plan 02 (COAL GREEN) are now both landed; Plan 03 will run the consolidated verification + deploy smoke (storm reproducer on clawdy: 5-message burst → bounded log output, single `[Combined:]` wrapper on eventual successful turn, daemon CPU <5% during burst).
+
+## Self-Check: PASSED
+
+Verified files modified:
+- `src/discord/message-coalescer.ts` — FOUND, modified (29 lines added, 0 removed)
+- `src/discord/bridge.ts` — FOUND, modified (82 lines added, 8 removed)
+
+Verified commits:
+- `cabcd9d` (Task 1: requeue method) — present in `git log --oneline -5`
+- `fb2a98e` (Task 2: bridge layered defense) — present in `git log --oneline -5`
+
+Verified test states:
+- 7/7 message-coalescer tests pass (MC-7 GREEN)
+- 27/27 bridge tests pass (CO-7, CO-9, CO-10, CO-11 GREEN; CO-1..CO-8 still GREEN)
+- 765/765 tests pass across full impact area (`src/discord` + `src/triggers`)
+
+Verified build:
+- `npm run build` clean (ESM 2.00 MB output)
+- `MAX_DRAIN_DEPTH`, `COMBINED_PREFIX`, "coalescer drain depth cap", "coalescer drain deferred" all present in `dist/cli/index.js`
+
+---
+*Phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix*
+*Completed: 2026-04-30*

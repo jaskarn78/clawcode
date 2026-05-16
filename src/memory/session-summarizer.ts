@@ -25,8 +25,18 @@ import type {
 /** Maximum combined character length before proportional truncation. */
 export const MAX_PROMPT_CHARS = 30_000;
 
-/** Default timeout for the summarize() LLM call. */
-export const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * Default timeout for the summarize() LLM call.
+ *
+ * 99-mdrop (audit 2026-04-27, ADMIN-CLAWDY-MEMORY-DROP-2026-04-27.md):
+ * bumped from 10_000 → 30_000ms. The 10s ceiling fired during a Haiku
+ * latency spike on a 96-turn session, forcing the raw-turn fallback path
+ * and causing silent context loss in the next session's resume-brief.
+ * 30s gives Haiku breathing room under load while still failing fast
+ * relative to the per-turn cron cadence. Tests can override via
+ * `deps.config.timeoutMs`.
+ */
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Default minimum turn count to trigger summarization. */
 export const DEFAULT_MIN_TURNS = 3;

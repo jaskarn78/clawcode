@@ -102,6 +102,65 @@ export type SdkQueryOptions = {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Phase 59 -- native SDK abort support (sdk.d.ts:957 Options.abortController). */
   readonly abortController?: AbortController;
+  /**
+   * Phase 99 sub-scope N (2026-04-26) — SDK deny-list option. Mirrors
+   * @anthropic-ai/claude-agent-sdk@0.2.97 sdk.d.ts:50,1023,2709
+   * (`Options.disallowedTools?: string[]`). When set, the LLM physically
+   * cannot invoke any tool whose name matches an entry. session-adapter.ts
+   * forwards this from AgentSessionConfig.disallowedTools when present;
+   * absent for the existing fleet so no behavior change ships.
+   */
+  readonly disallowedTools?: readonly string[];
+  /**
+   * Phase 117 Plan 04 T05 — native advisor model id.
+   *
+   * Mirrors @anthropic-ai/claude-agent-sdk@0.2.132 `sdk.d.ts:4930`
+   * (`Options.advisorModel?: string`). When set, the bundled `claude`
+   * CLI binary enables the `advisor_20260301` server tool inside the
+   * agent's own turn (the executor decides timing) and auto-injects
+   * the `advisor-tool-2026-03-01` beta header server-side — ClawCode
+   * does NOT manually negotiate the beta. RESEARCH §6 Pitfall 2
+   * confirmed this via `strings` on the bundled CLI binary.
+   *
+   * Spread-conditionally forwarded by session-adapter from
+   * AgentSessionConfig.advisorModel. The gate that produces / omits
+   * that field lives in `session-config.ts:shouldEnableAdvisor`
+   * (backend === "native" AND budget.canCall).
+   */
+  readonly advisorModel?: string;
+  /**
+   * Phase 117.1 — SDK escape hatch for CLI args not yet wired through typed
+   * Options. `extraArgs: { advisor: "claude-opus-4-7" }` appends
+   * `--advisor claude-opus-4-7` to the bundled binary spawn. Mirrors the
+   * SDK's public `extraArgs?: Record<string, string | null>` field
+   * (sdk.d.ts:1268). Used to bridge the SDK 0.2.140 gap where
+   * `advisorModel?: string` is declared in the typed Options but not
+   * translated to a CLI flag during spawn (verified via grep on sdk.mjs
+   * arg-builder: lists --model/--effort/--agent/--betas but no --advisor).
+   *
+   * The binary ALSO requires `CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL=1`
+   * in env to honor the flag — set in `/etc/clawcode/env` (systemd
+   * EnvironmentFile) at the daemon level so all spawned binaries inherit it.
+   *
+   * Remove this field once upstream SDK wires `advisorModel` end-to-end.
+   */
+  readonly extraArgs?: Record<string, string | null>;
+  /**
+   * FIND-123-A.next — structural spawn override for the SDK's
+   * `spawnClaudeCodeProcess` hook (sdk.d.ts:1806). When supplied, the SDK
+   * calls this function instead of its non-detached `spawn()` default, so
+   * ClawCode owns the `detached: true` flag and the per-(re-)spawn PID
+   * capture. Only `createPersistentSessionHandle` populates this — the
+   * ephemeral query sites (advisor, haiku-direct, summarize, json-rpc-call,
+   * initial drain query, benchmarks) deliberately don't launch
+   * MCP-bearing trees, so the wrapper is not threaded through them.
+   *
+   * Typed loosely as `unknown` to avoid pulling the SDK's `SpawnOptions` /
+   * `SpawnedProcess` types into this seam-only module — the production
+   * call site in `persistent-session-handle.ts` casts when forwarding to
+   * the real SDK Options.
+   */
+  readonly spawnClaudeCodeProcess?: (options: unknown) => unknown;
 };
 
 /**

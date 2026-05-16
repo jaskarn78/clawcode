@@ -1,5 +1,54 @@
 # Milestones: ClawCode
 
+## v2.8 Performance + Reliability (Closed: 2026-05-13 — consolidated into v2.9)
+
+**Closing rationale:** Most v2.8 scope shipped under different banners; the remainder was triaged into the v2.9 Reliability & Routing merge groups during the 2026-05-13 backlog cleanup. v2.8 was never formally closed because shipped scope rolled in piecemeal alongside post-v2.7 fix waves.
+
+**Phases that landed under the v2.8 umbrella:**
+
+- **Phase 110** — MCP memory reduction (Stage 0a scaffolding `5aa5ab6`; Stage 0b static Go shim runtime swap; Stage 1 broker generalization).
+- **Phase 113** — Image ingest pipeline (`40deda6` + `115fdc7` apiKey:null fix + `5dfac40` PNG media-type fix). Haiku 4.5 vision via OAuth Bearer, sharp resize ≤1568px, per-agent `vision: { enabled, preserveImage }` config.
+- **Phase 114** — Retroactive 999.x renumbering pass.
+- **Phase 115** — Multi-scope: folded 999.40 (MCP tool-response cache), 999.41, partial 999.42.
+- **Phase 116** — Dashboard redesign (modern UI, mobile-first, basic+advanced modes, config editor, conversations, tasks; folded 999.38 SLO recalibration). Plan 06 closed via `f863757` + `d6510ff` + `7e6b531`. Usage-page reframe followed (`01d633f`, `c7786b5`, `ed729b0`).
+- **Phase 117** — Advisor pattern multi-backend scaffold (native Anthropic SDK `advisorModel` default + fork rollback + portable-fork Phase 118 scaffold). Discord visibility via 💭 reaction + assistant footer.
+
+**Bundled 999.x shipped during this window:**
+
+- 999.7 — context-audit telemetry pipeline restoration (`dc0e1ad`, quick `260511-mfn`)
+- 999.21 — `/get-shit-done` consolidation (quick `260501-jld`)
+- 999.22 — SOUL guard vs hallucinated tool-use (`67a1f03`, quick `260501-k5s`)
+- 999.23 — daemon SIGHUP + systemd restart-on-SIGHUP hardening
+- 999.24 — sudoers expansion for `clawcode systemctl reload/restart` (`c3dc129`, quick `260501-j7x`)
+- 999.30 (committed-as-999.25) — subagent relay on work-completion (`81975aa` + `12f4ac1`, PR #9)
+- 999.32 — consolidated GSD into `/gsd-do` entry (`584a20a`)
+- 999.33 — bounded `preResolveAll` concurrency (`eee88c2`)
+- 999.39 — memory consolidation OAuth fix (`13603c7`)
+- 999.9 — shared 1Password MCP by service-account scope (shipped via Phase 100 follow-up — vault-scoped `mcpEnvOverrides.1password`)
+- 999.16, 999.17 — replaced by Phase 107 (dream pass JSON enforcement + vec_memories orphan cleanup)
+
+**Scope carried into v2.9:**
+
+The reliability/UX-cleanup backlog that v2.8 was nominally going to absorb — A2A delivery (999.44/.45/.48), post-Phase-116 dashboard regressions (999.49 + 999.7 follow-ups), subagent UX (999.36-02/.03), MCP lifecycle soak (999.6 + 999.14 + 999.15), Discord table rendering (999.46), subagent delegate routing + `/research` commands (999.19 + 999.20). See `.planning/BACKLOG-CONSOLIDATED.md` for the full triage.
+
+---
+
+## v2.7 Operator Self-Serve + Production Hardening (Shipped: 2026-05-01)
+
+**Phases completed:** Phases 100-108 + 999.6 / .12 / .13 / .14 / .15 bundled
+
+**Key accomplishments:**
+
+- Phase 100 operator self-serve flow (clawcode admin commands; vault-scoped 1Password per-agent overrides).
+- Phase 103-108 production hardening waves: secrets cache + dispatch (104-105 incident response), MCP broker pooling (~60% MCP child reduction in production).
+- Phase 109 MCP/Secret Resilience bundle (`8880fe8`): broker observability `rpsLastMin`/`throttleEvents24h`, orphan-claude reaper, `clawcode preflight` blocking restart at cgroup mem >80%, fleet-stats IPC + `/api/fleet-stats` dashboard endpoint. Driven by 2026-05-03 fleet incident (cgroup 97.8% MemoryMax, 4 invisible orphan claudes, swap exhausted).
+- 5 bundled 999.x backlog ships: 999.6 (auto pre-deploy snapshot), 999.12 (cross-agent IPC + heartbeat-inbox timeout), 999.13 (extendible delegate map + agent-context timezone), 999.14 (MCP child-process lifecycle hardening), 999.15 (MCP PID tracking + reconciler).
+- Post-v2.7 fix wave (2026-05-02): 3 cloud `/ultraplan` PRs merged (PR #3 Phase 999.29 dream-pass adapters; PR #4 Phase 999.28 MCP probe group-kill; PR #5 Phase 99 unified). 21 files touched, 1646+ insertions, 265 new tests.
+
+**Final outcome:** Production stable through 2 deploys to clawdy with snapshot/restore preserving 6 running agents both times. Zero rollbacks.
+
+---
+
 ## v2.6 v2.6 (Shipped: 2026-04-25)
 
 **Phases completed:** 2 phases, 10 plans, 20 tasks

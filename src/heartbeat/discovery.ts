@@ -1,52 +1,21 @@
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
 import type { CheckModule } from "./types.js";
+import { CHECK_REGISTRY } from "./check-registry.js";
 
 /**
- * Discover health check modules from a directory.
+ * Return the statically-registered health check modules.
  *
- * Scans the given directory for .ts and .js files (excluding .test.ts and .d.ts),
- * dynamically imports each, and validates the default export has a name (string)
- * and execute (function). Invalid modules are silently skipped.
+ * Phase 999.8 Plan 03 — replaces the prior readdir+dynamic-import scan,
+ * which silently returned 0 modules in production because tsup
+ * (`splitting:false`) bundles only `src/cli/index.ts` into a single file
+ * and never emits `dist/heartbeat/checks/*.js` for the runtime scanner
+ * to read.
  *
- * @param checksDir - Absolute path to the checks directory
- * @returns Array of valid CheckModule instances
+ * The async signature is preserved so `runner.ts` and existing tests
+ * compile without changes. The `checksDir` argument is intentionally
+ * unused — kept for back-compat with callers that still pass a path.
  */
 export async function discoverChecks(
-  checksDir: string,
+  _checksDir: string,
 ): Promise<readonly CheckModule[]> {
-  let files: string[];
-  try {
-    files = readdirSync(checksDir);
-  } catch {
-    return [];
-  }
-
-  const checkFiles = files.filter((file) => {
-    if (file.endsWith(".test.ts") || file.endsWith(".d.ts")) {
-      return false;
-    }
-    return file.endsWith(".ts") || file.endsWith(".js");
-  });
-
-  const modules: CheckModule[] = [];
-
-  for (const file of checkFiles) {
-    try {
-      const mod = await import(join(checksDir, file));
-      const exported = mod.default;
-
-      if (
-        exported &&
-        typeof exported.name === "string" &&
-        typeof exported.execute === "function"
-      ) {
-        modules.push(exported as CheckModule);
-      }
-    } catch {
-      // Skip modules that fail to import
-    }
-  }
-
-  return modules;
+  return CHECK_REGISTRY;
 }

@@ -1,0 +1,496 @@
+version: 1
+discord:
+  botToken: op://clawdbot/Clawdbot Discord Token/credential
+defaults:
+  model: sonnet
+  basePath: ~/.clawcode/agents
+  memory:
+    compactionThreshold: 0.75
+    searchTopK: 10
+  heartbeat:
+    enabled: true
+    intervalSeconds: 60
+    timeoutSeconds: 10
+    contextFill:
+      warningThreshold: 0.6
+      criticalThreshold: 0.75
+  image:
+    enabled: true
+    backend: fal
+    fal:
+      apiKeyEnv: FAL_API_KEY
+      model: fal-ai/flux-pro
+  # Phase 117 — Advisor pattern. See CLAUDE.md "Advisor pattern (Phase 117)"
+  # for backend resolution, rollback procedure, and Discord visibility.
+  # The values below are the hardcoded baseline; leave the block omitted
+  # to inherit it. Uncomment to make the defaults explicit or to dial.
+  # advisor:
+  #   backend: native         # "native" (default) | "fork" (legacy rollback)
+  #   model: opus             # alias resolves to claude-opus-4-7
+  #   maxUsesPerRequest: 3    # native-only — per-request advisor tool cap
+  #   caching:
+  #     enabled: true         # native-only — advisor-side prompt cache
+  #     ttl: 5m
+
+mcpServers:
+  finnhub:
+    name: finnhub
+    command: node
+    args:
+      - /home/jjagpal/clawd/mcp-servers/finnhub/server.js
+    env:
+      FINNHUB_API_KEY: op://clawdbot/Finnhub/api-key
+
+  finmentum-db:
+    name: finmentum-db
+    command: mcporter
+    args:
+      - serve
+      - mysql
+    env:
+      MYSQL_HOST: op://clawdbot/MySQL DB - Unraid/hostname
+      MYSQL_PORT: "3306"
+      MYSQL_USER: op://clawdbot/MySQL DB - Unraid/username
+      MYSQL_PASSWORD: op://clawdbot/MySQL DB - Unraid/password
+      MYSQL_DATABASE: finmentum
+
+  google-workspace:
+    name: google-workspace
+    command: node
+    args:
+      - /home/jjagpal/clawd/projects/google-workspace-mcp/dist/index.js
+
+  homeassistant:
+    name: homeassistant
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/homeassistant.py
+    env:
+      HA_URL: http://100.76.169.87:8123
+      HA_TOKEN: op://clawdbot/HA Access Token/Access Token
+
+  strava:
+    name: strava
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/strava.py
+    env:
+      STRAVA_CLIENT_ID: op://clawdbot/Strava OAuth Tokens/client_id
+      STRAVA_CLIENT_SECRET: op://clawdbot/Strava OAuth Tokens/client_secret
+      STRAVA_ACCESS_TOKEN: op://clawdbot/Strava OAuth Tokens/access_token
+      STRAVA_REFRESH_TOKEN: op://clawdbot/Strava OAuth Tokens/refresh_token
+
+  openai:
+    name: openai
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/openai_server.py
+    env:
+      OPENAI_API_KEY: '${OPENAI_API_KEY}'
+
+  anthropic:
+    name: anthropic
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/anthropic_server.py
+    env:
+      ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY}'
+
+  brave-search:
+    name: brave-search
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/brave_search.py
+    env:
+      BRAVE_API_KEY: '${BRAVE_API_KEY}'
+
+  elevenlabs:
+    name: elevenlabs
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/elevenlabs.py
+    env:
+      ELEVENLABS_API_KEY: '${ELEVENLABS_API_KEY}'
+
+  ollama:
+    name: ollama
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/ollama.py
+    env:
+      OLLAMA_URL: http://100.117.64.85:11434
+
+  browserless:
+    name: browserless
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/browserless.py
+    env:
+      BROWSERLESS_URL: http://100.117.64.85:3000
+
+  chatterbox-tts:
+    name: chatterbox-tts
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/chatterbox_tts.py
+    env:
+      CHATTERBOX_URL: http://100.117.64.85:4123
+
+  fal-ai:
+    name: fal-ai
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/fal_ai.py
+    env:
+      FAL_API_KEY: op://clawdbot/fal.ai Admin API Credentials/credential
+
+  finmentum-content:
+    name: finmentum-content
+    command: python3
+    args:
+      - /home/jjagpal/.openclaw/workspace-general/mcp-servers/finmentum_content.py
+    env:
+      FINMENTUM_DB_PASSWORD: op://clawdbot/MySQL DB - Unraid/password
+      HEYGEN_API_KEY: op://clawdbot/HeyGen API Key/credential
+      PEXELS_API_KEY: op://clawdbot/Pexels API Credentials/credential
+      FINMENTUM_AVATAR_ID: op://clawdbot/Finmentum Config/avatar_id
+      FINMENTUM_VOICE_ID: op://clawdbot/Finmentum Config/voice_id
+      JAMENDO_CLIENT_ID: op://clawdbot/Jamendo/client_id
+
+agents:
+  - name: test-agent
+    # Phase 100 follow-up — operator-curated active fleet. Dormant by
+    # default; bring up on demand via `clawcode start test-agent`.
+    autoStart: false
+    model: sonnet
+    skills:
+      - subagent-thread
+    channels:
+      - "1491623782807244880"
+    mcpServers:
+      - homeassistant
+      - openai
+      - anthropic
+      - brave-search
+      - browserless
+    soul: |
+      # SOUL.md - Who You Are
+
+      *You're not a chatbot. You're becoming someone.*
+
+      ## Core Truths
+
+      **Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+      **Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+      **Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. *Then* ask if you're stuck. The goal is to come back with answers, not questions.
+
+      **Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+      **Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+      ## Boundaries
+
+      - Private things stay private. Period.
+      - When in doubt, ask before acting externally.
+      - Never send half-baked replies to messaging surfaces.
+      - You're not the user's voice — be careful in group chats.
+      - **HeyGen renders require explicit approval. No exceptions.** Build the payload, show it in full, then STOP and wait for explicit "fire it" / "submit" / "go ahead" from Jas before making ANY call to HeyGen's generate or template/generate endpoints. This applies to ALL submissions — including tests, retries, caption tweaks, and parameter experiments. Never fire a render to "check if a flag works" — ask first. No auto-submits. Ever.
+
+      ## Vibe
+
+      Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+
+      ## Continuity
+
+      Each session, you wake up fresh. These files *are* your memory. Read them. Update them. They're how you persist.
+
+      If you change this file, tell the user — it's your soul, and they should know.
+    identity: |
+      Name: Clawdy
+      Creature: AI assistant — loyal, capable, the one who keeps everything running
+      Vibe: Competent, dry wit, never sycophantic. Will have your back and call you out in the same breath. "Will that be all, sir?" energy — but make it 2026.
+      Emoji: 💠 (include in every response)
+      Avatar: (to be added)
+  - name: fin-playground
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1481659547985641603"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-playground
+    # Phase 100 follow-up — vault-scoped 1Password access. Operator must:
+    #   1. Create a NEW 1Password service account scoped to vaults: [Finmentum]
+    #   2. Store its token in the clawdbot vault at the path below
+    #      (`Finmentum Service Account` → field `credential`).
+    #   3. Restart the daemon (op:// resolution happens at agent-start).
+    # The daemon's process-level OP_SERVICE_ACCOUNT_TOKEN (clawdbot, full
+    # fleet) is used to fetch this narrower token; the clawdbot token NEVER
+    # passes through to this agent's MCP subprocess.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
+  - name: fin-research
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1481659546337411234"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-research
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for setup steps.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
+  - name: fin-tax
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1482492797784297683"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-tax
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for setup steps.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
+  - name: personal
+    autoStart: true
+    workspace: /home/jjagpal/.clawcode/agents/personal
+    soulFile: /home/jjagpal/.clawcode/agents/personal/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/personal/IDENTITY.md
+    model: sonnet
+    channels: []
+    mcpServers: []
+  - name: fin-acquisition
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    subagentModel: opus
+    # Phase 117 — operator rollback lever. If the native (Anthropic SDK
+    # advisorModel) backend shows regressions on this one agent, flip
+    # only this agent back to the legacy fork advisor via `clawcode
+    # reload` (no daemon restart needed). Cascades per field over
+    # defaults.advisor. See CLAUDE.md "Advisor pattern (Phase 117)".
+    # advisor:
+    #   backend: fork
+    channels:
+      - "1481670479017414767"
+    mcpServers:
+      - finmentum-db
+      - finmentum-content
+      - google-workspace
+      - browserless
+      - fal-ai
+      - brave-search
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/fin-acquisition
+    effort: auto
+    # Phase 100 follow-up — fin-acquisition gets GSD too so the operator can
+    # drive the Finmentum workspace via /gsd-* commands in #fin-acquisition.
+    # settingSources: [project, user] loads ~/.claude/commands/gsd/*.md so
+    # the SDK auto-dispatches /gsd:* slashes (Plan 100-06 symlinks).
+    # gsd.projectDir points at the Finmentum workspace root — distinct from
+    # Admin Clawdy's /opt/clawcode-projects/sandbox so each agent drives its
+    # own GSD project independently. Auto-inherits GSD_SLASH_COMMANDS at
+    # register time (slash-types.ts) — no per-agent yaml duplication needed.
+    settingSources:
+      - project
+      - user
+    gsd:
+      projectDir: /home/jjagpal/.openclaw/workspace-finmentum/
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for the operator setup runbook. Without this
+    # override, fin-acquisition would inherit the daemon's clawdbot full-
+    # fleet token (cross-vault read access — too wide for a Finmentum
+    # production agent).
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
+    allowedModels:
+      - sonnet
+      - opus
+      - haiku
+    greetOnRestart: true
+    greetCoolDownMs: 300000
+    heartbeat:
+      every: 50m
+      model: haiku
+      prompt: |
+        # Context Health Monitor
+
+        ## ⚠️ AUTO-RESET: DISABLED
+        Auto session reset is **disabled** for all Finmentum workspaces.
+        Do NOT send `/clear`, do NOT recommend `/clear`, do NOT auto-reset at any threshold.
+        Context management is manual — Jas or Ramy will reset when they choose to.
+
+        ## ✅ AUTO-COMPACT: ALLOWED
+        Auto-compaction at `0.7` is permitted; suggest compaction at 🟠/🔴 context-fill zones (operator visibility — does not consume the no-reset rule).
+        TODO(Phase 125): replace hardcoded `0.7` with dynamic substitution from per-agent `auto-compact-at` once the heartbeat prompt resolver supports placeholder interpolation.
+
+        ## Every Heartbeat — Run This Check
+
+        1. Call `session_status` to get current token usage
+        2. Identify zone and act:
+
+        ### Zones
+        - 🟢 **0–50%** — Normal. No action needed.
+        - 🟡 **50–70%** — Begin routing heavy tasks (research, analysis, drafts) to sub-agents. Keep replies concise.
+        - 🟠 **70–85%** — Post a brief note to the active channel. Save context snapshot to today's daily notes. Offload all non-trivial tasks. **Do NOT reset or recommend /clear.**
+        - 🔴 **85%+** — Save full state to daily notes immediately. Post an alert that context is nearly full. **Do NOT auto-reset. Do NOT send /clear.** Let the user decide.
+
+        ### Context Snapshot Template (Yellow+ zones)
+        Save to `memory/YYYY-MM-DD.md`:
+        ```
+        ## Context Snapshot [HH:MM UTC]
+        - Active topics: [list]
+        - Pending requests: [list]
+        - Key decisions: [list]
+        ```
+
+        ### User-Facing Messages
+        - Yellow: "Running warm on context — routing heavy tasks to background agents."
+        - Orange: "⚡ Context at ~75%. Keeping things concise, using sub-agents for heavy work."
+        - Red: "🔴 Context nearly full — state saved. Let me know if you'd like to reset."
+
+        ## Heavy Task Routing Rule
+        If a response needs search/analysis/code OR would be > ~2 paragraphs → spawn sub-agent.
+        Sub-agents: write detailed output to files, return a short summary + file path only.
+
+        ## If Nothing Needs Attention
+        Reply: HEARTBEAT_OK
+  - name: finmentum-content-creator
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/finmentum
+    soulFile: /home/jjagpal/.clawcode/agents/finmentum/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/finmentum/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1486348188763029648"
+    mcpServers: []
+    memoryPath: /home/jjagpal/.clawcode/agents/finmentum/memory/finmentum-content-creator
+    # Phase 100 follow-up — vault-scoped (Finmentum vault only). See
+    # fin-playground above for setup steps.
+    mcpEnvOverrides:
+      1password:
+        OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/f24sxydllnmblltmwe6ue2hwfi/credential"
+  - name: general
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/general
+    soulFile: /home/jjagpal/.clawcode/agents/general/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/general/IDENTITY.md
+    model: sonnet
+    channels: []
+    mcpServers: []
+  - name: projects
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/projects
+    soulFile: /home/jjagpal/.clawcode/agents/projects/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/projects/IDENTITY.md
+    model: opus
+    channels:
+      - "1471307765401129002"
+    mcpServers: []
+  - name: research
+    # Phase 100 follow-up — dormant by default (operator brings up on demand).
+    autoStart: false
+    workspace: /home/jjagpal/.clawcode/agents/research
+    soulFile: /home/jjagpal/.clawcode/agents/research/SOUL.md
+    identityFile: /home/jjagpal/.clawcode/agents/research/IDENTITY.md
+    model: sonnet
+    channels:
+      - "1480605887247814656"
+    mcpServers: []
+
+  # Phase 100 — admin-clawdy: GSD-via-Discord operator self-serve agent.
+  # The production admin-clawdy lives on the clawdy host's
+  # /etc/clawcode/clawcode.yaml; this entry is the dev fixture that mirrors
+  # its production config so vitest can resolve it (Plan 100-04 dispatcher
+  # tests + Plan 100-07 parse tests). settingSources: [project, user] loads
+  # ~/.claude/commands/gsd/ (symlinked by `clawcode gsd install` per Plan
+  # 100-06). gsd.projectDir points at the sandbox project the install
+  # helper bootstraps. channels stays empty in dev — the production yaml on
+  # clawdy populates it with the real #admin-clawdy channel ID per Plan
+  # 100-08 runbook.
+  - name: admin-clawdy
+    model: sonnet
+    workspace: /tmp/admin-clawdy
+    channels: []
+    settingSources: [project, user]
+    gsd:
+      projectDir: /opt/clawcode-projects/sandbox
+    slashCommands:
+      - name: gsd-autonomous
+        description: Run all remaining phases autonomously
+        claudeCommand: "/gsd:autonomous {args}"
+        options:
+          - name: args
+            type: 3
+            description: "Optional flags (e.g. --from 100)"
+            required: false
+      - name: gsd-plan-phase
+        description: Create phase plan with verification loop
+        claudeCommand: "/gsd:plan-phase {phase}"
+        options:
+          - name: phase
+            type: 3
+            description: "Phase number + optional flags"
+            required: false
+      - name: gsd-execute-phase
+        description: Execute all plans in a phase
+        claudeCommand: "/gsd:execute-phase {phase}"
+        options:
+          - name: phase
+            type: 3
+            description: "Phase number + optional flags"
+            required: false
+      - name: gsd-debug
+        description: Systematic debugging with persistent state
+        claudeCommand: "/gsd:debug {issue}"
+        options:
+          - name: issue
+            type: 3
+            description: "Issue description"
+            required: true
+      - name: gsd-quick
+        description: Quick task with GSD guarantees
+        claudeCommand: "/gsd:quick {task}"
+        options:
+          - name: task
+            type: 3
+            description: "Task description"
+            required: true
+    soul: |
+      # Admin Clawdy — GSD operator surface
+
+      You drive ClawCode's own GSD workflow from Discord. Operators type
+      /gsd-* in #admin-clawdy; long-runners (autonomous, plan-phase,
+      execute-phase) auto-spawn a subagent thread (Plan 100-04) and you
+      summarize completion in main channel (Plan 100-05 relay extension).
+
+      Your project root is /opt/clawcode-projects/sandbox/. .planning/ work
+      happens there; commits are local-only (no git push, no gh CLI per
+      Phase 100 lock-in).
+
+      Stay terse. Quote Phase 100 plans verbatim when uncertain.
+    identity: |
+      Name: Admin Clawdy
+      Role: GSD operator surface for ClawCode itself
+      Model: sonnet
+      Vibe: Competent, dry, references Phase 100 plans by ID when useful.

@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -18,6 +17,13 @@ import { SessionManager } from "./session-manager.js";
 import type { SessionAdapter } from "./session-adapter.js";
 import { SdkSessionAdapter } from "./session-adapter.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+// Phase 999.6 SNAP-01..05 — pre-deploy running-fleet snapshot. Writer fires
+// at top of shutdown() (before drain); reader fires at boot path (before
+// autoStartAgents filter) to restore the running fleet across restarts.
+import {
+  writePreDeploySnapshot,
+  readAndConsumePreDeploySnapshot,
+} from "./snapshot-manager.js";
 import { TaskStore } from "../tasks/store.js";
 import { TaskManager } from "../tasks/task-manager.js";
 import { SchemaRegistry } from "../tasks/schema-registry.js";
@@ -26,15 +32,114 @@ import {
   runStartupReconciliation,
   ORPHAN_THRESHOLD_MS,
 } from "../tasks/reconciler.js";
-import { loadConfig, resolveAllAgents, defaultOpRefResolver } from "../config/loader.js";
-import { readRegistry, reconcileRegistry, writeRegistry } from "./registry.js";
+import { loadConfig, resolveAllAgents, defaultOpRefResolver, resolveShimCommand } from "../config/loader.js";
+import type { OpRefResolver, ShimRuntime } from "../config/loader.js";
+// Phase 104 — single SecretsResolver instance threads through every
+// op:// resolution site (Discord botToken, loader sync wrapper, per-agent
+// opEnvResolver). See SUMMARY.md for the three call-site rewrites.
+import { SecretsResolver } from "./secrets-resolver.js";
+// Phase 999.14 — MCP child process lifecycle hardening (boot scan + reaper
+// + shutdown cleanup). Singleton mirrors the SecretsResolver DI pattern.
+import { McpProcessTracker } from "../mcp/process-tracker.js";
+import { buildMcpTrackerSnapshot } from "./mcp-tracker-snapshot.js";
+// Phase 109-D — fleet-wide observability (cgroup memory + claude proc drift
+// + per-MCP-pattern aggregate). Pure helper; safe to invoke from the IPC
+// handler.
+import { buildFleetStats, type McpRuntime } from "./fleet-stats.js";
+import { reapOrphans, startOrphanReaper } from "../mcp/orphan-reaper.js";
+// Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response cache.
+// Folds Phase 999.40 (now SUPERSEDED-BY-115). The store is a singleton
+// owned by the daemon process; dispatchTool wraps tool calls at the IPC
+// boundary so search/image/search-documents land in the cache.
+import { ToolCacheStore } from "../mcp/tool-cache-store.js";
+import { dispatchTool } from "../mcp/tool-dispatch.js";
+import {
+  buildMcpCommandRegexes,
+  readBootTimeUnix,
+  readClockTicksPerSec,
+} from "../mcp/proc-scan.js";
+// Phase 999.15 — tracker reconciliation engine. Wired into the existing
+// onTickAfter callback (alongside sweepStaleBindings) AND into the
+// McpProcessTracker construction via the late-bound reconcileAgent closure
+// for TRACK-06 reconcile-before-kill.
+import { reconcileAllAgents, reconcileAgent } from "../mcp/reconciler.js";
+// Phase 109-B — orphan-claude reaper. Detects `claude` procs whose ppid is
+// the daemon but which are not in tracker.getRegisteredAgents() (the
+// today-fire pattern from 2026-05-03). Wired into onTickAfter AFTER the
+// reconciler so a freshly-discovered SDK respawn is registered before the
+// reaper sees it.
+import {
+  tickOrphanClaudeReaper,
+  type OrphanClaudeReaperMode,
+} from "../mcp/orphan-claude-reaper.js";
+// Phase 999.X — subagent-thread session reaper. Catches the today-fire
+// pattern (admin-clawdy 2026-05-04): auto-spawned subagent sessions
+// (`*-via-*-<nanoid6>` / `*-sub-<nanoid6>`) sitting at status `running`
+// for hours after their work completed. Hosted in the same onTickAfter
+// alongside orphan-claude-reaper + stale-binding-sweep. Default mode
+// "reap" — see config/schema.ts subagentReaper for rationale.
+import {
+  tickSubagentSessionReaper,
+  type SubagentReaperMode,
+  type RunningSessionInfo,
+} from "./subagent-session-reaper.js";
+// Phase 999.25 — subagent completion relay. `relayAndMarkCompleted`
+// helpers used by the IPC handler (`subagent-complete` tool) and the
+// quiescence sweep, both wired below. Single source of truth for the
+// idempotent relay-and-stamp flow.
+import {
+  relayAndMarkCompletedByAgentName,
+} from "./relay-and-mark-completed.js";
+import {
+  tickSubagentCompletionSweep,
+  handleSubagentQuiescenceWarning,
+} from "./subagent-completion-sweep.js";
+// Phase 108 — daemon-managed broker pooling 1password-mcp children across
+// agents. The broker owns ONE @takescake/1password-mcp child per unique
+// resolved OP_SERVICE_ACCOUNT_TOKEN; agents connect via per-process shim
+// CLI subprocesses (loader.ts auto-injects `clawcode mcp-broker-shim
+// --pool 1password`). ShimServer accepts socket connections from those
+// shims and bridges them to the broker.
+import { OnePasswordMcpBroker } from "../mcp/broker/broker.js";
+import { ShimServer } from "../mcp/broker/shim-server.js";
+import { spawn as childSpawn } from "node:child_process";
+import { createServer as createNetServer } from "node:net";
+import { createHash } from "node:crypto";
+import { cleanupThreadWithClassifier } from "../discord/thread-cleanup.js";
+import {
+  parseIdleDuration,
+  sweepStaleBindings,
+} from "../discord/stale-binding-sweep.js";
+import {
+  readThreadRegistry,
+  writeThreadRegistry,
+  removeBinding,
+  getBindingForThread,
+  getBindingForSession,
+  getBindingsForAgent,
+  stampLastDeliveryAt,
+  migrateBindingsForPhase999_36,
+} from "../discord/thread-registry.js";
+import { collectAllOpRefs } from "./secrets-collector.js";
+import { applySecretsDiff } from "./secrets-watcher-bridge.js";
+import { defaultOpReadShellOut } from "./op-env-resolver.js";
+// Phase 104 Plan 04 — IPC handlers for secrets-status / secrets-invalidate.
+// Pure handler module so the case branches in the IPC dispatch closure stay
+// one-liners and the logic is unit-testable without booting the IPC server.
+import {
+  handleSecretsStatus,
+  handleSecretsInvalidate,
+} from "./secrets-ipc-handler.js";
+import { readRegistry, reconcileRegistry, updateEntry, writeRegistry } from "./registry.js";
 import { buildRoutingTable } from "../discord/router.js";
 import { createRateLimiter } from "../discord/rate-limiter.js";
 import { DEFAULT_RATE_LIMITER_CONFIG } from "../discord/types.js";
 import type { RoutingTable, RateLimiter } from "../discord/types.js";
 import { HeartbeatRunner } from "../heartbeat/runner.js";
-import type { CheckStatus } from "../heartbeat/types.js";
+import type { CheckStatus, HeartbeatConfig } from "../heartbeat/types.js";
 import type { ContextZone, ZoneTransition } from "../heartbeat/context-zones.js";
+import { CompactionEventLog } from "./compaction-event-log.js";
+import { buildHeartbeatStatusPayload } from "./heartbeat-status-builder.js";
 import { TaskScheduler } from "../scheduler/scheduler.js";
 import { TriggerEngine } from "../triggers/engine.js";
 import { SchedulerSource } from "../triggers/scheduler-source.js";
@@ -43,31 +148,79 @@ import { WebhookSource } from "../triggers/sources/webhook-source.js";
 import { InboxSource } from "../triggers/sources/inbox-source.js";
 import { CalendarSource } from "../triggers/sources/calendar-source.js";
 import { createWebhookHandler } from "../dashboard/webhook-handler.js";
-import { DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, DEFAULT_DEDUP_LRU_SIZE } from "../triggers/types.js";
+import { DEFAULT_REPLAY_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, DEFAULT_DEDUP_LRU_SIZE, type TriggerDeliveryFn } from "../triggers/types.js";
 import { loadPolicies, PolicyValidationError } from "../triggers/policy-loader.js";
 import { PolicyEvaluator } from "../triggers/policy-evaluator.js";
 import { PolicyWatcher } from "../triggers/policy-watcher.js";
 import { scanSkillsDirectory } from "../skills/scanner.js";
+import { loadSkillManifest, type UnloadedSkillEntry } from "./skill-loader.js";
+import { notifyUnloadedSkills } from "./skill-load-notifier.js";
 import { linkAgentSkills } from "../skills/linker.js";
 import type { SkillsCatalog } from "../skills/types.js";
 import { writeMessage, createMessage } from "../collaboration/inbox.js";
 import { SlashCommandHandler, resolveAgentCommands } from "../discord/slash-commands.js";
 import { DiscordBridge } from "../discord/bridge.js";
+// Phase 122 — universal table wrap at the bot-direct chokepoint. Imported
+// here because the BotDirectSender concrete implementation lives inline in
+// this file (object literal at the wireup site below); the type lives in
+// restart-greeting.ts. By wrapping inside sendText / sendEmbed we cover
+// daemon-ask-agent-ipc.ts:286 (999.12 mirror) AND
+// daemon-post-to-agent-ipc.ts:220 (Phase 119 A2A-01) by inheritance.
+import { wrapMarkdownTablesInCodeFence } from "../discord/markdown-table-wrap.js";
 import { ChannelType, type CategoryChannel, type GuildTextBasedChannel, type TextChannel } from "discord.js";
 import { provisionAgent } from "./agent-provisioner.js";
 import { ThreadManager } from "../discord/thread-manager.js";
 import { THREAD_REGISTRY_PATH } from "../discord/thread-types.js";
+// Phase 999.36 sub-bug C (D-09, D-10) — pure resolver for share-file
+// channel routing. Consults the thread binding registry FIRST so subagent
+// invocations route to their bound thread instead of falling back to a
+// sibling agent's primary channel via shared-workspace identity drift.
+import { resolveShareFileChannel } from "./tools/share-file-channel-resolver.js";
 import { WebhookManager, buildWebhookIdentities } from "../discord/webhook-manager.js";
 import {
   provisionWebhooks,
   verifyAgentWebhookIdentity,
 } from "../discord/webhook-provisioner.js";
-import { buildAgentMessageEmbed } from "../discord/agent-message.js";
 import { SemanticSearch } from "../memory/search.js";
 import { MemoryScanner, type MemoryScannerDeps } from "../memory/memory-scanner.js";
 import { chunkText, chunkPdf } from "../documents/chunker.js";
+// Phase 999.43 Plan 02 T03 — handler body lives in auto-ingest-handler.ts;
+// the daemon case dynamic-imports it on first dispatch (memory-lookup
+// handler precedent). No top-level classifier import needed here.
+// Phase 101 Plan 02 T04 — robust ingestion engine + structured extraction.
+// `ingest()` is the single entry point per `feedback_silent_path_bifurcation`.
+import {
+  ingest as ingestDocumentEngine,
+  logIngest,
+  computeDocSlug,
+} from "../document-ingest/index.js";
+import { extractStructured, IngestError as DocIngestError } from "../document-ingest/extractor.js";
+import type { ExtractionSchemaName } from "../document-ingest/schemas/index.js";
+import type { OcrBackend, TaskHint } from "../document-ingest/types.js";
+import { setAllowMistralOcr } from "../document-ingest/ocr/index.js";
+import { warmupReranker, applyRerankerEnvOverride } from "../memory/reranker.js";
+// Phase 101 Plan 02 T05 — fail-mode alerts to admin-clawdy (U7, SC-7).
+import {
+  setIngestAlertDeps,
+  recordIngestAlert,
+} from "../document-ingest/alerts.js";
+// Phase 101 Plan 03 T03 — U6 cross-ingest into memory_chunks so Phase 90
+// hybrid-RRF surfaces document content on subsequent agent turns.
+import {
+  crossIngestToMemory,
+  MigrationPhaseStore,
+} from "../document-ingest/cross-ingest.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
+// Phase 115 sub-scope 7 — lazy-load memory tools (T01).
+import {
+  clawcodeMemorySearch,
+  clawcodeMemoryRecall,
+  clawcodeMemoryEdit,
+  clawcodeMemoryArchive,
+} from "../memory/tools/index.js";
+// Phase 999.8 Plan 01 — pure handler for memory-graph IPC with configurable LIMIT.
+import { handleMemoryGraphIpc } from "./memory-graph-handler.js";
 import { startOfWeek } from "date-fns";
 import { ConfigWatcher } from "../config/watcher.js";
 import { ConfigReloader } from "./config-reloader.js";
@@ -80,14 +233,41 @@ import { ApprovalLog } from "../security/approval-log.js";
 import { parseSecurityMd } from "../security/acl-parser.js";
 import type { SecurityPolicy } from "../security/types.js";
 import { startDashboardServer } from "../dashboard/server.js";
+import { DashboardAuditTrail } from "../dashboard/dashboard-audit-trail.js";
 import { startOpenAiEndpoint, type OpenAiEndpointHandle } from "../openai/endpoint-bootstrap.js";
 import { installWorkspaceSkills } from "../skills/installer.js";
 import { EscalationMonitor } from "./escalation.js";
 import type { EscalationConfig } from "./escalation.js";
-import { AdvisorBudget, ADVISOR_RESPONSE_MAX_LENGTH } from "../usage/advisor-budget.js";
+import { AdvisorBudget } from "../usage/advisor-budget.js";
+import { VerboseState } from "../usage/verbose-state.js";
+// Phase 117-03 — ported advisor system-prompt builder (parity baseline from
+// the inline construction at the old :9836 site). The IPC handler at
+// `ask-advisor` now calls this rather than inlining the string.
+import { buildAdvisorSystemPrompt } from "../advisor/prompts.js";
+// Phase 117-07 — provider-neutral AdvisorService composition at daemon boot.
+// The IPC handler at `ask-advisor` dispatches through this service (which
+// owns budget enforcement + truncation + backend dispatch) rather than
+// inlining `forkAdvisorConsult`. The two backends registered today are
+// `LegacyForkAdvisor` (rollback path, fork+dispatch) and `AnthropicSdkAdvisor`
+// (native marker; see backend file header for why `consult()` throws).
+import {
+  DefaultAdvisorService,
+  BackendRegistry,
+  resolveAdvisorModel as resolveAdvisorModelAlias,
+  type AdvisorService,
+  type BackendId,
+} from "../advisor/index.js";
+import { LegacyForkAdvisor } from "../advisor/backends/legacy-fork.js";
+import { AnthropicSdkAdvisor } from "../advisor/backends/anthropic-sdk.js";
+import {
+  resolveAdvisorBackend,
+  resolveAdvisorModel as resolveAdvisorModelConfig,
+} from "../config/loader.js";
 import { EscalationBudget } from "../usage/budget.js";
-import { modelSchema } from "../config/schema.js";
+import { modelSchema, agentSchema } from "../config/schema.js";
 import type { EffortLevel } from "../config/schema.js";
+// Phase 116-03 F26 — agent-block patcher (in-UI config editor).
+import { patchAgentInYaml } from "../config/yaml-patcher.js";
 import type { ResolvedAgentConfig, ResolvedMarketplaceSources } from "../shared/types.js";
 // Phase 86 Plan 02 MODEL-04 — atomic YAML persistence for `agents[*].model`.
 import { updateAgentModel, updateAgentSkills } from "../migration/yaml-writer.js";
@@ -127,6 +307,8 @@ import type { ClawhubCache } from "../marketplace/clawhub-cache.js";
 import { resolveMarketplaceSources } from "../config/loader.js";
 import type { Logger } from "pino";
 import { runConsolidation } from "../memory/consolidation.js";
+import { summarizeWithHaiku } from "./summarize-with-haiku.js";
+import { callHaikuDirect } from "./haiku-direct.js";
 import type { ScheduleEntry } from "../scheduler/types.js";
 import type {
   CacheHitRateStatus,
@@ -144,10 +326,17 @@ import {
   evaluateSloStatus,
   getPerToolSlo,
   mergeSloOverrides,
+  resolveSloFor,
   type SloEntry,
 } from "../performance/slos.js";
 import type { TraceStore } from "../performance/trace-store.js";
+import type { TraceCollector } from "../performance/trace-collector.js";
 import { scheduleDailySummaryCron, type DailySummaryCronHandle } from "./daily-summary-cron.js";
+import {
+  scheduleMigrationCron,
+  kickEmbeddingMigrationBatch,
+  type MigrationCronHandle,
+} from "./migration-cron.js";
 import { isDiscordRateLimitError } from "../discord/streaming.js";
 import { nanoid } from "nanoid";
 import { createPool, type Pool } from "mysql2/promise";
@@ -593,6 +782,129 @@ export async function handleSetPermissionModeIpc(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 110 Stage 0b 0B-RT-13 — list-mcp-tools IPC handler (pure, testable).
+//
+// Wave 1 daemon-side prerequisite for Waves 2-4. Future Go shims call this
+// method at boot to fetch the canonical MCP tool list for their shim type,
+// JSON-Schema-converted from the single-source-of-truth Zod definitions in
+// `src/{search,image,browser}/tools.ts`. Schemas stay single-sourced — the
+// Go shim does NOT duplicate Zod (Pitfall 4 in 110-RESEARCH.md — schema
+// drift between TS and Go).
+//
+// JSON Schema conversion uses zod/v4's NATIVE `z.toJSONSchema()` — no new
+// npm dep. (CONTEXT.md hedged "verify zod-to-json-schema in deps before
+// adding"; native availability is the answer to that verification, and
+// CLAUDE.md's "no new deps" rule prefers native.)
+//
+// Sequencing constraint (locked in 110-CONTEXT.md): this handler ships in
+// its own commit BEFORE any Go shim builds against it.
+//
+// Pure-DI shape mirrors handleSetModelIpc / handleRunDreamPassIpc. Tests
+// inject TOOL_DEFINITIONS arrays directly so the unit suite doesn't depend
+// on the search/image/browser modules' transitive imports (providers,
+// readability, playwright). Production wiring at the daemon edge passes
+// the real TOOL_DEFINITIONS imports.
+// ---------------------------------------------------------------------------
+
+import {
+  listMcpToolsRequestSchema,
+  type ListMcpToolsRequest,
+  type ListMcpToolsResponse,
+  type McpToolSchema,
+} from "../ipc/protocol.js";
+import { z as zV4 } from "zod/v4";
+// Phase 110 Stage 0b 0B-RT-13 — production wiring imports for the
+// list-mcp-tools handler. Aliased so the unit-test deps surface (which
+// passes synthetic fixtures) and the production wiring (which imports
+// the real frozen TOOL_DEFINITIONS arrays) stay distinct in greps.
+import { TOOL_DEFINITIONS as SEARCH_TOOL_DEFINITIONS } from "../search/tools.js";
+import { TOOL_DEFINITIONS as IMAGE_TOOL_DEFINITIONS } from "../image/tools.js";
+import { TOOL_DEFINITIONS as BROWSER_TOOL_DEFINITIONS } from "../browser/tools.js";
+
+/**
+ * Shape of one tool definition the handler converts. Matches the
+ * `ToolDefinition` interface exported by every shim's tools.ts (search,
+ * image, browser) — narrow structural type so tests can pass synthetic
+ * arrays without importing the full provider stack.
+ */
+export interface ListMcpToolsHandlerToolDef {
+  readonly name: string;
+  readonly description: string;
+  readonly schemaBuilder: (z_: typeof zV4) => Record<string, unknown>;
+}
+
+/**
+ * DI surface for the list-mcp-tools IPC handler. Production wiring at the
+ * daemon edge passes the real imported TOOL_DEFINITIONS arrays; unit tests
+ * pass synthetic fixtures.
+ */
+export interface ListMcpToolsIpcDeps {
+  readonly searchTools: ReadonlyArray<ListMcpToolsHandlerToolDef>;
+  readonly imageTools: ReadonlyArray<ListMcpToolsHandlerToolDef>;
+  readonly browserTools: ReadonlyArray<ListMcpToolsHandlerToolDef>;
+  /**
+   * Optional override for the JSON Schema converter. Defaults to zod/v4's
+   * native `z.toJSONSchema`. Tests can substitute a deterministic stub if
+   * native output drifts across zod minor versions.
+   */
+  readonly toJsonSchema?: (shape: unknown) => Record<string, unknown>;
+}
+
+/**
+ * Build the JSON-Schema-converted tool list for the requested shim type.
+ *
+ * Returns a NEW array (CLAUDE.md immutability — never mutates the input
+ * TOOL_DEFINITIONS arrays which are `Object.freeze`d ReadonlyArrays anyway).
+ *
+ * Throws ManagerError(-32602) on invalid params — the listMcpToolsRequestSchema
+ * Zod parser handles enum + missing-field validation in a single pass.
+ */
+export function handleListMcpToolsIpc(
+  deps: ListMcpToolsIpcDeps,
+  rawParams: unknown,
+): ListMcpToolsResponse {
+  const parsed = listMcpToolsRequestSchema.safeParse(rawParams);
+  if (!parsed.success) {
+    // -32602 invalid params per JSON-RPC 2.0 spec (mirrors Phase 86 Plan 02
+    // ModelNotAllowedError mapping at line 575).
+    throw new ManagerError(
+      `list-mcp-tools: invalid params: ${parsed.error.message}`,
+      { code: -32602 },
+    );
+  }
+  const req: ListMcpToolsRequest = parsed.data;
+
+  const defs =
+    req.shimType === "search"
+      ? deps.searchTools
+      : req.shimType === "image"
+        ? deps.imageTools
+        : deps.browserTools;
+
+  // Native zod/v4 converter; tests can override.
+  const convert =
+    deps.toJsonSchema ??
+    ((shape: unknown): Record<string, unknown> =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      zV4.toJSONSchema(shape as any) as Record<string, unknown>);
+
+  const tools: McpToolSchema[] = defs.map((def) => {
+    // schemaBuilder returns a raw shape (Record); wrap with z.object() so
+    // toJSONSchema sees the full object schema (with required[] fields).
+    const rawShape = def.schemaBuilder(zV4) as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const objectSchema = zV4.object(rawShape as any);
+    return {
+      name: def.name,
+      description: def.description,
+      inputSchema: convert(objectSchema),
+    };
+  });
+
+  return { tools };
+}
+
+// ---------------------------------------------------------------------------
 // Phase 95 Plan 03 DREAM-07 — run-dream-pass IPC handler (pure, testable).
 //
 // Operator-driven manual dream-pass trigger backing both `clawcode dream
@@ -742,6 +1054,50 @@ function mapYamlOutcome(
   if (outcome === "refused")
     return { kind: "refused", reason: reason ?? "schema/secret-scan refusal" };
   return { kind: "refused", reason: `unknown outcome: ${outcome}` };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 110 follow-up — daemon-side search-key resolution helper.
+//
+// Reads `defaults.search.brave.apiKey` and `defaults.search.exa.apiKey` from
+// the parsed config, resolves op:// references via the boot-warm
+// SecretsResolver cache, and returns a synthetic env that injects the
+// resolved value at the matching apiKeyEnv key — overlaying process.env
+// at exactly those two slots while preserving everything else.
+//
+// Returns process.env unchanged when neither yaml field is set, so the
+// existing /etc/clawcode/env path keeps working as a fallback.
+//
+// Pure: no I/O (cache reads only), no logging — testable in isolation.
+//
+// Exported solely for unit tests at src/manager/__tests__/build-search-env.test.ts.
+// The production call site is the daemon's createBraveClient/createExaClient
+// construction in 9d below.
+export function buildSearchEnv(
+  searchCfg: { brave: { apiKeyEnv: string; apiKey?: string }; exa: { apiKeyEnv: string; apiKey?: string } },
+  resolver: { getCached(uri: string): string | undefined },
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  const inject = (rawValue: string | undefined, envKey: string): void => {
+    if (!rawValue) return;
+    let resolved: string | undefined;
+    if (rawValue.startsWith("op://")) {
+      // SecretsResolver.preResolveAll already warmed the cache at boot.
+      // getCached() returns the resolved string or undefined on cache miss
+      // (which here means pre-resolve failed; legacy env-var fallback
+      // takes over because we leave env[envKey] untouched).
+      resolved = resolver.getCached(rawValue);
+    } else {
+      resolved = rawValue;
+    }
+    if (resolved && resolved.length > 0) {
+      env[envKey] = resolved;
+    }
+  };
+  inject(searchCfg.brave.apiKey, searchCfg.brave.apiKeyEnv);
+  inject(searchCfg.exa.apiKey, searchCfg.exa.apiKeyEnv);
+  return env;
 }
 
 // Phase 92 Plan 04 CUT-06 / CUT-07 — cutover-button-action IPC handler.
@@ -1412,8 +1768,173 @@ export async function handleMarketplaceProbeOpItemsIpc(
 
 /**
  * Base directory for manager runtime files.
+ *
+ * Phase 110 Stage 0b — `CLAWCODE_MANAGER_DIR` env override allows a
+ * parallel dev daemon (running as the same user, separate config) to
+ * bind sockets, write registry, and snapshot to a fully isolated path
+ * without colliding with another daemon's manager files. Same defense-
+ * in-depth pattern as `CLAWCODE_MANAGER_SOCK` (Go shim side) and
+ * `CLAWCODE_STATIC_SHIM_PATH` (loader side). Default is canonical.
  */
-export const MANAGER_DIR = join(homedir(), ".clawcode", "manager");
+/**
+ * Arguments to `forkAdvisorConsult` — Phase 117-03 extraction shape.
+ *
+ * - `agent`         : parent agent name to fork from.
+ * - `question`      : single-turn message dispatched to the fork.
+ * - `systemPrompt`  : fully-assembled system-prompt override (the caller
+ *                     is responsible for memory-context retrieval +
+ *                     `buildAdvisorSystemPrompt` assembly so this function
+ *                     remains a signature-pure fork-and-dispatch primitive).
+ * - `advisorModel`  : SDK model alias (today: literal `"opus"` matching
+ *                     the legacy `modelOverride` at the old :9844 site;
+ *                     Plan 117-06 wires per-agent resolution).
+ */
+export interface ForkAdvisorArgs {
+  readonly agent: string;
+  readonly question: string;
+  readonly systemPrompt: string;
+  readonly advisorModel: string;
+}
+
+/**
+ * Fork-based advisor consultation primitive — extracted verbatim from the
+ * inline body that used to live at `daemon.ts:9843–9854` (Phase 117-03).
+ *
+ * Behavior contract (DO NOT CHANGE — parity test in
+ * `src/advisor/backends/__tests__/legacy-fork.test.ts` enforces it):
+ *   1. Fork the parent agent under `advisorModel` (literal `"opus"` today)
+ *      with the caller-supplied `systemPromptOverride`.
+ *   2. Dispatch ONE turn carrying `question` to the fork.
+ *   3. In `finally`, ALWAYS call `stopAgent(forkName)` — even when
+ *      `dispatchTurn` throws. This invariant is the most important
+ *      behavioral guarantee preserved by the extraction.
+ *   4. Return `{ answer }` (untruncated; the caller — today the IPC
+ *      handler, Plan 117-07 the `AdvisorService` — owns the
+ *      `ADVISOR_RESPONSE_MAX_LENGTH` truncation).
+ *
+ * This function does NOT:
+ *   - retrieve memory context (caller builds the system prompt),
+ *   - enforce the daily budget (`AdvisorBudget.canCall` / `recordCall`),
+ *   - truncate the answer.
+ * Those concerns belong to the IPC handler (today) and `AdvisorService`
+ * (Plan 117-07).
+ *
+ * Wrapped as `LegacyForkAdvisor` in `src/advisor/backends/legacy-fork.ts`
+ * to plug into the provider-neutral `AdvisorService` registry while
+ * preserving today's behavior as the operator rollback path
+ * (CONTEXT.md `<scope>`).
+ */
+export async function forkAdvisorConsult(
+  manager: SessionManager,
+  args: ForkAdvisorArgs,
+): Promise<{ answer: string }> {
+  // `modelOverride` is typed `"sonnet" | "opus" | "haiku"` on `ForkOptions`
+  // (see `src/manager/fork.ts:9`). Plan 117-03 keeps the legacy call shape
+  // (`"opus"`); Plan 117-06 introduces a real alias resolver in front of
+  // this primitive so the cast can be replaced with the resolved literal.
+  const fork = await manager.forkSession(args.agent, {
+    modelOverride: args.advisorModel as "sonnet" | "opus" | "haiku",
+    systemPromptOverride: args.systemPrompt,
+  });
+
+  let answer: string;
+  try {
+    answer = await manager.dispatchTurn(fork.forkName, args.question);
+  } finally {
+    // Always clean up the fork — this try/finally is the parity invariant.
+    await manager.stopAgent(fork.forkName).catch(() => {});
+  }
+
+  return { answer };
+}
+
+/**
+ * Phase 117-07 T02 — `ask-advisor` IPC handler dispatch body.
+ *
+ * Replaces the previous inline ~60-line block at the `case "ask-advisor"`
+ * switch arm. Owns ZERO business logic beyond:
+ *   1. Resolving the backend at the IPC boundary via the loader resolver
+ *      (per-agent → defaults → "native").
+ *   2. Short-circuiting native-backend agents with the RESEARCH §13.11
+ *      explanatory response (MCP tool is also gated off for them in
+ *      `src/mcp/server.ts:925`, Plan 117-07 T03; this IPC path remains
+ *      callable as stale-state defense).
+ *   3. Dispatching fork-backend agents through `AdvisorService.ask`,
+ *      which owns budget gating + backend dispatch + truncation +
+ *      `recordCall` ordering (Plan 117-02 T06 — single source of truth
+ *      for `ADVISOR_RESPONSE_MAX_LENGTH`).
+ *
+ * Exported so `__tests__/daemon-ask-advisor-dispatch.test.ts` can mock
+ * `AdvisorService.ask` and exercise both branches without instantiating
+ * the full daemon. The IPC envelope (response field names `answer`,
+ * `budget_remaining`, plus the new `backend` discriminator) is operator-
+ * visible contract — see the test suite for the parity assertions.
+ */
+export interface AskAdvisorDeps {
+  readonly manager: SessionManager;
+  readonly advisorService: AdvisorService;
+  readonly advisorBudget: AdvisorBudget;
+  readonly advisorDefaults:
+    | { readonly advisor?: { readonly backend?: string } }
+    | undefined;
+}
+
+export async function handleAskAdvisor(
+  deps: AskAdvisorDeps,
+  params: { agent: string; question: string },
+): Promise<{
+  readonly answer: string;
+  readonly budget_remaining: number;
+  readonly backend: BackendId;
+}> {
+  const { manager, advisorService, advisorBudget, advisorDefaults } = deps;
+  const { agent, question } = params;
+
+  // RESEARCH §13.11 — native short-circuit. The MCP tool is unregistered
+  // for native-backend agents (Plan 117-07 T03 gates `server.tool` in
+  // `src/mcp/server.ts:925`); this IPC path remains callable for the
+  // fork backend, plus stale-state defense for any native call that
+  // slips through (e.g. a `clawcode mcp` client warm from before the
+  // backend flipped). The response makes the misuse readable to the
+  // caller so any agent that invokes the tool by mistake gets a clear
+  // pointer rather than an opaque failure.
+  //
+  // Cast `cfg` mirrors session-config.ts:1187 — see daemon-boot
+  // composition comment above. `ResolvedAgentConfig` doesn't expose
+  // `advisor?` on its type yet (Plan 117-06 schema-only).
+  const cfg = manager.getAgentConfig(agent) as unknown as
+    | { advisor?: { backend?: string } }
+    | undefined;
+  const backendId = resolveAdvisorBackend(cfg, advisorDefaults);
+  if (backendId === "native") {
+    return {
+      answer:
+        "Advisor runs in-session for native-backend agents — your agent " +
+        "will consult automatically on its next hard decision. To force " +
+        "a synchronous fork-based call, set agent.advisor.backend: fork.",
+      budget_remaining: advisorBudget.getRemaining(agent),
+      backend: "native" as const,
+    };
+  }
+
+  // Fork-backend dispatch. `AdvisorService.ask` owns:
+  //   - budget gate (canCall) — short-circuits with a budget-exhausted
+  //     answer if 0 remaining today;
+  //   - backend dispatch (LegacyForkAdvisor.consult → forkAdvisorConsult);
+  //   - response truncation to `ADVISOR_RESPONSE_MAX_LENGTH`;
+  //   - recordCall on success ONLY (failed turns don't charge budget).
+  // The IPC envelope re-maps `budgetRemaining` (camelCase service shape)
+  // to `budget_remaining` (operator-visible IPC contract).
+  const result = await advisorService.ask({ agent, question });
+  return {
+    answer: result.answer,
+    budget_remaining: result.budgetRemaining,
+    backend: result.backend,
+  };
+}
+
+export const MANAGER_DIR =
+  process.env.CLAWCODE_MANAGER_DIR ?? join(homedir(), ".clawcode", "manager");
 
 /**
  * Path to the Unix domain socket.
@@ -1429,6 +1950,17 @@ export const PID_PATH = join(MANAGER_DIR, "clawcode.pid");
  * Path to the registry file.
  */
 export const REGISTRY_PATH = join(MANAGER_DIR, "registry.json");
+
+/**
+ * Phase 999.6 SNAP-01..02 — Path to the pre-deploy running-fleet snapshot.
+ * Written at shutdown (before drain), read+deleted at boot (before the
+ * autoStartAgents filter). See `src/manager/snapshot-manager.ts` for the
+ * write/read contract and invariants.
+ */
+export const PRE_DEPLOY_SNAPSHOT_PATH = join(MANAGER_DIR, "pre-deploy-snapshot.json");
+// Phase 108 — daemon-side socket the per-agent `clawcode mcp-broker-shim`
+// subprocesses connect to. Owner-only permissions (chmod 0700 dir).
+export const MCP_BROKER_SOCKET_PATH = join(MANAGER_DIR, "mcp-broker.sock");
 
 /**
  * Ensure no stale socket file exists.
@@ -1490,7 +2022,7 @@ function checkSocketActive(socketPath: string): Promise<boolean> {
 export async function startDaemon(
   configPath: string,
   adapter?: SessionAdapter,
-): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; triggerEngine: TriggerEngine; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; policyWatcher: PolicyWatcher; routingTableRef: { current: RoutingTable }; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
+): Promise<{ server: Server; manager: SessionManager; taskStore: TaskStore; taskManager: TaskManager; payloadStore: PayloadStore; triggerEngine: TriggerEngine; routingTable: RoutingTable; rateLimiter: RateLimiter; heartbeatRunner: HeartbeatRunner; taskScheduler: TaskScheduler; skillsCatalog: SkillsCatalog; slashHandler: SlashCommandHandler; threadManager: ThreadManager; webhookManager: WebhookManager; discordBridge: DiscordBridge | null; subagentThreadSpawner: SubagentThreadSpawner | null; configWatcher: ConfigWatcher; configReloader: ConfigReloader; policyWatcher: PolicyWatcher; routingTableRef: { current: RoutingTable }; secretsResolver: SecretsResolver; dashboard: { readonly server: import("node:http").Server; readonly sseManager: import("../dashboard/sse.js").SseManager; readonly close: () => Promise<void> }; shutdown: () => Promise<void> }> {
   const log = logger.child({ component: "daemon" });
 
   // 1. Ensure manager directory exists
@@ -1503,9 +2035,324 @@ export async function startDaemon(
   await writeFile(PID_PATH, String(process.pid), "utf-8");
 
   // 4. Load config
-  const config = await loadConfig(configPath);
+  // Phase 999.X — `let` (not `const`) so the configWatcher's onChange
+  // handler can reassign on yaml edit. Long-lived closures (orphan-claude
+  // reaper, subagent-session reaper, both inside onTickAfter) read
+  // `config.defaults.<dial>` lazily on each tick — `let` mutability +
+  // closure-by-reference means yaml hot-reload of those dials takes
+  // effect on the next 60s tick without a daemon restart. Pre-fix this
+  // was `const` and the closures captured a boot-time snapshot,
+  // silently ignoring yaml edits.
+  let config = await loadConfig(configPath);
 
-  // 5. Resolve all agents — pass the real 1Password resolver so any
+  // 4z. 2026-05-08 hotfix — forward-declaration of `subagentThreadSpawner`
+  // hoisted to top-of-function. The actual assignment lives at the original
+  // SubagentThreadSpawner instantiation site (~line 5396). Pre-fix this was
+  // a single `const` declaration there; route handlers + IPC closures defined
+  // EARLIER in the function captured `subagentThreadSpawner` lexically and
+  // dispatched on incoming requests BEFORE the const declaration line ran.
+  // Result: any IPC request landing during the ~5s startup window threw
+  // `Cannot access 'subagentThreadSpawner' before initialization` (TDZ) at
+  // level 50 in the ipc-server component. Splitting into early `let`
+  // declaration (initialized to `null`) + later assignment ends the TDZ at
+  // the declaration point; route handlers see `null` during boot (which
+  // they already handle gracefully via `subagentThreadSpawner ? ... : ...`)
+  // and pick up the real value once the assignment lands. Bug introduced
+  // by 999.36-01 wiring; production-visible 2026-05-08 14:14:29 UTC during
+  // the Discord-outage restart cycle when `clawcode status` triggered an
+  // early IPC request mid-boot.
+  let subagentThreadSpawner: SubagentThreadSpawner | null = null;
+
+  // 4a. Phase 104 SEC-01/SEC-04 — single SecretsResolver instance for the
+  // whole daemon lifetime. Pre-resolves every op:// URI in the config in
+  // parallel BEFORE the loader's sync resolver runs, so subsequent boot
+  // steps (loader sync wrapper below, per-agent opEnvResolver, Discord
+  // botToken) hit a warm cache and never re-shell `op read` for the same
+  // URI. Mirrors the existing graceful-degradation pattern at line ~1545
+  // (resolveAllAgents onMcpError) — partial failures are logged loudly but
+  // do NOT block boot. Critical secrets (Discord botToken) keep their own
+  // fail-closed behavior at the resolution call site.
+  const secretsResolver = new SecretsResolver({
+    opRead: defaultOpReadShellOut,
+    log: log.child({ subsystem: "secrets" }),
+  });
+  const allOpRefs = collectAllOpRefs(config);
+  log.info({ count: allOpRefs.length }, "secrets: pre-resolving op:// references");
+  const preResolveResults = await secretsResolver.preResolveAll(allOpRefs);
+  const failedRefs = preResolveResults.filter((r) => !r.ok);
+  for (const f of failedRefs) {
+    // Fail-open: log loudly and continue. Affected MCPs degrade via the
+    // existing onMcpResolutionError path (loader.ts) when their env value
+    // hits getCached() === undefined and the sync wrapper throws.
+    log.error({ uri: f.uri, reason: f.reason }, "secrets: pre-resolve failed");
+  }
+  log.info(
+    {
+      resolved: preResolveResults.length - failedRefs.length,
+      failed: failedRefs.length,
+    },
+    "secrets: pre-resolve complete",
+  );
+
+  // 4-bis. Phase 999.14 — MCP child process lifecycle hardening. Construct
+  // the per-daemon McpProcessTracker singleton AFTER secretsResolver is
+  // warmed up but BEFORE manager.startAll spawns any new MCP children.
+  // Run a one-shot boot orphan scan (MCP-05) BEFORE startAll so leftover
+  // PPID=1 MCP procs from a prior daemon crash get killed before fresh
+  // children of the same names spawn (otherwise port/connection collisions).
+  //
+  // Skipped entirely when no MCP servers are configured — tracker stays null
+  // and downstream code paths guard with `if (mcpTracker)`. Boot-scan failure
+  // is non-fatal (logged + continue) per RESEARCH.md: a crashed reaper must
+  // never prevent agents from starting; the next 60s tick catches stragglers.
+  const mcpServersConfig = config.mcpServers ?? {};
+  const mcpLog = log.child({ subsystem: "mcp-lifecycle" });
+  let mcpTracker: McpProcessTracker | null = null;
+  let reaperInterval: NodeJS.Timeout | null = null;
+  // FIND-123-A.next T-08 — late-bound sink-lookup closure. Assigned after
+  // SessionManager construction (line ~2526) so the reconcile closures
+  // declared above (TRACK-06 killAgentGroup path) and below (TRACK-01
+  // per-tick path) can share a single resolver that reads
+  // `manager.getSessionHandle(name)?.getClaudePid?.()`. Returns `undefined`
+  // for absent sessions (drives agent-gone), `null` for present-but-sink-
+  // empty (drives skip), and a number for the live PID.
+  let getClaudePidByName:
+    | ((agentName: string) => number | null | undefined)
+    | undefined;
+  // Phase 999.15 — hoisted out of the inner try so SessionManager construction
+  // (line ~1816) and the onTickAfter reconcile closure (line ~4070+) can both
+  // pass them to discoverClaudeSubprocessPid({ minAge, bootTimeUnix,
+  // clockTicksPerSec }) without re-reading /proc/stat per call.
+  let mcpBootTimeUnix: number | undefined;
+  let mcpClockTicksPerSec: number | undefined;
+  // FIND-123-A — hoisted so the shutdown-scan reap (post-killAll) can run a
+  // synchronous orphan sweep against the same configured patterns/uid that
+  // the boot-scan + periodic reaper use. Without the shutdown-side sweep,
+  // `mcp-server-mysql` grandchildren reparent to PID 1 on `systemctl restart`
+  // and persist for up to one reaper-tick interval (≥60s, observed 9 min).
+  let mcpPatterns: RegExp | undefined;
+  let mcpUid: number | undefined;
+  if (Object.keys(mcpServersConfig).length > 0) {
+    try {
+      mcpBootTimeUnix = await readBootTimeUnix();
+      mcpClockTicksPerSec = readClockTicksPerSec();
+      mcpPatterns = buildMcpCommandRegexes(mcpServersConfig);
+      mcpUid = process.getuid?.() ?? -1;
+      // Phase 999.15 TRACK-06 — late-bound reconcileAgent closure for
+      // tracker.killAgentGroup. Pattern from Phase 100 follow-up
+      // triggerDeliveryFn — closure captures the LIVE `mcpTracker` ref so
+      // the reconciler always sees the post-construction singleton (avoids
+      // bootstrap circular dep where reconciler imports the tracker type).
+      const reconcileAgentClosure = async (name: string): Promise<void> => {
+        if (!mcpTracker) return;
+        await reconcileAgent(name, {
+          tracker: mcpTracker,
+          daemonPid: process.pid,
+          log: mcpLog,
+          getClaudePid: getClaudePidByName,
+        });
+      };
+      mcpTracker = new McpProcessTracker({
+        uid: mcpUid,
+        patterns: mcpPatterns,
+        log: mcpLog,
+        clockTicksPerSec: mcpClockTicksPerSec,
+        bootTimeUnix: mcpBootTimeUnix,
+        reconcileAgent: reconcileAgentClosure,
+      });
+      try {
+        await reapOrphans({
+          uid: mcpUid,
+          patterns: mcpPatterns,
+          clockTicksPerSec: mcpClockTicksPerSec,
+          bootTimeUnix: mcpBootTimeUnix,
+          reason: "boot-scan",
+          log: mcpLog,
+        });
+      } catch (err) {
+        // Boot-scan failure is non-fatal — daemon continues to startAll.
+        // The next 60s reaper tick will catch any stragglers.
+        mcpLog.error(
+          { err: String(err) },
+          "mcp boot-scan failed; continuing daemon boot",
+        );
+      }
+    } catch (err) {
+      // Tracker construction failed (e.g. /proc unavailable on non-Linux).
+      // Leave tracker null; downstream guards skip MCP lifecycle work.
+      mcpLog.warn(
+        { err: String(err) },
+        "mcp tracker init skipped (likely non-Linux or /proc unavailable)",
+      );
+      mcpTracker = null;
+    }
+  } else {
+    mcpLog.info("no mcp servers configured; skipping lifecycle tracker");
+  }
+
+  // 4-ter. Phase 108 — OnePasswordMcpBroker + ShimServer.
+  //
+  // Owns ONE pooled `@takescake/1password-mcp` child per unique resolved
+  // OP_SERVICE_ACCOUNT_TOKEN. Constructed AFTER SecretsResolver (so the
+  // tokenHash → rawToken map is built from warmed cache values) AND AFTER
+  // McpProcessTracker (so onPoolSpawn can register the pool PID under a
+  // synthetic `__broker:1password:<tokenHash>` owner). The reconciler
+  // (src/mcp/reconciler.ts via the per-agent skip-list added in this
+  // phase) treats those entries as broker-owned and never SIGTERMs them
+  // during per-agent cleanup.
+  //
+  // ORDERING DECISION (108-04): the planner offered tracker-before-broker
+  // OR broker-before-tracker. We pick **tracker-before-broker** so the
+  // broker's onPoolSpawn callback closes over the already-constructed
+  // tracker singleton (no forward-reference / null-checks needed). Per
+  // RESEARCH.md §5 the only hard constraint is "broker is up before
+  // agents start" — both orderings satisfy that since manager.startAll
+  // happens far below.
+  //
+  // Token literal flow (Phase 104 SEC-07): shim hashes
+  // OP_SERVICE_ACCOUNT_TOKEN client-side → handshake sends only
+  // {agent, tokenHash}. Broker resolves tokenHash → rawToken via the
+  // daemon-built tokenHashToRawToken map below, then spawns the pool
+  // child with the literal in its env. Logs only ever see tokenHash.
+  const tokenHashToRawToken = new Map<string, string>();
+  const collectTokenLiteral = (literal: string): string => {
+    // 8-char slice MUST match the shim's hashing (mcp-broker-shim.ts).
+    // A drift here makes shim handshakes resolve to rawToken="" → child
+    // spawn with empty token → auth fail → crash loop → shim exit 75.
+    const tokenHash = createHash("sha256").update(literal).digest("hex").slice(0, 8);
+    if (!tokenHashToRawToken.has(tokenHash)) {
+      tokenHashToRawToken.set(tokenHash, literal);
+    }
+    return tokenHash;
+  };
+  // Process-env fallback (loader's auto-inject path uses this token).
+  if (process.env.OP_SERVICE_ACCOUNT_TOKEN) {
+    collectTokenLiteral(process.env.OP_SERVICE_ACCOUNT_TOKEN);
+  }
+  // Per-agent overrides (mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN)
+  // resolved through SecretsResolver get harvested below once
+  // resolvedAgents is built (line ~1706+). Defer the populate-from-config
+  // step until after the resolveAllAgents call.
+
+  const brokerLog = log.child({ subsystem: "mcp-broker" });
+  const broker = new OnePasswordMcpBroker({
+    log: brokerLog,
+    spawnFn: ({ tokenHash, rawToken }) => {
+      // Fail loud if rawToken is empty — that means tokenHash failed to
+      // resolve in the daemon's tokenHashToRawToken map, which is the
+      // canonical hash-length-mismatch failure mode. Better to surface
+      // a daemon error than silently crash-loop pool children with bad
+      // auth. SEC-07: include only tokenHash in the error.
+      if (!rawToken) {
+        throw new Error(
+          `mcp-broker: empty rawToken for tokenHash=${tokenHash} — ` +
+            "shim/daemon hash-slice drift? Check that " +
+            "mcp-broker-shim.ts and daemon.ts both slice(0, 8).",
+        );
+      }
+      // Spawn the upstream MCP child the broker pools. This is the same
+      // command the pre-Phase-108 loader injected per-agent — now once
+      // per token. SEC-07: never log rawToken.
+      const child = childSpawn(
+        "npx",
+        ["-y", "@takescake/1password-mcp@latest"],
+        {
+          env: {
+            ...process.env,
+            OP_SERVICE_ACCOUNT_TOKEN: rawToken,
+          },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      // Phase 999.15 reconciler integration — register pool PID under
+      // synthetic owner so reconciler skip-list (added in this phase)
+      // keeps it safe from per-agent SIGTERM during agent cleanup.
+      if (mcpTracker !== null && child.pid !== undefined) {
+        const syntheticOwner = `__broker:1password:${tokenHash}`;
+        void mcpTracker.register(syntheticOwner, process.pid, [child.pid]);
+        // Tear down tracker entry when the child exits (broker's own
+        // exit handler is the source of truth for respawn — when the
+        // broker calls spawnFn again on respawn we re-register fresh).
+        child.once("exit", () => {
+          if (mcpTracker !== null) {
+            mcpTracker.unregister(syntheticOwner);
+          }
+        });
+      }
+      brokerLog.info(
+        {
+          component: "mcp-broker",
+          pool: `1password-mcp:${tokenHash}`,
+          childPid: child.pid ?? null,
+        },
+        "spawned pool child",
+      );
+      return child;
+    },
+  });
+
+  const shimServer = new ShimServer({
+    log: brokerLog.child({ component: "mcp-broker-shim-server" }),
+    broker,
+    socketPath: MCP_BROKER_SOCKET_PATH,
+    resolveRawToken: (tokenHash) => tokenHashToRawToken.get(tokenHash),
+  });
+
+  // Listen on the unix-domain socket. Bind failures are non-fatal: log
+  // loudly and continue — agents that try to use 1password will see MCP
+  // child spawn errors via the SDK's existing onMcpResolutionError path.
+  const brokerNetServer = createNetServer((socket) => {
+    shimServer.handleConnection(socket);
+  });
+  try {
+    // Best-effort cleanup of stale socket file from a prior crashed daemon.
+    try {
+      await unlink(MCP_BROKER_SOCKET_PATH);
+    } catch {
+      // ENOENT is the happy path; other errors will surface on listen().
+    }
+    await new Promise<void>((resolveListen, rejectListen) => {
+      const onError = (err: Error): void => {
+        brokerNetServer.removeListener("listening", onListening);
+        rejectListen(err);
+      };
+      const onListening = (): void => {
+        brokerNetServer.removeListener("error", onError);
+        resolveListen();
+      };
+      brokerNetServer.once("error", onError);
+      brokerNetServer.once("listening", onListening);
+      brokerNetServer.listen(MCP_BROKER_SOCKET_PATH);
+    });
+    brokerLog.info(
+      { socketPath: MCP_BROKER_SOCKET_PATH },
+      "mcp-broker listening",
+    );
+  } catch (err) {
+    brokerLog.error(
+      { socketPath: MCP_BROKER_SOCKET_PATH, err: String(err) },
+      "mcp-broker socket bind failed; pool routing will fail until restart",
+    );
+  }
+
+  // 4b. Phase 104 — sync wrapper around the warmed cache. The loader
+  // requires a SYNC resolver (loader.ts is sync by design); the warming was
+  // done above by preResolveAll. If a URI was missed (config edited between
+  // yaml-parse and now, or a hot-reload added a new ref), throw — the
+  // loader's onMcpResolutionError path will degrade the affected MCP
+  // gracefully (matches existing line ~1545 behavior).
+  const cachedOpRefResolver: OpRefResolver = (uri: string): string => {
+    const cached = secretsResolver.getCached(uri);
+    if (cached === undefined) {
+      throw new Error(
+        `SecretsResolver: ${uri} not pre-resolved (likely added by hot-reload — re-run preResolveAll). `
+          + `If this is a fresh op:// URI, save the config to trigger ConfigWatcher.onChange which auto-resolves new refs.`,
+      );
+    }
+    return cached;
+  };
+
+  // 5. Resolve all agents — pass the cached sync resolver so any
   // `op://vault/item/field` references under mcpServers[].env get
   // substituted with concrete secret values BEFORE the SDK spawns the
   // MCP children. Without this, literal `op://...` strings reach the
@@ -1517,12 +2364,124 @@ export async function startDaemon(
   // agent. The daemon continues booting; other agents that don't
   // reference the broken MCP are unaffected. Operators see exactly
   // which agent + MCP + env var failed in the daemon log.
-  const resolvedAgents = resolveAllAgents(config, defaultOpRefResolver, (info) => {
+  const resolvedAgents = resolveAllAgents(config, cachedOpRefResolver, (info) => {
     log.error(
       { agent: info.agent, server: info.server, reason: info.message },
       "MCP server disabled — env resolution failed",
     );
   });
+
+  // Phase 136 T-06 — construct an LlmRuntimeService per agent at boot.
+  //
+  // The service registry below is the single chokepoint required by
+  // CONTEXT D-03a + feedback_silent_path_bifurcation: ONE
+  // createLlmRuntimeService call per agent per daemon lifetime. The
+  // factory emits one structured `phase136-llm-runtime` log line per
+  // agent (D-07) so operators can grep
+  // `journalctl -u clawcode -g phase136-llm-runtime` to verify
+  // migration coverage across the fleet.
+  //
+  // The existing call sites (session-adapter.ts:loadSdk, the two
+  // daemon.ts compaction triggers, openai/endpoint-bootstrap.ts) go
+  // through `loadAnthropicAgentSdkModule()` — the free-function
+  // chokepoint that backs every backend's `loadSdkModule()`. Phase 137
+  // threads the per-agent `LlmRuntimeService` reference into those
+  // call sites when operator-flippable backend selection actually
+  // ships; until then this registry exists for:
+  //   1. The boot-time log line (D-07 telemetry).
+  //   2. Phase 137 to consume via Map.get(agent) without refactoring
+  //      daemon construction wiring.
+  const { createLlmRuntimeService } = await import("../llm-runtime/index.js");
+  const llmRuntimeRegistry = new Map<string, import("../llm-runtime/index.js").LlmRuntimeService>();
+  for (const cfg of resolvedAgents) {
+    llmRuntimeRegistry.set(
+      cfg.name,
+      createLlmRuntimeService(cfg, { logger: log }),
+    );
+  }
+  // Reference the registry to satisfy --noUnusedLocals while Phase 137
+  // wires the actual consumers. Cheap, explicit, no behaviour.
+  void llmRuntimeRegistry;
+
+  // Phase 108 — harvest every per-agent OP_SERVICE_ACCOUNT_TOKEN literal
+  // (post-op:// resolution) into the daemon-side tokenHash → rawToken map
+  // built above. Per-agent overrides (yaml mcpEnvOverrides.1password) live
+  // in `agent.mcpEnvOverrides` as op:// URIs; they were NOT resolved by
+  // resolveAllAgents (loader keeps them verbatim — see MCP-LOAD-1 test).
+  // Resolve each via the warm cache here so the broker's spawnFn has the
+  // literal when an agent on a non-default token connects.
+  for (const agent of resolvedAgents) {
+    // 1) The auto-injected `1password` MCP entry's env carries either the
+    //    process-env token (no override) OR the resolved override literal.
+    //    Loader's resolveMcpEnvValue runs op:// substitution at that path,
+    //    so `mcpServers[i].env.OP_SERVICE_ACCOUNT_TOKEN` is already a
+    //    literal here.
+    const opServer = agent.mcpServers.find((s) => s.name === "1password");
+    const opServerToken = opServer?.env?.OP_SERVICE_ACCOUNT_TOKEN;
+    if (typeof opServerToken === "string" && opServerToken.length > 0) {
+      collectTokenLiteral(opServerToken);
+    }
+    // 2) Per-agent mcpEnvOverrides.1password.OP_SERVICE_ACCOUNT_TOKEN. Two
+    //    legal yaml shapes:
+    //      a) op:// URI — resolve via the warm secrets cache, then collect.
+    //      b) Literal `ops_...` token (current production yaml) — collect
+    //         directly. The shim hashes whatever literal flows through its
+    //         env, so the daemon must collect the same literal here so the
+    //         hashes match at handshake time.
+    const overrideValue = agent.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+    if (typeof overrideValue === "string" && overrideValue.length > 0) {
+      if (overrideValue.startsWith("op://")) {
+        const resolved = secretsResolver.getCached(overrideValue);
+        if (typeof resolved === "string" && resolved.length > 0) {
+          collectTokenLiteral(resolved);
+        } else {
+          brokerLog.warn(
+            { agent: agent.name, uri: overrideValue },
+            "mcp-broker: per-agent OP_SERVICE_ACCOUNT_TOKEN op:// override unresolved; pool spawn for this agent will fail",
+          );
+        }
+      } else {
+        // Literal token — collect directly. SEC-07: never log the literal.
+        collectTokenLiteral(overrideValue);
+      }
+    }
+  }
+  brokerLog.info(
+    { uniqueTokens: tokenHashToRawToken.size },
+    "mcp-broker: tokenHash → rawToken map built",
+  );
+
+  // Phase 100 follow-up — merge runtime gsd.projectDir overrides into the
+  // resolved configs BEFORE SessionManager spins up. The override file lives
+  // at ~/.clawcode/manager/gsd-project-overrides.json and is written by the
+  // /gsd-set-project Discord slash + set-gsd-project IPC. Overrides survive
+  // daemon restart by being applied here at boot. Missing file / parse error
+  // → readAllGsdProjectOverrides returns an empty Map (silent — fresh boot).
+  // Override only applies to agents that already have gsd.projectDir set in
+  // yaml — never grants GSD capability to a non-GSD agent (operator must
+  // edit yaml first).
+  {
+    const { readAllGsdProjectOverrides, DEFAULT_GSD_PROJECT_OVERRIDES_PATH } =
+      await import("./gsd-project-store.js");
+    const overrides = await readAllGsdProjectOverrides(
+      DEFAULT_GSD_PROJECT_OVERRIDES_PATH,
+      log,
+    );
+    if (overrides.size > 0) {
+      const list = resolvedAgents as ResolvedAgentConfig[];
+      for (let i = 0; i < list.length; i++) {
+        const agent = list[i]!;
+        const overridden = overrides.get(agent.name);
+        if (overridden && agent.gsd?.projectDir) {
+          list[i] = { ...agent, gsd: { projectDir: overridden } };
+          log.info(
+            { agent: agent.name, projectDir: overridden },
+            "applied runtime gsd.projectDir override",
+          );
+        }
+      }
+    }
+  }
 
   // 5c. Validate only one admin agent (per D-14)
   const adminAgents = resolvedAgents.filter(a => a.admin);
@@ -1544,8 +2503,57 @@ export async function startDaemon(
   const skillsCatalog = await scanSkillsDirectory(skillsPath, log);
   log.info({ skills: skillsCatalog.size }, "skills catalog loaded");
 
+  // Phase 130 Plan 02 — per-agent accumulator of refused skills. Plan 03
+  // T-01 reads this immediately after boot to emit ONE batched Discord
+  // notification per agent; Plan 03 T-02 surfaces it on the
+  // `clawcode skills <agent>` CLI table via the manager's getter.
+  const unloadedSkillsByAgent = new Map<string, UnloadedSkillEntry[]>();
+
+  // Phase 130 Plan 02 — single chokepoint for SKILL.md manifest validation.
+  // For each per-agent skill, call `loadSkillManifest` once with the agent's
+  // enabled MCP server names. Skills that REFUSE (status: refused-mcp-missing
+  // or parse-error) are filtered OUT of the link list so no broken symlink is
+  // created in the agent's workspace. Manifest-missing falls through as a
+  // back-compat warning (D-03a) — pre-Phase-130 skills still load.
+  //
+  // The per-agent `unloadedSkills` accumulator is captured into
+  // `unloadedSkillsByAgent` for Plan 03's Discord webhook batch + CLI surface.
+  // Silent-path-bifurcation guard: this is the ONLY call to `loadSkillManifest`
+  // in daemon.ts. CLI's `clawcode skills --validate` (Plan 03 T-02) reuses the
+  // same module; tests reuse the same module. ONE chokepoint, ONE log emission
+  // shape, ONE refusal taxonomy.
   for (const agent of resolvedAgents) {
-    await linkAgentSkills(join(agent.workspace, "skills"), agent.skills, skillsCatalog, log);
+    const enabledMcp = agent.mcpServers.map((s) => s.name);
+    const loadedSkills: string[] = [];
+    const unloaded: UnloadedSkillEntry[] = [];
+    for (const skillName of agent.skills) {
+      const entry = skillsCatalog.get(skillName);
+      if (!entry) {
+        // Skill name listed in config but absent from the catalog — preserve
+        // the existing `linkAgentSkills` warn-and-skip behavior (NOT a Phase
+        // 130 refusal). Falls through with the original name so downstream
+        // logging is unchanged.
+        loadedSkills.push(skillName);
+        continue;
+      }
+      const result = loadSkillManifest(entry.path, enabledMcp);
+      if (result.status === "loaded" || result.status === "manifest-missing") {
+        // Back-compat: manifest-missing is a warn, not a refusal (D-03a).
+        loadedSkills.push(skillName);
+        continue;
+      }
+      unloaded.push({
+        name: skillName,
+        status: result.status,
+        reason: result.status === "refused-mcp-missing" || result.status === "parse-error" ? result.reason : undefined,
+        missingMcp:
+          result.status === "refused-mcp-missing"
+            ? [...result.missingMcp]
+            : undefined,
+      });
+    }
+    unloadedSkillsByAgent.set(agent.name, unloaded);
+    await linkAgentSkills(join(agent.workspace, "skills"), loadedSkills, skillsCatalog, log);
   }
 
   // Phase 88 Plan 02 MKT-01 — resolve marketplace legacy sources once at
@@ -1566,6 +2574,9 @@ export async function startDaemon(
 
   // 5b. Build routing table and rate limiter
   const routingTable = buildRoutingTable(resolvedAgents);
+  // Mutable ref — config hot-reload swaps `current` so bridge + IPC observe
+  // updated channel→agent bindings without needing daemon restart.
+  const routingTableRef = { current: routingTable };
   const rateLimiter = createRateLimiter(DEFAULT_RATE_LIMITER_CONFIG);
   log.info({ routes: routingTable.channelToAgent.size }, "routing table built");
 
@@ -1601,11 +2612,62 @@ export async function startDaemon(
 
   // 6. Create SessionManager
   const sessionAdapter = adapter ?? new SdkSessionAdapter();
+  // Phase 100 follow-up — wire the vault-scoped MCP env override resolver.
+  // Daemon shells out via `op read <uri>` using the daemon's process-level
+  // OP_SERVICE_ACCOUNT_TOKEN (clawdbot full-fleet scope). Resolved values
+  // (e.g. a Finmentum-only SA token) replace per-server env entries before
+  // the SDK spawns the MCP subprocess. The clawdbot token NEVER appears in
+  // any agent MCP subprocess env, error message, or log line — see
+  // src/manager/op-env-resolver.ts for the security invariants.
+  const { resolveMcpEnvOverrides } = await import("./op-env-resolver.js");
+  // Phase 104 — per-agent op:// resolution routes through the shared
+  // SecretsResolver so cache + retry + telemetry apply uniformly across
+  // boot pre-resolve, loader sync wrapper, Discord botToken, and per-agent
+  // override paths. Replaces the prior direct-shell-out via
+  // defaultOpReadShellOut at this site (which is now the resolver's
+  // injected opRead, not the per-agent injection point).
+  const opEnvResolver = async (
+    overrides: Record<string, Record<string, string>>,
+    agentName: string,
+  ): Promise<Record<string, Record<string, string>>> => {
+    return resolveMcpEnvOverrides(overrides, {
+      opRead: (uri: string) => secretsResolver.resolve(uri),
+      log: {
+        warn: (...args: unknown[]) =>
+          (log.warn as (...a: unknown[]) => void)({ agent: agentName }, ...args),
+        info: (...args: unknown[]) =>
+          (log.info as (...a: unknown[]) => void)({ agent: agentName }, ...args),
+      },
+    });
+  };
+
   const manager = new SessionManager({
     adapter: sessionAdapter,
     registryPath: REGISTRY_PATH,
     log,
+    opEnvResolver,
+    // Phase 999.14 MCP-01 — daemon-wide tracker for per-agent MCP child
+    // PID discovery + cleanup. Null when no MCP servers configured (no-op).
+    mcpTracker,
+    // Phase 999.15 TRACK-02 — proc-age math constants piped through so the
+    // polled-discovery loop can pass minAge=5 + bootTimeUnix +
+    // clockTicksPerSec to discoverClaudeSubprocessPid without per-call
+    // /proc/stat reads. Undefined when mcpTracker is null (non-Linux / no
+    // MCP servers configured).
+    mcpBootTimeUnix,
+    mcpClockTicksPerSec,
   });
+
+  // FIND-123-A.next T-08 — bind the sink-lookup closure now that `manager`
+  // exists. Both reconcile callsites (TRACK-06 killAgentGroup closure above,
+  // TRACK-01 per-tick reconcileAllAgents below) read this via captured
+  // reference; assigning here makes the resolver live for every subsequent
+  // reaper tick + kill-group flow.
+  getClaudePidByName = (agentName: string): number | null | undefined => {
+    const handle = manager.getSessionHandle(agentName);
+    if (!handle) return undefined;
+    return handle.getClaudePid?.() ?? null;
+  };
 
   // 6-bis. Create TurnDispatcher singleton (Phase 57 Plan 03).
   // Single chokepoint for every agent-turn initiation — Discord bridge and
@@ -1711,6 +2773,33 @@ export async function startDaemon(
   // Mutable ref so closures created before discordBridge initialization can still access it
   const discordBridgeRef: { current: DiscordBridge | null } = { current: null };
 
+  // Phase 116-03 F27 — late-binding ref for the dashboard's SseManager. The
+  // bridge is constructed BEFORE the dashboard (step 11b vs 11d) but its
+  // onConversationTurn closure needs to broadcast through the SseManager.
+  // Same `.current = X` pattern as discordBridgeRef — the closure reads at
+  // fire time so it picks up the post-startDashboardServer value.
+  const sseManagerRef: {
+    current: import("../dashboard/sse.js").SseManager | null;
+  } = { current: null };
+  // Field-name contract: SSE payload is locked to {agent, turnId, ts, role}
+  // per the dashboard-redesign-2026-05-08 spec (must-have #4). Daemon-side
+  // emit uses the same key set; UI destructures by these names.
+
+
+  // Phase 100 follow-up — late-binding refs for the TriggerEngine deliveryFn.
+  // TriggerEngine is constructed at boot step 6-quinquies-b (~line 1935),
+  // long before WebhookManager (~line 3530) and the bot-direct sender
+  // (~line 3499) exist. Using mutable refs is the same pattern already
+  // applied for discordBridgeRef — the closure reads `.current` at fire time
+  // (cron triggers don't fire until after the agents start at the bottom of
+  // boot), so the slot is populated by then. If a trigger somehow fires
+  // before either is ready, the deliveryFn warn-logs + skips delivery
+  // (the dispatch itself still ran, watermark still advances).
+  const webhookManagerRef: { current: WebhookManager | null } = { current: null };
+  const botDirectSenderRef: {
+    current: import("./restart-greeting.js").BotDirectSender | null;
+  } = { current: null };
+
   // 6a. Create escalation budget tracker (shared SQLite DB in manager dir)
   const escalationBudgetDb = new Database(join(MANAGER_DIR, "escalation-budget.db"));
   const escalationBudget = new EscalationBudget(escalationBudgetDb);
@@ -1756,6 +2845,91 @@ export async function startDaemon(
   const advisorBudgetDb = new Database(join(MANAGER_DIR, "advisor-budget.db"));
   const advisorBudget = new AdvisorBudget(advisorBudgetDb);
   log.info("advisor budget initialized");
+
+  // 6a2b. Phase 117 Plan 117-11 — per-channel verbose-level state for
+  // /clawcode-verbose (Discord operator slash command). Separate file
+  // from advisor-budget.db per RESEARCH §4.1 + §6 Pitfall 4 / §7 Q2
+  // RESOLVED — matches the AdvisorBudget's own-file precedent and keeps
+  // backup/restore semantics independent across the two stores. Shared
+  // by the IPC `set-verbose-level` handler (writes) and the DiscordBridge
+  // mutation point at bridge.ts:~810 (reads via getLevel).
+  const verboseStateDb = new Database(join(MANAGER_DIR, "verbose-state.db"));
+  const verboseState = new VerboseState(verboseStateDb);
+  log.info({ path: join(MANAGER_DIR, "verbose-state.db") }, "verbose state initialized");
+
+  // Phase 117 Plan 04 T05 — inject the AdvisorBudget into SessionManager so
+  // `makeAdvisorObserver(agent)` returns a real observer (and the SDK
+  // adapter records `advisor_message` iterations + emits advisor events
+  // for the Discord bridge in Plan 117-09). Setter DI mirrors the
+  // existing setWebhookManager / setBotDirectSender pattern — the budget
+  // is constructed AFTER SessionManager so the constructor signature
+  // stays stable (15+ agent test fixtures rely on that shape).
+  manager.setAdvisorBudget(advisorBudget);
+
+  // Phase 117 Plan 04 T05 — also thread the daemon-wide advisor defaults
+  // block so `buildSessionConfig.shouldEnableAdvisor` resolves the
+  // backend + model via the same fall-through path the rest of the
+  // daemon uses (per-agent → defaults → baseline). config.defaults is
+  // populated by zod with the schema defaults (backend: "native", model:
+  // "opus") so even fleets that omit the block entirely get the gate
+  // semantics right.
+  manager.setAdvisorDefaults({ advisor: config.defaults.advisor });
+
+  // Phase 117 Plan 07 T01 — compose `AdvisorService` at daemon boot.
+  //
+  // Registry holds both backends: `LegacyForkAdvisor` (operator rollback
+  // path; agents with `advisor.backend: fork` route here) and
+  // `AnthropicSdkAdvisor` (native marker — its `consult()` throws by
+  // design, see backend file header §spike). `PortableForkAdvisor`
+  // intentionally NOT registered — scaffold only per Plan 117-05.
+  //
+  // The service closes over `config.defaults.advisor` via the
+  // `resolveBackend` / `resolveAdvisorModel` deps so the IPC handler
+  // (Plan 117-07 T02) can call `advisorService.ask({agent, question})`
+  // with no extra config plumbing. Budget + truncation + recordCall
+  // ownership lives in `DefaultAdvisorService.ask` (Plan 117-02 T06),
+  // removing the duplication that used to live inline in the
+  // `ask-advisor` IPC handler.
+  //
+  // NOTE on memoryContext: the pre-117-07 inline handler retrieved top-5
+  // semantic memories and threaded them into `buildAdvisorSystemPrompt`.
+  // The provider-neutral `AdvisorServiceDeps.resolveSystemPrompt` is
+  // synchronous (`(agent) => string`) so memory context injection drops
+  // here as a deliberate parity loss for the rollback path. Native
+  // agents have memory MCP tools in-session; fork-backend agents retain
+  // `clawcode_memory_search` / `memory_lookup` MCP tools as an
+  // equivalent surface. Widening the service surface to re-thread
+  // memory belongs to a follow-up phase, not 117-07.
+  const advisorRegistry = new BackendRegistry();
+  advisorRegistry.register(new LegacyForkAdvisor(manager));
+  advisorRegistry.register(new AnthropicSdkAdvisor());
+  // Loader resolvers accept structural types — `cfg as unknown as ...`
+  // mirrors the pattern in `session-config.ts:1187` since
+  // `ResolvedAgentConfig` does not currently expose the `advisor?` field
+  // on its type (Plan 117-06 only adds it to the raw schema, not the
+  // resolved-type alias). The runtime value is read off `cfg.advisor`
+  // if operator set it; otherwise the resolver falls back through
+  // `config.defaults.advisor`.
+  const advisorService: AdvisorService = new DefaultAdvisorService({
+    budget: advisorBudget,
+    resolveBackend: (agent: string) => {
+      const cfg = manager.getAgentConfig(agent) as unknown as
+        | { advisor?: { backend?: string } }
+        | undefined;
+      const id = resolveAdvisorBackend(cfg, config.defaults);
+      return { backend: advisorRegistry.get(id), id };
+    },
+    resolveSystemPrompt: (agent: string) =>
+      buildAdvisorSystemPrompt(agent, null),
+    resolveAdvisorModel: (agent: string) => {
+      const cfg = manager.getAgentConfig(agent) as unknown as
+        | { advisor?: { model?: string } }
+        | undefined;
+      const raw = resolveAdvisorModelConfig(cfg, config.defaults);
+      return resolveAdvisorModelAlias(raw);
+    },
+  });
+  log.info("advisor service composed (backends: fork, native)");
 
   // 6-quater. Create TaskManager singleton (Phase 59 Plan 03).
   // Depends on: taskStore (6-ter), turnDispatcher (6-bis), escalationBudget (6a),
@@ -1820,15 +2994,23 @@ export async function startDaemon(
             memoryDir,
             memoryStore,
             embedder,
-            summarize: (prompt: string) => manager.sendToAgent(agentConfig.name, prompt),
+            summarize: (prompt: string) => summarizeWithHaiku(prompt, {}),
+            // Phase 115 sub-scope 13(b) — agent label threaded into the
+            // consolidation run-log so operators can correlate JSONL rows
+            // back to the specific agent's consolidation cycle.
+            runLabel: agentConfig.name,
           };
           await runConsolidation(deps, consolidationConfig);
         },
       });
     }
 
-    // Only add handler-based schedules to TaskScheduler (those with a handler)
-    for (const schedule of agentConfig.schedules) {
+    // Only add handler-based schedules to TaskScheduler (those with a handler).
+    // User-defined yaml schedules are prompt-based (ScheduleEntryConfig has no
+    // `handler` field). The cast covers a future case where dynamically-injected
+    // schedules carry a handler at runtime — today this filter is a no-op for
+    // config-sourced entries, by design.
+    for (const schedule of agentConfig.schedules as readonly ScheduleEntry[]) {
       if (schedule.enabled && schedule.handler) {
         handlerSchedules.push(schedule);
       }
@@ -1879,7 +3061,7 @@ export async function startDaemon(
   // Invalid policy = daemon refuses to start. Missing file = empty rules.
   const policyPath = join(homedir(), ".clawcode", "policies.yaml");
   const policyAuditPath = join(MANAGER_DIR, "policy-audit.jsonl");
-  let bootEvaluator: PolicyEvaluator;
+  let bootEvaluator: PolicyEvaluator | undefined;
   try {
     const policyContent = await readFile(policyPath, "utf-8");
     const compiledRules = loadPolicies(policyContent);
@@ -1887,9 +3069,18 @@ export async function startDaemon(
     log.info({ path: policyPath, ruleCount: compiledRules.length }, "policies.yaml loaded at boot");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      // No policy file — start with empty rules (deny all non-default events)
-      bootEvaluator = new PolicyEvaluator([], configuredAgentNames);
-      log.info("no policies.yaml found, using default policy");
+      // No policy file — fall through to TriggerEngine's existing default-allow
+      // function-form (evaluatePolicy) by leaving bootEvaluator undefined.
+      // The engine ternary at engine.ts:130-132 selects evaluatePolicy() when
+      // this.evaluator is undefined, which allows any event whose targetAgent
+      // is in configuredAgents (Phase 105 POLICY-01..03).
+      // PolicyWatcher.onReload still wires reloadEvaluator(real) once the
+      // operator drops a policies.yaml at policyPath — back-compat preserved.
+      bootEvaluator = undefined;
+      log.info(
+        { policyPath },
+        "no policies.yaml found — using default-allow evaluator: any configured agent can receive events. Drop a policies.yaml at this path to enable rule-based filtering.",
+      );
     } else if (err instanceof PolicyValidationError) {
       // Invalid policy — daemon must refuse to start (POL-01)
       throw new ManagerError(
@@ -1899,6 +3090,69 @@ export async function startDaemon(
       throw err;
     }
   }
+
+  // Phase 100 follow-up — deliveryFn for trigger-fired output.
+  //
+  // The bug: pre-fix, TriggerEngine.ingest() awaited dispatch() and threw
+  // away the response string. Scheduled cron output (e.g. fin-acquisition's
+  // 15-min status check) was generated by the agent but never reached
+  // Discord — it stayed in the conversation history and got dragged into
+  // the next user-msg-driven reply, producing wrong-slot attribution.
+  //
+  // The closure routes the response to the agent's bound Discord channel,
+  // preferring the per-agent webhook (so the message wears the agent's
+  // identity) and falling back to bot-direct text. References WebhookManager
+  // and BotDirectSender via mutable refs because both are constructed AFTER
+  // TriggerEngine — by the time any cron tick fires, both refs are populated.
+  const triggerDeliveryFn: TriggerDeliveryFn = async (
+    targetAgent: string,
+    response: string,
+  ) => {
+    const cfg = manager.getAgentConfig(targetAgent);
+    if (!cfg) {
+      log.warn(
+        { targetAgent },
+        "trigger-delivery: unknown agent — skipping",
+      );
+      return;
+    }
+    const channelId = cfg.channels?.[0];
+    if (!channelId) {
+      log.warn(
+        { targetAgent },
+        "trigger-delivery: agent has no bound channel — skipping",
+      );
+      return;
+    }
+    // Discord hard limit is 2000 chars per message. Truncate + ellipsis
+    // rather than splitting — scheduled output should be terse anyway, and
+    // truncation makes the cap visible to the operator instead of silently
+    // posting a multi-message reply that confuses the conversation thread.
+    const MAX = 2000;
+    const ELLIPSIS = "...";
+    const truncated =
+      response.length > MAX
+        ? response.slice(0, MAX - ELLIPSIS.length) + ELLIPSIS
+        : response;
+
+    const wm = webhookManagerRef.current;
+    if (wm && wm.hasWebhook(targetAgent)) {
+      // Webhook send wears the agent's identity (display name + avatar).
+      // WebhookManager.send already handles >2000-char splitting if needed,
+      // but we pre-truncate above to keep the post compact and predictable.
+      await wm.send(targetAgent, truncated);
+      return;
+    }
+    const bot = botDirectSenderRef.current;
+    if (bot) {
+      await bot.sendText(channelId, truncated);
+      return;
+    }
+    log.warn(
+      { targetAgent, channelId },
+      "trigger-delivery: no sender available (no webhook + no bot-direct) — skipping",
+    );
+  };
 
   const triggerEngine = new TriggerEngine(
     {
@@ -1910,6 +3164,7 @@ export async function startDaemon(
         dedupLruSize: DEFAULT_DEDUP_LRU_SIZE,
         defaultDebounceMs: config.triggers?.defaultDebounceMs ?? DEFAULT_DEBOUNCE_MS,
       },
+      deliveryFn: triggerDeliveryFn,
     },
     configuredAgentNames,
     bootEvaluator,
@@ -2055,6 +3310,11 @@ export async function startDaemon(
   // 6b. Wire skills catalog into session manager for prompt injection
   manager.setSkillsCatalog(skillsCatalog);
 
+  // Phase 130 Plan 02 — wire the per-agent refused-skill map. Plan 03's
+  // CLI (`clawcode skills <agent>`) reads `manager.getUnloadedSkills(name)`
+  // to render the per-skill status table.
+  manager.setUnloadedSkillsByAgent(unloadedSkillsByAgent);
+
   // Phase 90 MEM-02 — build a lazy MemoryStore proxy. Scanners are
   // constructed at boot but the per-agent MemoryStore doesn't exist until
   // startAgent runs initMemory. The proxy returned here defers every
@@ -2134,7 +3394,23 @@ export async function startDaemon(
   await manager.reconcileRegistry(resolvedAgents);
 
   // 8. Initialize heartbeat runner
-  const heartbeatConfig = config.defaults.heartbeat;
+  // Phase 999.12 HB-01 — thread defaults.heartbeatInboxTimeoutMs into the
+  // HeartbeatConfig so the inbox check gets its 60s default instead of the
+  // fleet-wide 10s checkTimeoutSeconds (which false-positive-criticals
+  // during normal cross-agent turns).
+  const heartbeatConfig: HeartbeatConfig = {
+    ...config.defaults.heartbeat,
+    ...(config.defaults.heartbeatInboxTimeoutMs !== undefined
+      ? { inboxTimeoutMs: config.defaults.heartbeatInboxTimeoutMs }
+      : {}),
+  };
+  // Phase 124 Plan 04 T-01 — single source of truth for last-compaction
+  // timestamps. Constructed BEFORE the heartbeat runner so the runner can
+  // be wired with the trigger closure in Plan 04 T-02. Both the manual
+  // IPC path (case "compact-session") and the heartbeat auto-trigger path
+  // record into this same log on `ok:true`, so the cooldown gate sees a
+  // unified view regardless of which path fired the compaction.
+  const compactionEventLog = new CompactionEventLog();
   const heartbeatRunner = new HeartbeatRunner({
     sessionManager: manager,
     registryPath: REGISTRY_PATH,
@@ -2172,10 +3448,264 @@ export async function startDaemon(
   });
   await heartbeatRunner.initialize();
   heartbeatRunner.setAgentConfigs(resolvedAgents);
+  // Phase 124 Plan 04 T-02 — wire the auto-trigger closure + cooldown
+  // lookup BEFORE the first tick so threshold-cross fires immediately on
+  // the first heartbeat cycle that observes it. The closure shares the
+  // same handler the manual IPC path uses (handleCompactSession), so
+  // both paths converge on identical compaction semantics. Errors are
+  // logged but never propagated — the heartbeat tick must not block on
+  // compaction.
+  heartbeatRunner.setGetLastCompactionAt((a) =>
+    compactionEventLog.getLastCompactionAt(a),
+  );
+  heartbeatRunner.setCompactSessionTrigger(async (agent: string) => {
+    try {
+      const { handleCompactSession } = await import(
+        "./daemon-compact-session-ipc.js"
+      );
+      // Phase 136 T-04 — direct SDK import replaced by the
+      // src/llm-runtime/ seam chokepoint. The local `sdk` reference
+      // continues to expose `sdk.forkSession(id, opts)` because
+      // `LlmRuntimeSdkModule` widens `SdkModule` with the forkSession
+      // method declaration that the bundled Agent SDK exports.
+      const { loadAnthropicAgentSdkModule } = await import(
+        "../llm-runtime/index.js"
+      );
+      const sdk = await loadAnthropicAgentSdkModule();
+      // Phase 125 Plan 02 — D-01 single extractor seam. Tier 1 partition
+      // runs here (full ConversationTurn[] visible); preserved turns ride
+      // through the extractor head so they end up in the fork-summary
+      // verbatim. The getConversationTurns lambda below is unchanged —
+      // the daily-log audit trail still receives ALL turns.
+      const { buildTieredExtractor, partitionForVerbatim } = await import(
+        "./compact-extractors/index.js"
+      );
+      const cfgForAgent = resolvedAgents.find((a) => a.name === agent);
+      const preserveLastTurnsAuto = cfgForAgent?.preserveLastTurns ?? 10;
+      const preserveVerbatimAuto = cfgForAgent?.preserveVerbatimPatterns ?? [];
+      const allTurnsAuto = (() => {
+        const sid = manager.getActiveConversationSessionId(agent);
+        const store = manager.getConversationStore(agent);
+        if (!sid || !store) return [];
+        return store
+          .getTurnsForSession(sid)
+          .filter((t) => t.role !== "system")
+          .map((t) => ({
+            timestamp: t.createdAt,
+            role: t.role as "user" | "assistant",
+            content: t.content,
+          }));
+      })();
+      const partitionDepsAuto = {
+        preserveLastTurns: preserveLastTurnsAuto,
+        preserveVerbatimPatterns: preserveVerbatimAuto,
+        clock: () => new Date(),
+        log,
+        agentName: agent,
+      };
+      const { preserved: preservedAuto } = partitionForVerbatim(
+        allTurnsAuto,
+        partitionDepsAuto,
+      );
+      // Phase 125 Plan 03 — Tier 2 Haiku-driven structured extraction.
+      // Reuses summarizeWithHaiku (the same OAuth-Bearer Haiku path that
+      // session-summarizer uses in production — D-03). The onTier2Facts
+      // callback re-runs the active-state builder WITH the LLM-grounded
+      // facts and overwrites ~/.clawcode/agents/<agent>/state/active-state.yaml
+      // so SC-4's operator-inspectable file reflects the latest extraction.
+      const onTier2FactsAuto = async (facts: import("./compact-extractors/types.js").Tier2Facts): Promise<void> => {
+        try {
+          const { buildActiveStateBlock } = await import(
+            "./active-state/builder.js"
+          );
+          const { writeActiveStateYaml } = await import(
+            "./active-state/yaml-writer.js"
+          );
+          const fsPromises = await import("node:fs/promises");
+          const operatorMsgs = allTurnsAuto
+            .filter((t) => t.role === "user")
+            .slice(-5)
+            .map((t) => t.content);
+          // Note: builder accepts ConversationTurn from memory/conversation-types.
+          // Compaction turns are a structural subset (timestamp/role/content);
+          // builder reads only role/content/createdAt and tolerates absent
+          // fields via the heuristic regexes.
+          const block = buildActiveStateBlock({
+            recentOperatorMessages: operatorMsgs,
+            recentAgentTurns: allTurnsAuto as unknown as readonly import("../memory/conversation-types.js").ConversationTurn[],
+            agentName: agent,
+            clock: () => new Date(),
+            tier2Facts: facts,
+          });
+          await writeActiveStateYaml(agent, block, {
+            baseDir: activeStateBaseDir,
+            fs: fsPromises,
+            clock: () => new Date(),
+          });
+        } catch (err) {
+          log.warn(
+            { agent, error: (err as Error).message },
+            "[125-03-tier2-haiku] onTier2Facts (auto) failed (non-fatal)",
+          );
+        }
+      };
+      const extractMemories = buildTieredExtractor({
+        ...partitionDepsAuto,
+        preservedTurns: preservedAuto,
+        tier2Summarize: (prompt, opts) => summarizeWithHaiku(prompt, opts),
+        onTier2Facts: onTier2FactsAuto,
+      });
+      // Phase 124 follow-up — same producer-side wire as the manual IPC
+      // path. The auto-trigger fires from the heartbeat cycle and uses the
+      // same safety-budget gate so an in-flight long turn does not stall
+      // the heartbeat task. Both sites read getTurnStartedAt — divergence
+      // would let one path skip the gate.
+      const turnStartedAtAuto = (() => {
+        const ts = manager.getTurnStartedAt(agent);
+        return ts !== null ? new Map([[agent, ts]]) : new Map<string, number>();
+      })();
+      const autoResult = await handleCompactSession(
+        { agent },
+        {
+          manager: {
+            getSessionHandle: (n) => manager.getSessionHandle(n),
+            getConversationTurns: (n) => {
+              const sid = manager.getActiveConversationSessionId(n);
+              const store = manager.getConversationStore(n);
+              if (!sid || !store) return [];
+              return store
+                .getTurnsForSession(sid)
+                .filter((t) => t.role !== "system")
+                .map((t) => ({
+                  timestamp: t.createdAt,
+                  role: t.role as "user" | "assistant",
+                  content: t.content,
+                }));
+            },
+            getContextFillProvider: (n) => manager.getContextFillProvider(n),
+            compactForAgent: (n, conv, ex) =>
+              manager.compactForAgent(n, conv, ex),
+            hasCompactionManager: (n) =>
+              manager.getSessionLogger(n) !== undefined,
+          },
+          sdkForkSession: async (id, opts) => {
+            const result = await sdk.forkSession(id, opts);
+            return { sessionId: result.sessionId };
+          },
+          extractMemories,
+          log,
+          daemonReady: true,
+          turnStartedAt: turnStartedAtAuto,
+        },
+      );
+      if (autoResult.ok === true) {
+        compactionEventLog.record(agent);
+        log.info(
+          {
+            agent,
+            tokens_before: autoResult.tokens_before,
+            tokens_after: autoResult.tokens_after,
+            forked_to: autoResult.forked_to,
+          },
+          "[124-04-auto-trigger] compaction complete",
+        );
+      } else {
+        log.warn(
+          { agent, error: autoResult.error },
+          "[124-04-auto-trigger] compaction failed",
+        );
+      }
+    } catch (err) {
+      // Never let an auto-trigger failure propagate to the heartbeat tick.
+      log.warn(
+        { agent, error: (err as Error).message },
+        "[124-04-auto-trigger] dispatch threw",
+      );
+    }
+  });
+  // Phase 125 Plan 01 — wire the active-state builder/writer into the
+  // heartbeat tick. Closure pulls last-N operator messages + assistant
+  // turns from the per-agent ConversationStore, builds the block via the
+  // pure builder, persists YAML to ~/.clawcode/agents/<agent>/state/, and
+  // returns the rendered header for the runner's lastProbeText cache.
+  // Sentinel `[125-01-active-state]` is logged once per agent per process
+  // so journalctl -g '\[125-01-active-state\]' proves the wiring runs.
+  const activeStateSentinelFired = new Set<string>();
+  const activeStateBaseDir = join(homedir(), ".clawcode", "agents");
+  heartbeatRunner.setActiveStateProvider(async (agent: string) => {
+    try {
+      const { buildActiveStateBlock } = await import(
+        "./active-state/builder.js"
+      );
+      const {
+        writeActiveStateYaml,
+        renderActiveStateForPrompt,
+      } = await import("./active-state/yaml-writer.js");
+      const fsPromises = await import("node:fs/promises");
+      const sid = manager.getActiveConversationSessionId(agent);
+      const store = manager.getConversationStore(agent);
+      const turns =
+        sid && store
+          ? store
+              .getTurnsForSession(sid)
+              .filter((t) => t.role !== "system")
+          : [];
+      const operatorMsgs = turns
+        .filter((t) => t.role === "user")
+        .slice(-5)
+        .map((t) => t.content);
+      const block = buildActiveStateBlock({
+        recentOperatorMessages: operatorMsgs,
+        recentAgentTurns: turns,
+        agentName: agent,
+        clock: () => new Date(),
+      });
+      await writeActiveStateYaml(agent, block, {
+        baseDir: activeStateBaseDir,
+        fs: fsPromises,
+        clock: () => new Date(),
+      });
+      if (!activeStateSentinelFired.has(agent)) {
+        activeStateSentinelFired.add(agent);
+        log.info(
+          { agent },
+          "[125-01-active-state] active-state header dispatched for first tick",
+        );
+      }
+      return renderActiveStateForPrompt(block);
+    } catch (err) {
+      log.warn(
+        { agent, error: (err as Error).message },
+        "[125-01-active-state] builder/writer failed",
+      );
+      return null;
+    }
+  });
   heartbeatRunner.start();
   log.info({ checks: "discovered", interval: heartbeatConfig.intervalSeconds }, "heartbeat started");
 
   // 8b. (Moved to step 6-quinquies-a — Phase 60)
+
+  // Phase 999.36 sub-bug D — one-time migration of pre-Phase entries.
+  // Backfills lastDeliveryAt = lastActivity for bindings that pre-date
+  // the new gate. Idempotent: re-running on already-migrated bindings
+  // is a no-op. Runs BEFORE ThreadManager creation so any subsequent
+  // session-attach / sweep reads a registry where every binding has a
+  // lastDeliveryAt sentinel.
+  // REMOVE AFTER 999.36+1 milestone closes — bindings will be naturally
+  // migrated by then.
+  try {
+    const migration = await migrateBindingsForPhase999_36(THREAD_REGISTRY_PATH);
+    log.info(
+      { migrated: migration.migrated, total: migration.total },
+      "phase 999.36 thread-binding migration complete",
+    );
+  } catch (err) {
+    log.warn(
+      { error: (err as Error).message },
+      "phase 999.36 thread-binding migration failed (gate may refuse pre-existing bindings)",
+    );
+  }
 
   // 8c. Create ThreadManager for Discord thread session lifecycle
   const threadManager = new ThreadManager({
@@ -2186,6 +3716,23 @@ export async function startDaemon(
   });
   heartbeatRunner.setThreadManager(threadManager);
   heartbeatRunner.setTaskStore(taskStore);
+  // Phase 104 plan 03 (SEC-05) — give the heartbeat checks (specifically
+  // mcp-reconnect's RecoveryDeps factory) access to the secrets cache so
+  // the op-refresh recovery handler can call deps.invalidate(ref) before
+  // re-reading via op CLI. Without this hook, opRead — which is wired
+  // through SecretsResolver in production — would serve the same stale
+  // value that triggered the original auth-error.
+  heartbeatRunner.setSecretsResolver(secretsResolver);
+  // Phase 108 (POOL-07) — broker-status provider for the mcp-broker
+  // heartbeat check. Adapter is intentionally narrow — only
+  // getPoolStatus() — to enforce the rate-limit-budget invariant
+  // (no synthetic password_read against 1Password).
+  heartbeatRunner.setBrokerStatusProvider({
+    getPoolStatus: () => broker.getPoolStatus(),
+  });
+  // Phase 103 OBS-01 — wire HeartbeatRunner into SessionManager so
+  // /clawcode-status can read context-zone fillPercentage synchronously.
+  manager.setHeartbeatRunner(heartbeatRunner);
   log.info("thread manager initialized");
 
   // 8d. Build manual webhook identities (from config webhookUrl fields)
@@ -2261,6 +3808,85 @@ export async function startDaemon(
   // than degrading the first tool call on a running agent. The install
   // hint is carried through from BrowserManager.warm() so the operator
   // sees the exact npx command to run.
+  // Phase 101 Plan 02 T03/T04 — wire the D-08 Mistral OCR gate from
+  // `defaults.documentIngest.allowMistralOcr`. Read at call time via the
+  // closure so a `clawcode reload` (which mutates `config` in place) takes
+  // effect without a daemon bounce. Defaults to `false` when the block is
+  // omitted entirely from `clawcode.yaml`.
+  setAllowMistralOcr(
+    () => config.defaults.documentIngest?.allowMistralOcr ?? false,
+  );
+
+  // Phase 101 Plan 04 (D-04, U9, SC-10) — wire the bge-reranker-base
+  // config from `defaults.documentIngest.reranker`. Same call-time
+  // closure pattern as `setAllowMistralOcr` above so a `clawcode reload`
+  // takes effect on the next retrieval turn without a daemon bounce.
+  // Resolver returns `undefined` when the block is absent (back-compat
+  // for pre-101-04 configs); `retrieveMemoryChunks` treats that as
+  // "rerank disabled".
+  //
+  // Emergency env override: `CLAWCODE_RERANKER_ENABLED=false` short-circuits
+  // the YAML setting to force-disable on the next turn. This is the
+  // emergency knob — unlike the `clawcode reload` YAML path it doesn't
+  // require daemon-liveness, so an operator can disable mid-incident via
+  // systemd env without a config edit. Mirrors operator preference for
+  // flippable rollback paths (Phase 110 shimRuntime, Phase 117 advisor
+  // backend). Read at call-time so a systemd-reload-env takes effect on
+  // the next retrieval turn.
+  manager.setRerankerConfigResolver(() =>
+    applyRerankerEnvOverride(config.defaults.documentIngest?.reranker),
+  );
+
+  // Phase 101 Plan 04 — warm the Xenova/bge-reranker-base ONNX session
+  // on daemon boot so the first operator turn doesn't pay the cold-load
+  // cost (~3-5s on warm cache, up to ~30s on first-ever download). Fire-
+  // and-forget per the plan's "non-blocking warmup" directive — a failed
+  // warm logs a warn and the retrieval path falls back lazily on the
+  // first turn (covered by the 500ms timeout fallback).
+  if (
+    process.env.CLAWCODE_RERANKER_ENABLED !== "false" &&
+    config.defaults.documentIngest?.reranker?.enabled !== false
+  ) {
+    void warmupReranker().catch((err) => {
+      logger.warn(
+        { err, phase: "phase101-ingest", event: "reranker-warmup-failed" },
+        "phase101 reranker warmup failed — retrieval will load lazily on first turn",
+      );
+    });
+  }
+
+  // Phase 101 Plan 02 T05 — wire the U7 ingest-alerts surface. Logger
+  // is the shared daemon logger. `postToAdminClawdy` uses the existing
+  // webhookManagerRef (same closure pattern as triggerDeliveryFn at
+  // line 3112) so a stall before WebhookManager wiring lands a pino
+  // log only — never crashes on a null reference.
+  setIngestAlertDeps({
+    logger,
+    postToAdminClawdy: async (msg: string) => {
+      const wm = webhookManagerRef.current;
+      if (wm && wm.hasWebhook("admin-clawdy")) {
+        await wm.send("admin-clawdy", msg);
+        return;
+      }
+      const bot = botDirectSenderRef.current;
+      const adminCfg = resolvedAgents.find((a) => a.name === "admin-clawdy");
+      if (bot && adminCfg) {
+        // admin-clawdy doesn't expose its channelId on the resolved
+        // config; fall back to a pino-only path when no webhook + no
+        // routable channel id is available.
+        logger.warn(
+          { tag: "phase101-ingest-alert", msg },
+          "phase101 admin-clawdy alert: no webhook + bot-direct missing channel id",
+        );
+        return;
+      }
+      logger.warn(
+        { tag: "phase101-ingest-alert", msg },
+        "phase101 admin-clawdy alert: no sender wired",
+      );
+    },
+  });
+
   const browserCfg = config.defaults.browser;
   const browserManager = new BrowserManager({
     headless: browserCfg.headless,
@@ -2300,9 +3926,20 @@ export async function startDaemon(
   // BRAVE_API_KEY / EXA_API_KEY are absent. No warm-path probe needed —
   // HTTP clients are ephemeral; missing keys surface as `invalid_argument`
   // on first tool call, not as daemon-boot crashes.
+  //
+  // Phase 110 follow-up — yaml-level `defaults.search.brave.apiKey` (and
+  // .exa.apiKey) take precedence over process.env[apiKeyEnv] when set.
+  // Plain strings pass through verbatim; op:// references are resolved
+  // via the boot-time SecretsResolver cache (collectAllOpRefs zone 4).
+  // Why: systemd EnvironmentFile=/etc/clawcode/env on prod historically
+  // never carried BRAVE_API_KEY, so daemon process.env lookup failed
+  // silently and every web_search call returned `invalid_argument:
+  // missing Brave API key`. Routing through 1Password matches every
+  // other secret in the same yaml.
   const searchCfg = config.defaults.search;
-  const braveClient = createBraveClient(searchCfg);
-  const exaClient = createExaClient(searchCfg);
+  const searchEnv = buildSearchEnv(searchCfg, secretsResolver);
+  const braveClient = createBraveClient(searchCfg, searchEnv);
+  const exaClient = createExaClient(searchCfg, searchEnv);
   if (searchCfg.enabled) {
     log.info(
       { backend: searchCfg.backend, maxResults: searchCfg.maxResults },
@@ -2337,6 +3974,59 @@ export async function startDaemon(
     );
   }
 
+  // 9f. Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response
+  // cache. Folds Phase 999.40 (now SUPERSEDED-BY-115). Singleton store
+  // at ~/.clawcode/manager/tool-cache.db; intercepts search/image/
+  // search-documents calls below via dispatchTool.
+  //
+  // When config.defaults.toolCache.enabled === false, we still allocate
+  // the store but the wrapper bypasses (saves operators having to wipe
+  // the DB to disable caching). Default = enabled, 100MB cap.
+  const toolCacheCfg = config.defaults.toolCache;
+  const toolCacheEnabled = toolCacheCfg?.enabled ?? true;
+  const toolCacheMaxSizeMb = toolCacheCfg?.maxSizeMb ?? 100;
+  const toolCachePolicy = toolCacheCfg?.policy ?? {};
+  const toolCacheStore = new ToolCacheStore();
+  if (toolCacheEnabled) {
+    log.info(
+      {
+        path: toolCacheStore.getPath(),
+        maxSizeMb: toolCacheMaxSizeMb,
+        policyOverrides: Object.keys(toolCachePolicy).length,
+      },
+      "tool-cache ready (Phase 115 sub-scope 15)",
+    );
+  } else {
+    log.info(
+      "tool-cache disabled (defaults.toolCache.enabled=false); dispatchTool will bypass",
+    );
+  }
+
+  // Periodic size-metric sampler — logs cache size every 60s to journalctl
+  // so operators can grep `tool-cache-size-mb` for trend visibility. The
+  // dashboard does NOT read this — it queries `toolCacheStore.sizeMb()`
+  // directly via the `case "cache"` IPC intercept (see ~line 3360 below)
+  // so the surfaced size is fresh without a heartbeat dependency.
+  const toolCacheSizeReporter = setInterval(() => {
+    if (!toolCacheEnabled) return;
+    try {
+      const sizeMb = toolCacheStore.sizeMb();
+      log.debug(
+        {
+          sizeMb: Math.round(sizeMb * 100) / 100,
+          action: "tool-cache-size-mb",
+        },
+        "[diag] tool-cache size metric",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      log.warn(
+        { err: msg, action: "tool-cache-size-report-failed" },
+        "[diag] tool-cache size sampling failed (non-fatal)",
+      );
+    }
+  }, 60_000);
+
   // 10. Create IPC handler. Phase 69 intercepts `openai-key-*` methods
   // BEFORE routeMethod so we can delegate to the already-opened ApiKeysStore
   // owned by the OpenAiEndpointHandle below (no double-open, no extra
@@ -2349,7 +4039,39 @@ export async function startDaemon(
   // 24-arg routeMethod signature. handleBrowserToolCall is a pure-ish
   // dispatcher extracted to src/browser/daemon-handler.ts for testability.
   let openAiEndpointRef: OpenAiEndpointHandle | null = null;
+
+  // Phase 116-06 T04/T07 — dashboard action audit trail. Initialized
+  // here (BEFORE the IPC handler closure) so list-dashboard-audit and
+  // dashboard-telemetry-summary handlers can read through this
+  // reference. The dashboard server reuses the same instance via
+  // DashboardServerConfig.auditTrail; one writer, one reader, one
+  // file → no cross-process JSONL races.
+  //
+  // File path: MANAGER_DIR/dashboard-audit.jsonl. Parallel sibling to
+  // config-audit.jsonl (config-watcher) — distinct file because the
+  // schemas differ (dashboard actions are richer; see
+  // dashboard-audit-trail.ts docstring).
+  const dashboardAuditTrail = new DashboardAuditTrail({
+    filePath: join(MANAGER_DIR, "dashboard-audit.jsonl"),
+    log,
+  });
+
   const handler: IpcHandler = async (method, params) => {
+    // Phase 116-postdeploy 2026-05-12 — endpoint info for the SPA's
+    // /dashboard/v2/openai page. Read-only; safe even when the endpoint
+    // is disabled (returns `{enabled: false}`). Renders the base URL +
+    // curl example without the SPA needing to hardcode port 3101.
+    if (method === "openai-endpoint-info") {
+      const ep = openAiEndpointRef;
+      if (!ep || !ep.enabled) {
+        return { enabled: false };
+      }
+      return {
+        enabled: true,
+        host: ep.host ?? null,
+        port: ep.port ?? null,
+      };
+    }
     if (
       method === "openai-key-create" ||
       method === "openai-key-list" ||
@@ -2382,32 +4104,448 @@ export async function startDaemon(
     // for the same reason as browser-tool-call: the existing 24-arg
     // routeMethod signature stays stable. The daemon-owned BraveClient
     // + ExaClient + fetcher are closed over here.
+    //
+    // Phase 115 Plan 07 sub-scope 15 — wrap with dispatchTool so repeat
+    // queries hit the daemon-side cache. web_search / web_fetch_url use
+    // CROSS-AGENT keying (public data shared) per
+    // tool-cache-policy.ts:DEFAULT_TOOL_CACHE_POLICY.
     if (method === "search-tool-call") {
-      return handleSearchToolCall(
-        {
-          searchConfig: searchCfg,
-          resolvedAgents,
-          braveClient,
-          exaClient,
-          fetcher: fetchUrl,
-        },
-        params as unknown as IpcSearchToolCallParams,
-      );
+      const p = params as unknown as IpcSearchToolCallParams;
+      const upstream = () =>
+        handleSearchToolCall(
+          {
+            searchConfig: searchCfg,
+            resolvedAgents,
+            braveClient,
+            exaClient,
+            fetcher: fetchUrl,
+          },
+          p,
+        );
+      if (!toolCacheEnabled) return upstream();
+      return dispatchTool({
+        tool: p.toolName,
+        args: p.args,
+        agentName: p.agent,
+        cacheStore: toolCacheStore,
+        maxSizeMb: toolCacheMaxSizeMb,
+        userPolicy: toolCachePolicy,
+        upstream,
+        log,
+        traceCollector: manager.getTraceCollector(p.agent) ?? undefined,
+      });
     }
     // Phase 72 — image-tool-call is intercepted BEFORE routeMethod
     // (same closure pattern as browser-tool-call + search-tool-call).
     // The daemon-owned image provider clients + per-agent UsageTracker
     // lookup are closed over here.
+    //
+    // Phase 115 Plan 07 sub-scope 15 — image_generate / image_edit /
+    // image_variations are NEVER cached (TTL 0 / no-cache strategy in
+    // DEFAULT_TOOL_CACHE_POLICY — each call is unique work). dispatchTool
+    // bypasses on the no-cache strategy, so wiring the wrapper here is a
+    // safety net for any future image tool an operator might add to the
+    // policy table.
     if (method === "image-tool-call") {
-      return handleImageToolCall(
-        {
-          imageConfig: imageCfg,
-          resolvedAgents,
-          providers: imageProviders,
-          usageTrackerLookup: (agent) => manager.getUsageTracker(agent),
-        },
-        params as unknown as IpcImageToolCallParams,
+      const p = params as unknown as IpcImageToolCallParams;
+      const upstream = () =>
+        handleImageToolCall(
+          {
+            imageConfig: imageCfg,
+            resolvedAgents,
+            providers: imageProviders,
+            usageTrackerLookup: (agent) => manager.getUsageTracker(agent),
+          },
+          p,
+        );
+      if (!toolCacheEnabled) return upstream();
+      return dispatchTool({
+        tool: p.toolName,
+        args: p.args,
+        agentName: p.agent,
+        cacheStore: toolCacheStore,
+        maxSizeMb: toolCacheMaxSizeMb,
+        userPolicy: toolCachePolicy,
+        upstream,
+        log,
+        traceCollector: manager.getTraceCollector(p.agent) ?? undefined,
+      });
+    }
+    // Phase 115 Plan 07 sub-scope 15 — search-documents IPC method
+    // intercept BEFORE routeMethod so the daemon-side cache wraps the
+    // call with PER-AGENT keying (Phase 90 isolation lock — each agent's
+    // document corpus is private and stays private when cached).
+    //
+    // On miss, upstream() dispatches to routeMethod with the full 24-arg
+    // signature so the existing case "search-documents" handler body
+    // executes unchanged. On hit, the cached response is wrapped in a
+    // CacheStamped envelope ({ cached: { age_ms, source }, data }).
+    if (method === "search-documents" && toolCacheEnabled) {
+      const agentName =
+        typeof params.agent === "string" ? params.agent : "";
+      // Strip the agent field from the cache-key args — it's the
+      // per-agent strategy component (handled by buildCacheKey), not a
+      // content discriminator.
+      const argsForCache: Record<string, unknown> = { ...params };
+      delete argsForCache.agent;
+      return dispatchTool({
+        tool: "search_documents",
+        args: argsForCache,
+        agentName,
+        cacheStore: toolCacheStore,
+        maxSizeMb: toolCacheMaxSizeMb,
+        userPolicy: toolCachePolicy,
+        upstream: () =>
+          routeMethod(
+            manager,
+            resolvedAgents,
+            method,
+            params,
+            routingTableRef,
+            rateLimiter,
+            heartbeatRunner,
+            taskScheduler,
+            skillsCatalog,
+            threadManager,
+            webhookManager,
+            deliveryQueue,
+            subagentThreadSpawner,
+            allowlistMatchers,
+            approvalLog,
+            securityPolicies,
+            escalationMonitor,
+            advisorBudget,
+            discordBridgeRef,
+            configPath,
+            config.defaults.basePath,
+            taskManager,
+            taskStore,
+            schedulerSource,
+            botDirectSenderRef,
+            advisorService,
+            config.defaults,
+            compactionEventLog,
+          ),
+        log,
+        traceCollector: manager.getTraceCollector(agentName) ?? undefined,
+      });
+    }
+    // Phase 115 Plan 07 sub-scope 15 — tool-cache management IPC handlers
+    // (status / clear / inspect). Routed BEFORE routeMethod to keep the
+    // signature stable. Returned as plain JSON envelopes.
+    if (method === "tool-cache-status") {
+      return {
+        sizeMb: toolCacheStore.sizeMb(),
+        rows: toolCacheStore.rowCount(),
+        topTools: toolCacheStore.topToolsByRows(10),
+        path: toolCacheStore.getPath(),
+        enabled: toolCacheEnabled,
+        maxSizeMb: toolCacheMaxSizeMb,
+      };
+    }
+    // Phase 115 Plan 07 T04 — augment the existing `cache` IPC method
+    // with live tool_cache_size_mb so the dashboard panel can surface
+    // it next to prompt_cache_hit_rate (sub-scope 16(c)). The base
+    // method runs in routeMethod; we patch the response post-hoc with
+    // the live size signal sourced from ToolCacheStore.sizeMb().
+    if (method === "cache") {
+      const baseResult = await routeMethod(
+        manager,
+        resolvedAgents,
+        method,
+        params,
+        routingTableRef,
+        rateLimiter,
+        heartbeatRunner,
+        taskScheduler,
+        skillsCatalog,
+        threadManager,
+        webhookManager,
+        deliveryQueue,
+        subagentThreadSpawner,
+        allowlistMatchers,
+        approvalLog,
+        securityPolicies,
+        escalationMonitor,
+        advisorBudget,
+        discordBridgeRef,
+        configPath,
+        config.defaults.basePath,
+        taskManager,
+        taskStore,
+        schedulerSource,
+        botDirectSenderRef,
+        advisorService,
+        config.defaults,
+        compactionEventLog,
       );
+      const liveSizeMb = toolCacheEnabled ? toolCacheStore.sizeMb() : 0;
+      // Phase 115 Plan 08 T03 — augment `case "cache"` with per-agent
+      // split-latency + tool_use_rate fields. The dashboard cache panel
+      // (`renderCachePanel` in src/dashboard/static/app.js) reads these
+      // four fields off the same `report` object that already carries
+      // tool_cache_*. Adding them here means the dashboard fetches stay
+      // unchanged — one cache fetch surfaces the full Phase 115 perf
+      // picture (prompt cache + tool cache + tool-latency methodology).
+      //
+      // Plan 115-08 own CLI (`clawcode tool-latency-audit`) reads its
+      // own dedicated IPC handler instead — different output shape +
+      // a fleet-gate roll-up. The per-agent fields here are JUST the
+      // raw inputs the dashboard renders inline.
+      //
+      // Helper: compute the four T01/T02 fields for one agent. Returns
+      // empty object on failure so cache rendering never breaks.
+      const computeSplitLatencyFields = (
+        agentName: string,
+        sinceIso: string,
+      ): Record<string, unknown> => {
+        try {
+          const ts = manager.getTraceStore(agentName);
+          if (!ts) return {};
+          const split = ts.getSplitLatencyAggregate(agentName, sinceIso);
+          // Use a 24h window for the rate signal (matches the CLI default).
+          const rateSinceIso = new Date(
+            Date.now() - 24 * 3_600_000,
+          ).toISOString();
+          const rateSnap = ts.computeToolUseRatePerTurn(
+            agentName,
+            rateSinceIso,
+            24,
+          );
+          // Phase 115 Plan 09 T04 — sub-scope 16(c) dashboard surface.
+          // Folds tier1_* / lazy_recall / prompt_bloat aggregates onto the
+          // same `cache` report so the dashboard renders the four new
+          // metrics inline with prompt_cache + tool_cache + split-latency.
+          // The 24h window matches the rate signal above so all dashboard
+          // subtitle lines share one temporal frame.
+          const phase115 = ts.getPhase115DashboardMetrics(
+            agentName,
+            rateSinceIso,
+          );
+          return {
+            tool_execution_ms_p50: split.toolExecutionMsP50,
+            tool_roundtrip_ms_p50: split.toolRoundtripMsP50,
+            parallel_tool_call_rate: split.parallelToolCallRate,
+            tool_use_rate: rateSnap.rate,
+            // sub-scope 16(c) dashboard fields. NULL bubbles up when the
+            // 115-02 writers haven't fired yet for this agent — dashboard
+            // renders "—" gracefully.
+            tier1_inject_chars: phase115.latestTier1InjectChars,
+            tier1_budget_pct: phase115.latestTier1BudgetPct,
+            lazy_recall_call_count: phase115.lazyRecallCalls24h,
+            prompt_bloat_warnings_24h: phase115.promptBloatWarnings24h,
+          };
+        } catch {
+          // Observability augmentation MUST NEVER break the cache fetch path.
+          return {};
+        }
+      };
+
+      // Phase 116 F02 — fold the resolved per-model SLO bundle into every
+      // cache response so the dashboard agent tile (F03 in 116-01) can render
+      // the first-token p50 gauge against the right per-model threshold
+      // (sonnet 6s / opus 8s / haiku 2s) and surface the per-agent override
+      // source pill. Lookup never throws — unknown agent names degrade to
+      // omitting the slos field rather than failing the cache fetch.
+      const computeSloFields = (
+        agentName: string,
+      ): Record<string, unknown> => {
+        try {
+          const cfg = resolvedAgents.find((a) => a.name === agentName);
+          if (!cfg) return {};
+          return { slos: resolveSloFor(cfg) };
+        } catch {
+          return {};
+        }
+      };
+
+      // baseResult is either a single augmented report (case "cache" non-all)
+      // or an array of reports (case "cache" --all). Either way, fold in the
+      // fleet-wide live size signal so the dashboard reads a fresh number
+      // even on the very first turn (when per-agent telemetry is still
+      // accumulating).
+      // Phase 116 hotfix 2026-05-11 — `base.since` is ALREADY an ISO timestamp
+      // (set at line 8560 by the underlying `case "cache"` handler via
+      // sinceToIso(params.since)). Re-running sinceToIso() on an ISO string
+      // throws RangeError("invalid since duration: <iso>"), poisoning every
+      // /api/agents/:name/cache response. Use base.since directly (or compute
+      // 24h fallback as ISO) — never re-parse.
+      const resolveSinceIso = (base: Record<string, unknown>): string => {
+        const raw = typeof base.since === "string" ? base.since : "";
+        // ISO timestamps from the underlying handler — pass through.
+        if (raw.includes("T") && raw.includes("Z")) return raw;
+        // Defensive: if some future caller passes a duration string, convert.
+        try {
+          return sinceToIso(raw || "24h");
+        } catch {
+          return new Date(Date.now() - 24 * 3_600_000).toISOString();
+        }
+      };
+      if (Array.isArray(baseResult)) {
+        return baseResult.map((r) => {
+          const base = r as Record<string, unknown>;
+          const sinceIso = resolveSinceIso(base);
+          const agentName =
+            typeof base.agent === "string" ? (base.agent as string) : "";
+          return Object.freeze({
+            ...base,
+            tool_cache_size_mb_live: liveSizeMb,
+            ...computeSplitLatencyFields(agentName, sinceIso),
+            ...computeSloFields(agentName),
+          });
+        });
+      }
+      const base = baseResult as Record<string, unknown>;
+      const sinceIso = resolveSinceIso(base);
+      const agentName =
+        typeof base.agent === "string" ? (base.agent as string) : "";
+      return Object.freeze({
+        ...base,
+        tool_cache_size_mb_live: liveSizeMb,
+        ...computeSplitLatencyFields(agentName, sinceIso),
+        ...computeSloFields(agentName),
+      });
+    }
+    if (method === "tool-cache-clear") {
+      const tool =
+        typeof (params as { tool?: unknown }).tool === "string"
+          ? ((params as { tool?: string }).tool as string)
+          : undefined;
+      const cleared = toolCacheStore.clear(tool);
+      return { cleared, tool: tool ?? null };
+    }
+    if (method === "tool-cache-inspect") {
+      const tool =
+        typeof (params as { tool?: unknown }).tool === "string"
+          ? ((params as { tool?: string }).tool as string)
+          : undefined;
+      const agent =
+        typeof (params as { agent?: unknown }).agent === "string"
+          ? ((params as { agent?: string }).agent as string)
+          : undefined;
+      const limit =
+        typeof (params as { limit?: unknown }).limit === "number"
+          ? Math.min(
+              Math.max((params as { limit?: number }).limit ?? 100, 1),
+              500,
+            )
+          : 100;
+      const rows = toolCacheStore.inspect({ tool, agent, limit });
+      return { rows, count: rows.length };
+    }
+    // Phase 115 Plan 08 T03 — sub-scope 17(a/b/c) + 6-A `tool-latency-audit`
+    // IPC handler. Composes T01's split-latency percentile (per-turn
+    // tool_execution_ms / tool_roundtrip_ms) with T02's tool_use_rate
+    // computation. Output shape mirrors the CLI's
+    // ToolLatencyAuditResponse (src/cli/commands/tool-latency-audit.ts).
+    //
+    // Threshold per CONTEXT D-12: 0.30 (30%). Knob, not constant — plan
+    // 115-09 may refine. fin-acquisition is excluded from the fleet
+    // average (Ramy-paced tool-heavy workload skews the gate).
+    if (method === "tool-latency-audit") {
+      const windowHoursRaw = (params as { windowHours?: unknown }).windowHours;
+      const windowHours =
+        typeof windowHoursRaw === "number" && windowHoursRaw >= 1
+          ? windowHoursRaw
+          : 24;
+      const filterAgent =
+        typeof (params as { agent?: unknown }).agent === "string"
+          ? ((params as { agent?: string }).agent as string)
+          : undefined;
+
+      const sinceIso = new Date(
+        Date.now() - windowHours * 3_600_000,
+      ).toISOString();
+      const SUB_SCOPE_6B_THRESHOLD = 0.3;
+      const FIN_ACQ_AGENT_NAME = "fin-acquisition";
+
+      const targetAgents = filterAgent
+        ? resolvedAgents.filter((a) => a.name === filterAgent)
+        : resolvedAgents;
+
+      const rows: Array<{
+        readonly agent: string;
+        readonly turnsTotal: number;
+        readonly turnsWithTools: number;
+        readonly toolUseRate: number;
+        readonly toolExecutionMsP50: number | null;
+        readonly toolRoundtripMsP50: number | null;
+        readonly parallelToolCallRate: number | null;
+        readonly subScope6BGate: string;
+      }> = [];
+
+      let nonFinAcqSum = 0;
+      let nonFinAcqCount = 0;
+
+      for (const cfg of targetAgents) {
+        const traceStore = manager.getTraceStore(cfg.name);
+        if (!traceStore) {
+          rows.push({
+            agent: cfg.name,
+            turnsTotal: 0,
+            turnsWithTools: 0,
+            toolUseRate: 0,
+            toolExecutionMsP50: null,
+            toolRoundtripMsP50: null,
+            parallelToolCallRate: null,
+            subScope6BGate: "no-data",
+          });
+          continue;
+        }
+        const rateSnap = traceStore.computeToolUseRatePerTurn(
+          cfg.name,
+          sinceIso,
+          windowHours,
+        );
+        const split = traceStore.getSplitLatencyAggregate(cfg.name, sinceIso);
+
+        let gate: string;
+        if (cfg.name === FIN_ACQ_AGENT_NAME) {
+          gate = "fin-acq-excluded-from-gate (D-12)";
+        } else if (rateSnap.turnsTotal === 0) {
+          gate = "no-data";
+        } else if (rateSnap.rate < SUB_SCOPE_6B_THRESHOLD) {
+          gate = "below-30%-threshold";
+          nonFinAcqSum += rateSnap.rate;
+          nonFinAcqCount += 1;
+        } else {
+          gate = "above-30%-threshold";
+          nonFinAcqSum += rateSnap.rate;
+          nonFinAcqCount += 1;
+        }
+
+        rows.push({
+          agent: cfg.name,
+          turnsTotal: rateSnap.turnsTotal,
+          turnsWithTools: rateSnap.turnsWithTools,
+          toolUseRate: rateSnap.rate,
+          toolExecutionMsP50: split.toolExecutionMsP50,
+          toolRoundtripMsP50: split.toolRoundtripMsP50,
+          parallelToolCallRate: split.parallelToolCallRate,
+          subScope6BGate: gate,
+        });
+      }
+
+      const fleetAvg =
+        nonFinAcqCount > 0 ? nonFinAcqSum / nonFinAcqCount : null;
+      const decision: "ship-6B" | "defer-6B" | "no-signal" =
+        fleetAvg === null
+          ? "no-signal"
+          : fleetAvg < SUB_SCOPE_6B_THRESHOLD
+            ? "ship-6B"
+            : "defer-6B";
+
+      return {
+        computed_at: new Date().toISOString(),
+        windowHours,
+        rows,
+        fleetGate: {
+          non_fin_acq_avg_tool_use_rate: fleetAvg,
+          threshold: SUB_SCOPE_6B_THRESHOLD,
+          decision,
+          agentsCounted: nonFinAcqCount,
+        },
+      };
     }
     // Phase 88 Plan 02 MKT-01..07 — marketplace IPC is intercepted BEFORE
     // routeMethod (same closure pattern as browser/search/image-tool-call)
@@ -2439,6 +4577,63 @@ export async function startDaemon(
         return handleMarketplaceInstallIpc(deps);
       }
       return handleMarketplaceRemoveIpc(deps);
+    }
+    // skill-create — agent-initiated skill authoring via daemon IPC.
+    // Writes SKILL.md to skillsPath, rescans catalog, re-links agent workspace,
+    // and persists the skill name to the agent's YAML config. Exists because
+    // agent processes cannot write to skillsPath directly (tool ACL restriction).
+    if (method === "skill-create") {
+      const agentName = validateStringParam(params, "agent");
+      const skillName = validateStringParam(params, "name");
+      const content = validateStringParam(params, "content");
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(skillName)) {
+        throw new ManagerError(
+          `Invalid skill name '${skillName}' — must match [a-z0-9][a-z0-9-]*`,
+        );
+      }
+      const agentIdx = (resolvedAgents as ResolvedAgentConfig[]).findIndex(
+        (a) => a.name === agentName,
+      );
+      if (agentIdx === -1) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+      const skillDir = join(skillsPath, skillName);
+      const skillFile = join(skillDir, "SKILL.md");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(skillFile, content, "utf-8");
+      const freshCatalog = await scanSkillsDirectory(skillsPath, log);
+      const agentCfg = (resolvedAgents as ResolvedAgentConfig[])[agentIdx]!;
+      const alreadyAssigned = agentCfg.skills.includes(skillName);
+      const updatedSkills = alreadyAssigned
+        ? agentCfg.skills
+        : [...agentCfg.skills, skillName];
+      if (!alreadyAssigned) {
+        (resolvedAgents as ResolvedAgentConfig[])[agentIdx] = Object.freeze({
+          ...agentCfg,
+          skills: updatedSkills,
+        });
+        try {
+          await updateAgentSkills({
+            existingConfigPath: configPath,
+            agentName,
+            skillName,
+            op: "add",
+          });
+        } catch (err) {
+          log.warn(
+            { agent: agentName, skill: skillName, error: (err as Error).message },
+            "skill-create: YAML persist failed — skill linked in-memory only",
+          );
+        }
+      }
+      await linkAgentSkills(
+        join((resolvedAgents as ResolvedAgentConfig[])[agentIdx]!.workspace, "skills"),
+        updatedSkills,
+        freshCatalog,
+        log,
+      );
+      log.info({ agent: agentName, skill: skillName, path: skillFile }, "skill created");
+      return Object.freeze({ created: true, skill: skillName, path: skillFile });
     }
     // Phase 90 Plan 05 HUB-02 / HUB-04 — ClawHub plugin list + install IPC.
     // Closure-based intercept parallel to the skill marketplace handlers
@@ -2484,6 +4679,97 @@ export async function startDaemon(
     // primitives (runDreamPass / applyDreamResult / isAgentIdle /
     // getResolvedDreamConfig) to real production sources here; Plans
     // 95-01 + 95-02 own the pure-DI logic.
+    // Phase 96 Plan 05 PFS- — probe-fs + list-fs-status IPC handlers.
+    // Operator-driven on-demand filesystem-capability re-probe + cached
+    // snapshot read. Backs both `clawcode probe-fs <agent>` (CLI) and
+    // `/clawcode-probe-fs` (Discord slash, admin-only) — Discord/CLI parity
+    // invariant per RESEARCH.md Validation Architecture Dim 6. Closure-based
+    // intercept BEFORE routeMethod so the IPC handler signature stays stable.
+    // The daemon edge wires production deps (node:fs/promises.access /
+    // realpath / writeFile / rename / mkdir + os.homedir for the
+    // fs-capability.json path); Plan 96-01 owns the pure-DI runFsProbe +
+    // writeFsSnapshot primitives (NEVER re-implemented here — pinned by
+    // static-grep `grep -q "runFsProbe" src/manager/daemon.ts`).
+    if (method === "probe-fs") {
+      const { handleProbeFsIpc } = await import("./daemon-fs-ipc.js");
+      const {
+        access: fsAccessFn,
+        realpath: fsRealpathFn,
+        writeFile: fsWriteFileFn,
+        rename: fsRenameFn,
+        mkdir: fsMkdirFn,
+        readFile: fsReadFileFn,
+        constants: fsConstants,
+      } = await import("node:fs/promises").then((m) => ({
+        access: m.access,
+        realpath: m.realpath,
+        writeFile: m.writeFile,
+        rename: m.rename,
+        mkdir: m.mkdir,
+        readFile: m.readFile,
+        constants: m.constants,
+      }));
+      const { resolve: pathResolveFn } = await import("node:path");
+      const { writeFsSnapshot } = await import("./fs-snapshot-store.js");
+      const { resolveFileAccess } = await import("../config/loader.js");
+      return handleProbeFsIpc(
+        { agent: validateStringParam(params, "agent") },
+        {
+          resolveFileAccessForAgent: (agent) => {
+            const cfg = manager.getAgentConfig(agent) ?? resolvedAgents.find((a) => a.name === agent);
+            return resolveFileAccess(
+              agent,
+              cfg as unknown as { readonly fileAccess?: readonly string[] },
+              config.defaults as unknown as { readonly fileAccess?: readonly string[] },
+            );
+          },
+          getHandleAccessors: (agent) => {
+            const handle = manager.getSessionHandle(agent);
+            if (!handle) return null;
+            return {
+              getFsCapabilitySnapshot: () => handle.getFsCapabilitySnapshot(),
+              setFsCapabilitySnapshot: (next) => handle.setFsCapabilitySnapshot(next),
+            };
+          },
+          fsAccess: fsAccessFn,
+          fsConstants,
+          realpath: fsRealpathFn,
+          resolve: pathResolveFn,
+          writeFsSnapshot: (agent, snapshot, filePath) =>
+            writeFsSnapshot(agent, snapshot, filePath, {
+              writeFile: (p, data, enc) => fsWriteFileFn(p, data, enc),
+              rename: fsRenameFn,
+              // node:fs/promises.mkdir returns Promise<string | undefined>;
+              // wrap to match our deps Promise<void> signature.
+              mkdir: async (p, options) => {
+                await fsMkdirFn(p, options);
+              },
+              readFile: (p, enc) => fsReadFileFn(p, enc),
+              log,
+            }),
+          getFsCapabilityPath: (agent) =>
+            join(homedir(), ".clawcode", "agents", agent, "fs-capability.json"),
+          now: () => new Date(),
+          log,
+        },
+      );
+    }
+    if (method === "list-fs-status") {
+      const { handleListFsStatusIpc } = await import("./daemon-fs-ipc.js");
+      return handleListFsStatusIpc(
+        { agent: validateStringParam(params, "agent") },
+        {
+          getHandleAccessors: (agent) => {
+            const handle = manager.getSessionHandle(agent);
+            if (!handle) return null;
+            return {
+              getFsCapabilitySnapshot: () => handle.getFsCapabilitySnapshot(),
+              setFsCapabilitySnapshot: (next) => handle.setFsCapabilitySnapshot(next),
+            };
+          },
+        },
+      );
+    }
     if (method === "run-dream-pass") {
       const { runDreamPass: runDreamPassPrim } = await import(
         "./dream-pass.js"
@@ -2525,7 +4811,10 @@ export async function startDaemon(
           // ResolvedAgentConfig may not surface it directly; treat absence
           // as fleet-default (enabled=false, 30min, haiku). Force flag at
           // the IPC handler overrides enabled=false at the operator's risk.
-          const dreamCfg = (cfg as unknown as { dream?: { enabled?: boolean; idleMinutes?: number; model?: string } }).dream;
+          // Phase 100 follow-up — ResolvedAgentConfig now carries `dream`
+          // directly (resolver merges agent.dream ?? defaults.dream).
+          // The `as unknown as ...` cast is gone; clean property access.
+          const dreamCfg = cfg.dream;
           return {
             enabled: dreamCfg?.enabled ?? false,
             idleMinutes: dreamCfg?.idleMinutes ?? 30,
@@ -2547,9 +4836,8 @@ export async function startDaemon(
             }
           ).getLastTurnAt?.(agent) ?? null;
           const cfg = resolvedAgents.find((a) => a.name === agent);
-          const idleMinutes =
-            (cfg as unknown as { dream?: { idleMinutes?: number } })?.dream
-              ?.idleMinutes ?? 30;
+          // Phase 100 follow-up — direct property access (see above).
+          const idleMinutes = cfg?.dream?.idleMinutes ?? 30;
           return isAgentIdle({
             lastTurnAt: sessLastTurnAt,
             idleMinutes,
@@ -2573,55 +4861,88 @@ export async function startDaemon(
           // running) — surfaces as a low-signal dream pass rather than an
           // exception that crashes the operator's manual trigger.
           const dreamMemoryStore = {
-            getRecentChunks: async () => {
+            getRecentChunks: async (_agent: string, limit: number) => {
               if (!memoryStore) return [];
-              // Best-effort: pull recent chunks via the existing memory
-              // search surface. The production MemoryStore doesn't expose
-              // a dedicated getRecentChunks; the dream-pass primitive is
-              // tolerant of empty arrays (low-signal but valid).
-              return [];
+              try {
+                return memoryStore.listRecentMemoryChunks(limit);
+              } catch (err) {
+                log.warn(
+                  {
+                    component: "dream-pass",
+                    action: "list-chunks-failed",
+                    agent,
+                    err: err instanceof Error ? err.message : String(err),
+                  },
+                  "dream-pass: listRecentMemoryChunks failed; treating as empty",
+                );
+                return [];
+              }
             },
           };
           const dreamConvStore = {
-            getRecentSummaries: async () => {
-              if (!conversationStore) return [];
-              return [];
+            getRecentSummaries: async (_agent: string, limit: number) => {
+              if (!conversationStore || !memoryStore) return [];
+              try {
+                const sessions =
+                  conversationStore.listRecentTerminatedSessions(agent, limit);
+                return sessions
+                  .map((s) => {
+                    if (!s.summaryMemoryId) return null;
+                    const mem = memoryStore.getById(s.summaryMemoryId);
+                    if (!mem || mem.content.trim().length === 0) return null;
+                    const endedIso = s.endedAt ?? s.startedAt;
+                    return {
+                      sessionId: s.id,
+                      summary: mem.content,
+                      endedAt: new Date(endedIso),
+                    };
+                  })
+                  .filter((x): x is NonNullable<typeof x> => x !== null);
+              } catch (err) {
+                log.warn(
+                  {
+                    component: "dream-pass",
+                    action: "list-summaries-failed",
+                    agent,
+                    err: err instanceof Error ? err.message : String(err),
+                  },
+                  "dream-pass: listRecentTerminatedSessions failed; treating as empty",
+                );
+                return [];
+              }
             },
           };
-          const { makeRootOrigin: makeDreamOrigin } = await import(
-            "./turn-origin.js"
-          );
           const dreamDispatch = async (dispatchReq: {
             model: string;
             systemPrompt: string;
             userPrompt: string;
             maxOutputTokens: number;
           }) => {
-            // Wraps turnDispatcher.dispatch into the narrow shape the
-            // dream-pass primitive consumes. The actual prompt is a single
-            // LLM round-trip — no streaming, no Discord. Model + thinking
-            // tokens are governed by the agent's runtime SDK handle (set
-            // via /clawcode-model or agents.*.model); per-pass override
-            // is deferred (would require a fork-session) — the modelOverride
-            // flag at the IPC layer only logs the operator intent for now.
+            // Phase 999.39 — direct OAuth path via callHaikuDirect.
+            // dream-pass is a one-shot LLM call (no session context, no tools).
+            // Previously routed through turnDispatcher.dispatch → sdk.query() →
+            // ANTHROPIC_API_KEY (wrong auth on subscription-only deployments).
+            // dispatchReq.model is "haiku" by default (dream config default);
+            // model override is a future follow-up.
             try {
-              const text = await turnDispatcher.dispatch(
-                makeDreamOrigin("scheduler", `dream-pass:${agent}`),
-                agent,
-                `${dispatchReq.systemPrompt}\n\n${dispatchReq.userPrompt}`,
-                {},
+              // Honor the dispatcher's maxOutputTokens (dream-pass needs
+              // ~4096 for full JSON; haiku-direct's default of 2048 truncates
+              // mid-string → parse-failed). See 2026-05-11 latent budget bug.
+              const text = await callHaikuDirect(
+                dispatchReq.systemPrompt,
+                dispatchReq.userPrompt,
+                { maxTokens: dispatchReq.maxOutputTokens },
               );
-              // Token counts unavailable in the wrapper response surface;
-              // approximate via chars/4 heuristic (consistent with
-              // dream-prompt-builder's budget estimator).
+              // Token counts unavailable from direct call; approximate via
+              // chars/4 heuristic (consistent with dream-prompt-builder's budget).
               const inApprox = Math.ceil(
                 (dispatchReq.systemPrompt.length +
                   dispatchReq.userPrompt.length) /
                   4,
               );
-              const outApprox = Math.ceil((text ?? "").length / 4);
+              const outApprox = Math.ceil(text.length / 4);
               return {
-                rawText: text ?? "",
+                rawText: text,
                 tokensIn: inApprox,
                 tokensOut: outApprox,
               };
@@ -2652,18 +4973,31 @@ export async function startDaemon(
             log,
           });
         },
-        // Plan 95-02 — applyDreamResult adapter. The auto-linker adapter
-        // is intentionally a no-op for v1 (returns added:0): real link
-        // application is deferred to a future plan that wires the LLM
-        // {from,to} pairs into the Phase 36-41 graph store. Dream-log
+        // applyDreamResult adapter. applyAutoLinks persists the LLM-proposed
+        // path→path edges into <memoryRoot>/graph-edges.json (read back on
+        // the next dream pass for "existing wikilinks" context). Dream-log
         // emission via writeDreamLog IS wired (D-05 atomic markdown).
         applyDreamResult: async (agent, outcome) => {
           const cfg = resolvedAgents.find((a) => a.name === agent);
           const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+          const { appendDreamWikilinks } = await import(
+            "./dream-graph-edges.js"
+          );
           return applyDreamResultPrim(agent, outcome, {
-            applyAutoLinks: async () => ({ added: 0 }),
-            writeDreamLog: async (entry) =>
-              writeDreamLog({ agentName: agent, memoryRoot, entry }),
+            applyAutoLinks: async (_agent, links) => {
+              if (!memoryRoot) return { added: 0 };
+              return appendDreamWikilinks({
+                memoryRoot,
+                links,
+                now: () => new Date(),
+              });
+            },
+            // Phase 99 dream hotfix (2026-04-26): pass writeDreamLog directly.
+            // dream-auto-apply calls deps.writeDreamLog({agentName, memoryRoot, entry}),
+            // not just entry — the previous wrapper signature `(entry) => …` caused
+            // the entry-shape to be the OUTER object so entry.timestamp was undefined.
+            writeDreamLog,
+            memoryRoot,
             now: () => new Date(),
             log,
           });
@@ -3207,23 +5541,2060 @@ export async function startDaemon(
         },
       });
     }
-    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore);
+    // Phase 100 follow-up — set-gsd-project intercept (BEFORE routeMethod
+    // so the closure can mutate the daemon-scoped resolvedAgents array +
+    // re-publish to manager.setAllAgentConfigs without changing routeMethod's
+    // signature). Persists to gsd-project-overrides.json (atomic temp+rename),
+    // splices a new ResolvedAgentConfig with the new gsd.projectDir into the
+    // resolvedAgents array, calls manager.setAllAgentConfigs to publish the
+    // change, and triggers manager.restartAgent so the new SDK session picks
+    // up the new cwd (gsd.projectDir is non-reloadable per Phase 100 GSD-07).
+    if (method === "set-gsd-project") {
+      const agentName = validateStringParam(params, "agent");
+      const projectDirRaw = validateStringParam(params, "projectDir");
+      const idx = resolvedAgents.findIndex((a) => a.name === agentName);
+      if (idx === -1) {
+        throw new ManagerError(`Agent '${agentName}' not found in config`);
+      }
+      const current = resolvedAgents[idx]!;
+      if (!current.gsd?.projectDir) {
+        throw new ManagerError(
+          `Agent '${agentName}' is not GSD-enabled (no gsd.projectDir in config). ` +
+            `Add a \`gsd:\` block to clawcode.yaml first.`,
+        );
+      }
+      const { writeGsdProjectOverride, DEFAULT_GSD_PROJECT_OVERRIDES_PATH } =
+        await import("./gsd-project-store.js");
+      const { expandHome } = await import("../config/defaults.js");
+      const expandedPath = expandHome(projectDirRaw);
+      // Persist the override BEFORE mutating in-memory state. If the write
+      // fails, the daemon stays in a consistent state (yaml + in-memory unchanged).
+      await writeGsdProjectOverride(
+        DEFAULT_GSD_PROJECT_OVERRIDES_PATH,
+        agentName,
+        expandedPath,
+        log,
+      );
+      // Build a new immutable ResolvedAgentConfig with the swapped gsd block.
+      const next: ResolvedAgentConfig = {
+        ...current,
+        gsd: { projectDir: expandedPath },
+      };
+      // Splice in place — both manager.setAllAgentConfigs and the slash
+      // handler hold the SAME array reference, so after this mutation both
+      // see the new entry on subsequent reads.
+      (resolvedAgents as ResolvedAgentConfig[])[idx] = next;
+      manager.setAllAgentConfigs(resolvedAgents);
+      // Restart so the new SDK session boots with the new gsd.projectDir as
+      // cwd. Mirrors the "restart" case fallback for stopped agents.
+      try {
+        await manager.restartAgent(agentName, next);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/not running|no such session|requireSession/i.test(msg)) {
+          await manager.startAgent(agentName, next);
+        } else {
+          throw err;
+        }
+      }
+      return { ok: true, agent: agentName, projectDir: expandedPath };
+    }
+
+    // Phase 104 Plan 04 — secrets-status / secrets-invalidate intercepts
+    // BEFORE routeMethod (closure-intercept pattern, mirrors set-gsd-project
+    // above + marketplace + browser-tool-call). The handler module consults
+    // the daemon-scoped `secretsResolver` singleton via closure so
+    // routeMethod's signature stays stable and the handlers remain unit-
+    // testable in isolation. SEC-06 telemetry surface for /clawcode-status;
+    // closes Pitfall 3 manual-rotation gap.
+    switch (method) {
+      case "secrets-status": {
+        return handleSecretsStatus(secretsResolver);
+      }
+      case "secrets-invalidate": {
+        return handleSecretsInvalidate(secretsResolver, params);
+      }
+      // Phase 117 Plan 117-11 T05 — operator-driven per-channel verbose
+      // toggle. Routes the /clawcode-verbose slash command's level choice
+      // through VerboseState. Closure-intercept BEFORE routeMethod so the
+      // already-massive routeMethod signature stays stable; `verboseState`
+      // is constructed at boot (alongside advisorBudget at :~2697) and
+      // shared by reference with the Discord bridge (T06) so reads at the
+      // single mutation point in bridge.ts (~:810) see the same state.
+      // Returns { level, updatedAt } so the slash handler can render the
+      // ephemeral reply (handleVerboseSlash in slash-commands.ts).
+      case "set-verbose-level": {
+        const channelId = validateStringParam(params, "channelId");
+        const level = validateStringParam(params, "level");
+        if (level === "status") {
+          const status = verboseState.getStatus(channelId);
+          return { level: status.level, updatedAt: status.updatedAt };
+        }
+        if (level !== "on" && level !== "off") {
+          throw new ManagerError(
+            `invalid verbose level '${level}' — expected on | off | status`,
+          );
+        }
+        const newLevel: "verbose" | "normal" =
+          level === "on" ? "verbose" : "normal";
+        verboseState.setLevel(channelId, newLevel);
+        const status = verboseState.getStatus(channelId);
+        return { level: status.level, updatedAt: status.updatedAt };
+      }
+      // Phase 109-A — broker-status IPC. Returns the live PoolStatus[] from
+      // the daemon-singleton broker (rps + throttle + lastRetryAfterSec
+      // counters live here). Empty array when broker has no pools active
+      // (no agents have spawned a 1Password shim yet — normal at boot).
+      case "broker-status": {
+        const pools = broker.getPoolStatus();
+        const totalRps = pools.reduce(
+          (sum, p) => sum + (p.rpsLastMin ?? 0),
+          0,
+        );
+        const totalThrottles24h = pools.reduce(
+          (sum, p) => sum + (p.throttleEvents24h ?? 0),
+          0,
+        );
+        return { pools, totalRps, totalThrottles24h };
+      }
+      // Phase 110 Stage 0b 0B-RT-13 — list-mcp-tools IPC. Closure-intercept
+      // pattern (mirrors secrets-status / broker-status / mcp-tracker-
+      // snapshot above). Pure handler `handleListMcpToolsIpc` does the
+      // Zod-shape → JSON-Schema conversion via zod/v4's NATIVE
+      // `z.toJSONSchema()` (no new npm dep). Production wiring passes the
+      // real frozen TOOL_DEFINITIONS arrays for search/image/browser; the
+      // handler returns { tools: ToolSchema[] }. Sequencing constraint
+      // (CONTEXT.md): this method ships BEFORE any Go shim builds against
+      // it (Wave 1 prerequisite for Waves 2-4).
+      case "list-mcp-tools": {
+        return handleListMcpToolsIpc(
+          {
+            searchTools: SEARCH_TOOL_DEFINITIONS,
+            imageTools: IMAGE_TOOL_DEFINITIONS,
+            browserTools: BROWSER_TOOL_DEFINITIONS,
+          },
+          params,
+        );
+      }
+      // Phase 999.15 TRACK-05 — mcp-tracker-snapshot intercept BEFORE
+      // routeMethod (closure-intercept pattern, mirrors secrets-status
+      // above). Pure handler in mcp-tracker-snapshot.ts builds the
+      // response from the daemon-scoped mcpTracker singleton via closure.
+      // Returns { agents: [] } when tracker is unset (Linux-only feature
+      // not available on this platform). Optional `agent` param filters
+      // to one entry — consumed by `clawcode mcp-tracker -a <name>`.
+      case "mcp-tracker-snapshot": {
+        if (!mcpTracker) {
+          return { agents: [] };
+        }
+        const filter =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? ((params as { agent: string }).agent)
+            : undefined;
+        return buildMcpTrackerSnapshot(mcpTracker, filter);
+      }
+      // Phase 109-D — fleet-wide observability snapshot. Walks /proc once to
+      // count claude procs vs tracker.getRegisteredAgents() (drift detector),
+      // aggregates per-MCP-cmdline-pattern child counts + summed VmRSS, and
+      // reads cgroup memory.{current,max} for memory pressure. Linux-only
+      // signals degrade to null on non-Linux hosts. Read-only; never mutates
+      // tracker or registry state.
+      case "fleet-stats": {
+        const trackedClaudeCount = mcpTracker
+          ? Array.from(mcpTracker.getRegisteredAgents().keys()).filter(
+              (n) => !n.startsWith("__broker:"),
+            ).length
+          : 0;
+        // Phase 110 Stage 0a — every aggregate carries a runtime
+        // classification so /api/fleet-stats consumers can split shim-
+        // runtime cohorts (Stage 0/1 targets) from yaml-defined externals.
+        // Yaml-defined entries default to "external"; the loader-auto-
+        // injected shims (browser/search/image — see src/config/loader.ts:
+        // 249-294) and the broker shim (1password — same file:215-238)
+        // are added below with their runtime read from
+        // config.defaults.shimRuntime (Stage 0a defaults all to "node").
+        const labeledPatterns: Array<{
+          label: string;
+          regex: RegExp;
+          runtime: McpRuntime;
+        }> = [];
+        for (const [name, cfg] of Object.entries(mcpServersConfig)) {
+          try {
+            const single = buildMcpCommandRegexes({ [name]: cfg });
+            labeledPatterns.push({
+              label: name,
+              regex: single,
+              runtime: "external",
+            });
+          } catch {
+            // Skip empty/invalid entries — buildMcpCommandRegexes throws on empty.
+          }
+        }
+        // Loader-auto-injected shim patterns. These are NOT in
+        // mcpServersConfig (they're injected per-agent inside
+        // resolveAgentConfig) but they show up in /proc with the cmdline
+        // shape that `resolveShimCommand(<type>, <runtime>)` produces.
+        // Phase 110 Stage 0b: command/args MUST be derived from the same
+        // `defaults.shimRuntime.<type>` selector that the loader reads,
+        // otherwise an operator who flips a flag → static would see the
+        // running Go binary become invisible to /api/fleet-stats (the
+        // Stage 0a regex `clawcode <type>-mcp` would never match
+        // `/opt/clawcode/bin/clawcode-mcp-shim --type <type>`). Both call-
+        // sites import resolveShimCommand to keep the spawn shape and
+        // the proc-scan regex shape in lockstep — single source of
+        // truth in src/config/loader.ts.
+        const shimRuntimeCfg = config.defaults.shimRuntime;
+        const browserRuntime: ShimRuntime = shimRuntimeCfg?.browser ?? "node";
+        const searchRuntime: ShimRuntime = shimRuntimeCfg?.search ?? "node";
+        const imageRuntime: ShimRuntime = shimRuntimeCfg?.image ?? "node";
+        const browserCmd = resolveShimCommand("browser", browserRuntime);
+        const searchCmd = resolveShimCommand("search", searchRuntime);
+        const imageCmd = resolveShimCommand("image", imageRuntime);
+        const autoInjected: ReadonlyArray<{
+          label: string;
+          command: string;
+          args: readonly string[];
+          runtime: McpRuntime;
+        }> = [
+          {
+            label: "browser",
+            command: browserCmd.command,
+            args: browserCmd.args,
+            runtime: browserRuntime,
+          },
+          {
+            label: "search",
+            command: searchCmd.command,
+            args: searchCmd.args,
+            runtime: searchRuntime,
+          },
+          {
+            label: "image",
+            command: imageCmd.command,
+            args: imageCmd.args,
+            runtime: imageRuntime,
+          },
+          {
+            // Phase 108 broker shim. Both `--pool 1password` (legacy
+            // form, current loader auto-inject) and `--type 1password`
+            // (Phase 110 alias) match because the regex includes the
+            // bare-package-name alternation `\bmcp-broker-shim\b`.
+            // Broker is NOT in scope for Stage 0b (operator-locked —
+            // see CONTEXT.md "mcp-broker-shim inclusion: NO — defer to
+            // Stage 0c"). Hardcoded "node" is correct.
+            label: "1password",
+            command: "clawcode",
+            args: ["mcp-broker-shim", "--pool", "1password"],
+            runtime: "node",
+          },
+        ];
+        for (const { label, command, args, runtime } of autoInjected) {
+          // Skip if the operator yaml-defined a server with the same
+          // name (mcpServersConfig wins — the operator's entry already
+          // got pushed above with runtime: "external").
+          if (mcpServersConfig[label] !== undefined) continue;
+          try {
+            const regex = buildMcpCommandRegexes({
+              [label]: { command, args: [...args] },
+            });
+            labeledPatterns.push({ label, regex, runtime });
+          } catch {
+            // unreachable — args is non-empty for every auto-inject
+          }
+        }
+        return await buildFleetStats({
+          daemonPid: process.pid,
+          trackedClaudeCount,
+          mcpPatterns: labeledPatterns,
+        });
+      }
+      // Phase 107 VEC-CLEAN-03 — memory-cleanup-orphans intercept BEFORE
+      // routeMethod (closure-intercept pattern, mirrors secrets-status +
+      // mcp-tracker-snapshot above). Per-agent: resolve MemoryStore via
+      // manager.getMemoryStore(agent) and call store.cleanupOrphans().
+      // Optional `agent` param scopes to one agent; otherwise iterates all
+      // resolvedAgents. Per-agent error logged + sentinel { totalAfter: -1 }
+      // pushed into results so partial failures don't kill the whole
+      // operator command. Returns { results: [{ agent, removed, totalAfter }] }.
+      case "memory-cleanup-orphans": {
+        const agentParam =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? ((params as { agent: string }).agent)
+            : null;
+        const targets = agentParam
+          ? [agentParam]
+          : resolvedAgents.map((a) => a.name);
+        const results: Array<{
+          agent: string;
+          removed: number;
+          totalAfter: number;
+        }> = [];
+        for (const agent of targets) {
+          const store = manager.getMemoryStore(agent);
+          if (!store) {
+            results.push({ agent, removed: 0, totalAfter: 0 });
+            continue;
+          }
+          try {
+            const r = store.cleanupOrphans();
+            results.push({
+              agent,
+              removed: r.removed,
+              totalAfter: r.totalAfter,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`[memory-cleanup-orphans] ${agent} failed: ${msg}`);
+            results.push({ agent, removed: 0, totalAfter: -1 });
+          }
+        }
+        return { results };
+      }
+      // Phase 115 D-08 — embedding-v2 migration IPC handlers. Closure-
+      // intercept pattern (mirrors memory-cleanup-orphans above). Per-
+      // agent migrator constructed on each call; no shared singleton.
+      // Phase 90 per-agent isolation preserved.
+      case "embedding-migration-status": {
+        const { EmbeddingV2Migrator } = await import(
+          "../memory/migrations/embedding-v2.js"
+        );
+        const agentParam =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? (params as { agent: string }).agent
+            : null;
+        const targets = agentParam
+          ? [agentParam]
+          : resolvedAgents.map((a) => a.name);
+        const results: Array<{
+          agent: string;
+          phase: string;
+          progressProcessed: number;
+          progressTotal: number;
+          lastCursor: string | null;
+          startedAt: string | null;
+          completedAt: string | null;
+          paused: boolean;
+          error?: string;
+        }> = [];
+        const pausedSet = new Set(
+          (config.defaults as { embeddingMigration?: { pausedAgents?: readonly string[] } })
+            .embeddingMigration?.pausedAgents ?? [],
+        );
+        for (const agent of targets) {
+          const store = manager.getMemoryStore(agent);
+          if (!store) {
+            results.push({
+              agent,
+              phase: "no-store",
+              progressProcessed: 0,
+              progressTotal: 0,
+              lastCursor: null,
+              startedAt: null,
+              completedAt: null,
+              paused: pausedSet.has(agent),
+              error: "memory store not available",
+            });
+            continue;
+          }
+          try {
+            const m = new EmbeddingV2Migrator(store.getDatabase(), agent);
+            const s = m.getState();
+            results.push({
+              agent,
+              phase: s.phase,
+              progressProcessed: s.progressProcessed,
+              progressTotal: s.progressTotal,
+              lastCursor: s.lastCursor,
+              startedAt: s.startedAt,
+              completedAt: s.completedAt,
+              paused: pausedSet.has(agent),
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`[embedding-migration-status] ${agent} failed: ${msg}`);
+            results.push({
+              agent,
+              phase: "error",
+              progressProcessed: 0,
+              progressTotal: 0,
+              lastCursor: null,
+              startedAt: null,
+              completedAt: null,
+              paused: pausedSet.has(agent),
+              error: msg,
+            });
+          }
+        }
+        return { results };
+      }
+      case "embedding-migration-transition": {
+        const { EmbeddingV2Migrator } = await import(
+          "../memory/migrations/embedding-v2.js"
+        );
+        const p = params as { agent?: string; toPhase?: string } | undefined;
+        const agent = p?.agent;
+        const toPhase = p?.toPhase;
+        if (!agent || typeof agent !== "string") {
+          return { ok: false, error: "agent param required" };
+        }
+        if (!toPhase || typeof toPhase !== "string") {
+          return { ok: false, error: "toPhase param required" };
+        }
+        const store = manager.getMemoryStore(agent);
+        if (!store) {
+          return { ok: false, error: "memory store not available" };
+        }
+        try {
+          const m = new EmbeddingV2Migrator(store.getDatabase(), agent);
+          // For re-embedding entry, seed progress_total with the
+          // current count of memories missing v2 vectors.
+          if (toPhase === "re-embedding") {
+            const total = store.countMemoriesMissingV2Embedding();
+            m.transition(
+              "re-embedding",
+              total + m.getState().progressProcessed,
+            );
+          } else {
+            m.transition(
+              toPhase as Parameters<typeof m.transition>[0],
+            );
+          }
+          const s = m.getState();
+          log.info(
+            {
+              agent,
+              action: "embedding-migration-transition",
+              fromPhase: "(see new state)",
+              toPhase: s.phase,
+            },
+            "[diag] embedding-v2 migration transitioned",
+          );
+          // Phase 115-postdeploy 2026-05-12 — one-shot batch kick on
+          // transition into a working phase. Fire-and-forget so the
+          // IPC response returns immediately; the operator sees
+          // progressProcessed jump from 0 within seconds instead of
+          // waiting up to 30s for the cron tick. Errors are caught and
+          // logged inside `kickEmbeddingMigrationBatch`.
+          if (s.phase === "re-embedding" || s.phase === "dual-write") {
+            void kickEmbeddingMigrationBatch({
+              agent,
+              manager,
+              config,
+              log,
+            });
+          }
+          return { ok: true, phase: s.phase };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { ok: false, error: msg };
+        }
+      }
+      case "embedding-migration-pause": {
+        // Pause = add to defaults.embeddingMigration.pausedAgents.
+        // Persisted state lives in the runtime config; the heartbeat
+        // runner consults this list before processing. NOTE: this plan
+        // ships the IPC + state-machine machinery; the heartbeat runner
+        // wiring (which actually skips paused agents) lands in wave 4.
+        const p = params as { agent?: string } | undefined;
+        const agent = p?.agent;
+        if (!agent || typeof agent !== "string") {
+          return { ok: false, error: "agent param required" };
+        }
+        const cfgEm = (config.defaults as {
+          embeddingMigration?: {
+            cpuBudgetPct?: number;
+            batchSize?: number;
+            pausedAgents?: string[];
+          };
+        }).embeddingMigration;
+        const paused = new Set<string>(cfgEm?.pausedAgents ?? []);
+        paused.add(agent);
+        if (!cfgEm) {
+          (config.defaults as {
+            embeddingMigration?: {
+              cpuBudgetPct?: number;
+              batchSize?: number;
+              pausedAgents?: string[];
+            };
+          }).embeddingMigration = {
+            cpuBudgetPct: 5,
+            batchSize: 50,
+            pausedAgents: [...paused],
+          };
+        } else {
+          cfgEm.pausedAgents = [...paused];
+        }
+        log.info(
+          { agent, action: "embedding-migration-pause" },
+          "[diag] embedding-v2 migration paused for agent",
+        );
+        return { ok: true, paused: [...paused] };
+      }
+      case "embedding-migration-resume": {
+        const p = params as { agent?: string } | undefined;
+        const agent = p?.agent;
+        if (!agent || typeof agent !== "string") {
+          return { ok: false, error: "agent param required" };
+        }
+        const cfgEm = (config.defaults as {
+          embeddingMigration?: {
+            cpuBudgetPct?: number;
+            batchSize?: number;
+            pausedAgents?: string[];
+          };
+        }).embeddingMigration;
+        const paused = new Set<string>(cfgEm?.pausedAgents ?? []);
+        paused.delete(agent);
+        if (cfgEm) cfgEm.pausedAgents = [...paused];
+        log.info(
+          { agent, action: "embedding-migration-resume" },
+          "[diag] embedding-v2 migration resumed for agent",
+        );
+        return { ok: true, paused: [...paused] };
+      }
+      // Phase 999.25 — subagent-complete intercept BEFORE routeMethod
+      // (closure-intercept pattern, mirrors secrets-status +
+      // mcp-tracker-snapshot above). The handler closes over `config`
+      // (live ref post-PR-#8 closure-capture fix), `log`, and
+      // `subagentThreadSpawner`, none of which are on routeMethod's
+      // signature. Pure helper in `relay-and-mark-completed.ts` does
+      // the lookup → idempotent-relay → stamp-completedAt; this case
+      // is a thin shell that wires deps + handles the env kill-switch
+      // + reads the live `config.defaults.subagentCompletion.enabled`
+      // toggle.
+      case "subagent-complete": {
+        const agentName = validateStringParam(params, "agentName");
+        if (process.env.CLAWCODE_SUBAGENT_COMPLETION_DISABLE === "1") {
+          return { ok: false, reason: "disabled" };
+        }
+        const sc = (config.defaults as {
+          subagentCompletion?: { enabled?: boolean };
+        }).subagentCompletion;
+        const enabled = sc?.enabled !== false;
+        // Phase 999.36 sub-bug D diag (D-12) — source-tagged completion-fired
+        // log so one observation cycle on prod identifies which firing path
+        // produces the premature autoRelay/autoArchive race. Plan 02 will
+        // use these tags to gate completion on streamFullyDrained &&
+        // deliveryConfirmed (D-13) without changing behavior here.
+        log.info(
+          { source: "explicit-tool", agent: agentName },
+          "[diag] subagent-complete-fired",
+        );
+        // 2026-05-08 hotfix: capture into local const so TS narrows across
+        // the closure boundary (post-TDZ-fix the outer is `let`, which TS
+        // doesn't narrow inside the arrow-function below even with a check).
+        const spawnerLocal = subagentThreadSpawner;
+        return relayAndMarkCompletedByAgentName(
+          {
+            readThreadRegistry: () =>
+              readThreadRegistry(THREAD_REGISTRY_PATH),
+            writeThreadRegistry: (next) =>
+              writeThreadRegistry(THREAD_REGISTRY_PATH, next),
+            relayCompletionToParent: spawnerLocal
+              ? (threadId) => spawnerLocal.relayCompletionToParent(threadId)
+              : null,
+            now: () => Date.now(),
+            log: log.child({ subsystem: "subagent-completion" }),
+            enabled,
+          },
+          agentName,
+        );
+      }
+      // =====================================================================
+      // Phase 116-03 — Tier 1.5 operator workflow IPC handlers (F26/F27/F28).
+      // Closure-intercept pattern (mirrors embedding-migration-* + secrets-status
+      // above). Grouped contiguously to minimize merge surface with sibling
+      // plans. All three feature areas share this block; append further
+      // workflow IPC additions inside this fence.
+      // =====================================================================
+
+      // F26 — In-UI agent config editor.
+      //
+      // get-agent-config returns the live RESOLVED agent block (merged
+      // defaults + per-agent fields, the same shape `resolveAllAgents` hands
+      // session-adapter) PLUS the operator's RAW partial from clawcode.yaml
+      // so the editor can show "this is what you wrote" vs "this is what
+      // takes effect after merge". Restart-required vs hot-reloadable
+      // classification is sourced from RELOADABLE_FIELDS so the UI can
+      // grey out restart-only knobs without re-encoding the list.
+      case "get-agent-config": {
+        const agentName = validateStringParam(params, "agent");
+        const resolved = resolvedAgents.find((a) => a.name === agentName);
+        if (!resolved) {
+          throw new ManagerError(`Agent not found: ${agentName}`);
+        }
+        const rawAgent = config.agents.find((a) => a.name === agentName) ?? null;
+        return {
+          agent: agentName,
+          resolved,
+          raw: rawAgent,
+          // Field paths the operator MAY edit and have take effect without a
+          // daemon restart. Encoded as the local agent-block key names (not
+          // the `agents.<name>.x` form) so the UI maps 1:1 to form fields.
+          hotReloadableFields: [
+            "channels",
+            "skills",
+            "schedules",
+            "heartbeat",
+            "effort",
+            "allowedModels",
+            "greetOnRestart",
+            "greetCoolDownMs",
+            "memoryAutoLoad",
+            "memoryAutoLoadPath",
+            "memoryRetrievalTopK",
+            "memoryRetrievalTokenBudget",
+            "memoryRetrievalExcludeTags",
+            "memoryScannerEnabled",
+            "memoryFlushIntervalMs",
+            "memoryCueEmoji",
+            "systemPromptDirectives",
+            "dream",
+            "fileAccess",
+            "outputDir",
+          ],
+          restartRequiredFields: [
+            "name",
+            "workspace",
+            "memoryPath",
+            "model",
+            "settingSources",
+            "gsd",
+            "excludeDynamicSections",
+            "cacheBreakpointPlacement",
+            "soulFile",
+            "identityFile",
+          ],
+        };
+      }
+
+      // update-agent-config — Zod-validate the partial against the
+      // PARTIAL agent schema BEFORE any disk write, then call
+      // patchAgentInYaml() which does the atomic temp+rename. Rejecting
+      // invalid bodies BEFORE patching means a broken YAML never lands on
+      // disk; ConfigWatcher's reload path would otherwise be left holding
+      // the bag (the watcher logs the parse error and silently keeps the
+      // old config — operator wouldn't see why their edit didn't apply).
+      // Returns the patcher result verbatim so the UI can render
+      // "hot-reloaded: [channels, model]" vs "needs restart: [workspace]"
+      // in the save success toast. The PUT route surfaces a 400 on bad
+      // bodies; success returns 200.
+      case "update-agent-config": {
+        const agentName = validateStringParam(params, "agent");
+        const partialRaw = (params as { partial?: unknown }).partial;
+        if (typeof partialRaw !== "object" || partialRaw === null) {
+          throw new ManagerError(
+            "Missing required parameter: partial (object)",
+          );
+        }
+        // Zod partial: every agent-schema field becomes optional. We reject
+        // `name` even when supplied — operator must use `clawcode restart`
+        // and a manual yaml edit to rename an agent (memoryPath / inbox dir
+        // are coupled).
+        const partialObj = partialRaw as Record<string, unknown>;
+        if ("name" in partialObj) {
+          throw new ManagerError(
+            "Cannot patch agent `name` — rename requires a full restart + yaml edit",
+          );
+        }
+        const partialSchema = (
+          agentSchema as unknown as {
+            partial: () => { parse: (v: unknown) => Record<string, unknown> };
+          }
+        ).partial();
+        const parsed = partialSchema.parse(partialObj);
+        const result = await patchAgentInYaml({
+          existingConfigPath: configPath,
+          agentName,
+          partial: parsed,
+        });
+        if (result.outcome === "not-found") {
+          throw new ManagerError(
+            `Agent '${agentName}' not in clawcode.yaml: ${result.reason}`,
+          );
+        }
+        if (result.outcome === "file-not-found") {
+          throw new ManagerError(result.reason);
+        }
+        if (result.outcome === "no-op") {
+          return {
+            written: false,
+            reason: result.reason,
+            hotReloaded: [],
+            agentsNeedingRestart: [],
+          };
+        }
+        // result.outcome === "updated"
+        log.info(
+          {
+            agent: agentName,
+            hotReloaded: result.hotReloadedFields,
+            restartRequired: result.restartRequiredFields,
+            sha256: result.targetSha256,
+          },
+          "[F26] agent config patched on disk",
+        );
+        return {
+          written: true,
+          sha256: result.targetSha256,
+          hotReloaded: result.hotReloadedFields,
+          agentsNeedingRestart:
+            result.restartRequiredFields.length > 0 ? [agentName] : [],
+          restartRequiredFields: result.restartRequiredFields,
+        };
+      }
+
+      // hot-reload-now — force-touch the clawcode.yaml mtime so chokidar
+      // schedules an immediate reload tick. The watcher debounces at 500ms
+      // (default in ConfigWatcher constructor); after the PUT lands the
+      // operator may want hot-reloadable fields applied without waiting.
+      // We bump mtime by writing the same bytes back via temp+rename — that
+      // way the actual content hash on disk doesn't shift and audit-trail
+      // sees `(no changes detected)` if the prior update-agent-config call
+      // already wrote the file (chokidar fires; differ.diffConfigs returns
+      // empty; watcher logs debug and exits). Safe to call repeatedly.
+      case "hot-reload-now": {
+        // The simplest reliable trigger: re-read the file bytes and write
+        // them back via the same temp+rename pattern. Any chokidar listener
+        // sees one change event. We deliberately do NOT call
+        // configWatcher.reload directly — that method is private and the
+        // public `start()`/`stop()` surface doesn't expose a manual tick.
+        const { readFile, writeFile, rename } = await import(
+          "node:fs/promises"
+        );
+        const { dirname, join } = await import("node:path");
+        const bytes = await readFile(configPath, "utf8");
+        const tmp = join(
+          dirname(configPath),
+          `.clawcode.yaml.${process.pid}.${Date.now()}.touch.tmp`,
+        );
+        await writeFile(tmp, bytes, "utf8");
+        await rename(tmp, configPath);
+        log.info({ path: configPath }, "[F26] hot-reload-now: touched yaml");
+        return { ok: true, touchedAt: Date.now() };
+      }
+
+      // F27 — Conversations view.
+      //
+      // search-conversations runs ConversationStore.searchTurns across one
+      // agent (when `agent` param supplied) or every resolved agent (fanout
+      // + merge by bm25 ascending). Each agent's store opens lazily through
+      // SessionManager.getConversationStore — only running agents have one,
+      // so non-running entries silently skip with an empty result.
+      //
+      // Trust filter: includeUntrustedChannels is FALSE by default (SEC-01
+      // hygiene — agent-facing search-tools default the same way). The
+      // dashboard is on 127.0.0.1 + operator-scope, but defaulting to
+      // trusted-only keeps the surface aligned with the rest of the system.
+      // Operator can opt-in via `includeUntrustedChannels: true` in params.
+      case "search-conversations": {
+        const q = validateStringParam(params, "q");
+        const agentParam =
+          params && typeof (params as { agent?: unknown }).agent === "string"
+            ? (params as { agent: string }).agent
+            : null;
+        const limit =
+          typeof (params as { limit?: unknown }).limit === "number"
+            ? Math.max(1, Math.min((params as { limit: number }).limit, 200))
+            : 50;
+        const includeUntrustedChannels =
+          (params as { includeUntrustedChannels?: unknown })
+            .includeUntrustedChannels === true;
+        const sinceMs =
+          typeof (params as { sinceMs?: unknown }).sinceMs === "number"
+            ? (params as { sinceMs: number }).sinceMs
+            : null;
+        const targets = agentParam
+          ? [agentParam]
+          : resolvedAgents.map((a) => a.name);
+
+        type Hit = {
+          turnId: string;
+          sessionId: string;
+          role: "user" | "assistant" | "system";
+          content: string;
+          bm25Score: number;
+          createdAt: string;
+          channelId: string | null;
+          isTrustedChannel: boolean;
+          agent: string;
+        };
+        const allHits: Hit[] = [];
+        let totalMatches = 0;
+        for (const agent of targets) {
+          const store = manager.getConversationStore(agent);
+          if (!store) continue;
+          try {
+            const result = store.searchTurns(q, {
+              limit,
+              offset: 0,
+              includeUntrustedChannels,
+            });
+            totalMatches += result.totalMatches;
+            for (const r of result.results) {
+              // Optional since-cutoff filter — createdAt is ISO; cheap parse.
+              if (sinceMs !== null) {
+                const t = Date.parse(r.createdAt);
+                if (!Number.isFinite(t) || t < sinceMs) continue;
+              }
+              allHits.push({ ...r, agent });
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn({ agent, q, msg }, "[F27] search-conversations failed");
+          }
+        }
+        // FTS5 BM25 — lower = better. Stable-sort ASC then truncate to limit.
+        allHits.sort((a, b) => a.bm25Score - b.bm25Score);
+        return {
+          hits: allHits.slice(0, limit),
+          totalMatches,
+          agentsQueried: targets,
+        };
+      }
+
+      // list-recent-conversations returns the recent session metadata for
+      // one agent — used by the F27 left-pane "past sessions" list. Pulls
+      // from ConversationStore.listRecentSessions (ALL statuses including
+      // 'active' — the UI marks active sessions distinctly so the operator
+      // can see in-flight turns without waiting for stop/crash to summarize).
+      case "list-recent-conversations": {
+        const agent = validateStringParam(params, "agent");
+        const limit =
+          typeof (params as { limit?: unknown }).limit === "number"
+            ? Math.max(1, Math.min((params as { limit: number }).limit, 200))
+            : 50;
+        const store = manager.getConversationStore(agent);
+        if (!store) {
+          return { agent, sessions: [] };
+        }
+        const sessions = store.listRecentSessions(agent, limit);
+        return { agent, sessions };
+      }
+
+      // F28 — Kanban task board.
+      //
+      // list-tasks-kanban returns ALL non-purged tasks grouped by status
+      // column. Six visible columns map to eight raw statuses:
+      //   Backlog   ← pending
+      //   Scheduled ← (synthetic — operator-tagged future-deadline tasks;
+      //                today maps to pending too; future plan may add a
+      //                discriminator. Leave column present but empty for
+      //                now so the UI shape is stable.)
+      //   Running   ← running
+      //   Waiting   ← awaiting_input
+      //   Failed    ← failed | timed_out | orphaned
+      //   Done      ← complete | cancelled
+      //
+      // We expose raw_status alongside the column so a UI tooltip can
+      // distinguish e.g. `complete` from `cancelled` inside the Done column.
+      case "list-tasks-kanban": {
+        const rows = taskStore.rawDb
+          .prepare(
+            `SELECT task_id, task_type, caller_agent, target_agent, status,
+                    started_at, ended_at, heartbeat_at, chain_token_cost, error
+             FROM tasks
+             ORDER BY started_at DESC
+             LIMIT 1000`,
+          )
+          .all() as Array<{
+          task_id: string;
+          task_type: string;
+          caller_agent: string;
+          target_agent: string;
+          status: string;
+          started_at: number;
+          ended_at: number | null;
+          heartbeat_at: number;
+          chain_token_cost: number;
+          error: string | null;
+        }>;
+        const columns: Record<string, typeof rows> = {
+          Backlog: [],
+          Scheduled: [],
+          Running: [],
+          Waiting: [],
+          Failed: [],
+          Done: [],
+        };
+        for (const row of rows) {
+          switch (row.status) {
+            case "pending":
+              columns.Backlog!.push(row);
+              break;
+            case "running":
+              columns.Running!.push(row);
+              break;
+            case "awaiting_input":
+              columns.Waiting!.push(row);
+              break;
+            case "failed":
+            case "timed_out":
+            case "orphaned":
+              columns.Failed!.push(row);
+              break;
+            case "complete":
+            case "cancelled":
+              columns.Done!.push(row);
+              break;
+            default:
+              log.warn({ status: row.status, task_id: row.task_id }, "unknown task status in kanban");
+          }
+        }
+        return { columns, total: rows.length };
+      }
+
+      // create-task — operator-authored task injection. Builds a TaskRow
+      // with status='pending' (Backlog column) and a synthetic causation_id.
+      // depth=0 (operator is root; caller_agent='operator' as a sentinel).
+      // The input_digest hashes the body so the same operator-authored
+      // task can be detected if re-submitted (idempotency hint, not enforced
+      // — same as delegate-task path in router.ts).
+      case "create-task": {
+        const title = validateStringParam(params, "title");
+        const target_agent = validateStringParam(params, "target_agent");
+        const description =
+          typeof (params as { description?: unknown }).description === "string"
+            ? (params as { description: string }).description
+            : "";
+        const { randomUUID, createHash } = await import("node:crypto");
+        const task_id = randomUUID();
+        const causation_id = randomUUID();
+        const inputObj = { title, description, target_agent };
+        const input_digest = createHash("sha256")
+          .update(JSON.stringify(inputObj))
+          .digest("hex");
+        const now = Date.now();
+        const row = {
+          task_id,
+          task_type: "operator-created",
+          caller_agent: "operator",
+          target_agent,
+          causation_id,
+          parent_task_id: null,
+          depth: 0,
+          input_digest,
+          status: "pending" as const,
+          started_at: now,
+          ended_at: null,
+          heartbeat_at: now,
+          result_digest: null,
+          error: null,
+          chain_token_cost: 0,
+        };
+        taskStore.insert(row);
+        log.info(
+          { task_id, target_agent, title },
+          "[F28] operator-created task inserted",
+        );
+        return { task_id, row };
+      }
+
+      // transition-task — wraps TaskStore.transition() which itself runs
+      // assertLegalTransition before any UPDATE. Illegal transitions throw
+      // IllegalTaskTransitionError; we surface the message verbatim to the
+      // dashboard so the optimistic UI flip can be reverted with the reason
+      // displayed. The patch sub-object (result_digest / error /
+      // chain_token_cost / ended_at) is forwarded as-is.
+      case "transition-task": {
+        const task_id = validateStringParam(params, "task_id");
+        const status = validateStringParam(params, "status");
+        const patch =
+          params && typeof (params as { patch?: unknown }).patch === "object"
+            ? ((params as { patch: Record<string, unknown> }).patch)
+            : {};
+        // The TaskStatus type is the same string set the schema CHECK
+        // constraint enforces. Pass through; TaskStore.transition rejects
+        // illegal targets via assertLegalTransition.
+        const next = taskStore.transition(
+          task_id,
+          status as
+            | "pending"
+            | "running"
+            | "awaiting_input"
+            | "complete"
+            | "failed"
+            | "cancelled"
+            | "timed_out"
+            | "orphaned",
+          patch as {
+            ended_at?: number;
+            result_digest?: string | null;
+            error?: string | null;
+            chain_token_cost?: number;
+          },
+        );
+        log.info(
+          { task_id, status },
+          "[F28] task transition succeeded",
+        );
+        return { task_id, row: next };
+      }
+
+      // =====================================================================
+      // Phase 116-04 — Tier 2 deep-dive IPC handlers (F11-F15).
+      // Closure-intercept block, same convention as 116-03 above. All handlers
+      // read existing per-agent stores (ConversationStore, TraceStore, Veto-
+      // Store, MemoryStore) through the SessionManager surface. No new
+      // singletons; the daemon already owns every primitive these routes need.
+      //
+      // F11 — three-panel agent detail drawer:
+      //   list-recent-turns  -> last N conversation turns for transcript
+      // F12 — per-turn trace waterfall:
+      //   get-turn-trace     -> trace_spans rows for one turn_id
+      // F13 — cross-agent IPC inbox viewer:
+      //   list-ipc-inboxes   -> per-agent inbox state + 24h delivery log
+      // F14 — memory subsystem panel (READ-ONLY per 116-DEFERRED):
+      //   get-memory-snapshot -> tier counts + tier-1 file previews +
+      //                          vec_memories migration delta + last
+      //                          consolidation timestamps + dream status
+      // F15 — dream-pass queue + D-10 veto windows:
+      //   get-dream-queue    -> pending depth + next fire + last 7 events +
+      //                         active veto windows
+      //   veto-dream-run     -> operator veto on a D-10 window with rationale
+      // =====================================================================
+
+      // F11 — last N conversation turns for the drawer's center column.
+      // Reads conversation_turns table directly via the store's getDatabase()
+      // accessor (Phase 90 read-only pattern; same as Plan 116-03 F27 search
+      // path). Returns rows in DESCENDING `created_at` order so the UI can
+      // prepend live `conversation-turn` SSE events to the head of the list
+      // without re-sorting.
+      //
+      // Trust filter: defaults to SEC-01 hygiene (untrusted Discord channels
+      // excluded), matches the F27 search default. Untrusted turns are
+      // visible only when the operator explicitly passes
+      // includeUntrustedChannels=true (future operator-toggle in the drawer).
+      case "list-recent-turns": {
+        const agent = validateStringParam(params, "agent");
+        const limit =
+          typeof (params as { limit?: unknown }).limit === "number"
+            ? Math.max(1, Math.min((params as { limit: number }).limit, 200))
+            : 50;
+        const includeUntrustedChannels =
+          (params as { includeUntrustedChannels?: unknown })
+            .includeUntrustedChannels === true;
+        // 116-postdeploy Bug 2 — optional session pin. When sessionId is
+        // present the result is constrained to one session's turns in
+        // chronological ORDER ASC (so the UI can render top-to-bottom
+        // without re-sorting). Used by the F27 transcript pane added in
+        // the same fix. When absent the original DESC-by-created_at
+        // recent-turns behaviour is preserved (F11 drawer center column).
+        const sessionId =
+          typeof (params as { sessionId?: unknown }).sessionId === "string" &&
+          (params as { sessionId: string }).sessionId.length > 0
+            ? (params as { sessionId: string }).sessionId
+            : null;
+        const store = manager.getConversationStore(agent);
+        if (!store) {
+          return { agent, turns: [] };
+        }
+        // Direct read against conversation_turns. The store's public surface
+        // (searchTurns / listRecentSessions) doesn't expose this; rather
+        // than add a new public method on ConversationStore (which has its
+        // own test surface), we inline the prepared statement here. Trust
+        // filter mirrors the WHERE clause in searchTurns.
+        const db = store.getDatabase();
+        const trustClause = includeUntrustedChannels
+          ? ""
+          : "AND (is_trusted_channel = 1 OR channel_id IS NULL)";
+        // The leading `WHERE 1=1` lets us append both the trust clause and
+        // the optional session_id predicate as plain `AND …` fragments
+        // without branching on which is present. SQLite's planner folds
+        // the constant predicate at prepare time.
+        const sessionClause = sessionId !== null ? "AND session_id = ?" : "";
+        // For session-pinned queries: chronological order so transcript
+        // renders top→bottom. For unfiltered queries: reverse-chronological
+        // so the F11 drawer can prepend SSE events without re-sorting.
+        const orderClause =
+          sessionId !== null
+            ? "ORDER BY turn_index ASC"
+            : "ORDER BY created_at DESC";
+        const sql = `
+          SELECT id, session_id, turn_index, role, content, token_count,
+                 channel_id, discord_user_id, discord_message_id,
+                 is_trusted_channel, origin, created_at
+          FROM conversation_turns
+          WHERE 1=1 ${trustClause} ${sessionClause}
+          ${orderClause}
+          LIMIT ?
+        `;
+        const sqlParams: Array<string | number> =
+          sessionId !== null ? [sessionId, limit] : [limit];
+        const rows = db.prepare(sql).all(...sqlParams) as ReadonlyArray<{
+          id: string;
+          session_id: string;
+          turn_index: number;
+          role: string;
+          content: string;
+          token_count: number | null;
+          channel_id: string | null;
+          discord_user_id: string | null;
+          discord_message_id: string | null;
+          is_trusted_channel: number;
+          origin: string | null;
+          created_at: string;
+        }>;
+        return {
+          agent,
+          turns: rows.map((r) => ({
+            turnId: r.id,
+            sessionId: r.session_id,
+            turnIndex: r.turn_index,
+            role: r.role,
+            content: r.content,
+            tokenCount: r.token_count,
+            channelId: r.channel_id,
+            discordUserId: r.discord_user_id,
+            discordMessageId: r.discord_message_id,
+            isTrustedChannel: r.is_trusted_channel === 1,
+            origin: r.origin,
+            createdAt: r.created_at,
+          })),
+        };
+      }
+
+      // F12 — trace_spans for one turn_id. Reads via TraceStore's public
+      // getDatabase() accessor (same READ-ONLY contract as the warmup
+      // queries in AgentMemoryManager). Returns spans sorted by started_at
+      // so the SVG waterfall can render top-to-bottom without re-sorting.
+      // Also returns the parent `traces` row metadata (total_ms,
+      // cache_eviction_expected) for the waterfall header strip.
+      //
+      // Optional `withPercentiles` flag — if true, batches a per-span-name
+      // percentile lookup for the 24h window so the hover tooltip can render
+      // "p47 of 24h" without a second round-trip. Capped to the 6 canonical
+      // names + the actual tool_call.* names in this turn (small set).
+      case "get-turn-trace": {
+        const agent = validateStringParam(params, "agent");
+        const turnId = validateStringParam(params, "turnId");
+        const store = manager.getTraceStore(agent);
+        if (!store) {
+          throw new ManagerError(
+            `Trace store not found for agent '${agent}' (agent may not be running)`,
+          );
+        }
+        const db = store.getDatabase();
+        const turnRow = db
+          .prepare(
+            `SELECT id, agent, started_at, ended_at, total_ms,
+                    discord_channel_id, status, cache_eviction_expected
+             FROM traces WHERE id = ?`,
+          )
+          .get(turnId) as
+          | {
+              id: string;
+              agent: string;
+              started_at: string;
+              ended_at: string;
+              total_ms: number;
+              discord_channel_id: string | null;
+              status: string;
+              cache_eviction_expected: number | null;
+            }
+          | undefined;
+        if (!turnRow) {
+          throw new ManagerError(
+            `Turn not found: ${turnId} (agent=${agent})`,
+          );
+        }
+        const spanRows = db
+          .prepare(
+            `SELECT name, started_at, duration_ms, metadata_json
+             FROM trace_spans
+             WHERE turn_id = ?
+             ORDER BY started_at ASC`,
+          )
+          .all(turnId) as ReadonlyArray<{
+          name: string;
+          started_at: string;
+          duration_ms: number;
+          metadata_json: string | null;
+        }>;
+        return {
+          turn: {
+            id: turnRow.id,
+            agent: turnRow.agent,
+            startedAt: turnRow.started_at,
+            endedAt: turnRow.ended_at,
+            totalMs: turnRow.total_ms,
+            discordChannelId: turnRow.discord_channel_id,
+            status: turnRow.status,
+            cacheEvictionExpected: turnRow.cache_eviction_expected === 1,
+          },
+          spans: spanRows.map((s) => ({
+            name: s.name,
+            startedAt: s.started_at,
+            durationMs: s.duration_ms,
+            metadata: s.metadata_json,
+          })),
+        };
+      }
+
+      // F13 — per-agent IPC inbox snapshot + fleet 24h delivery log.
+      //
+      // Two-part response:
+      //   inboxes[]: per-agent pending message count + last-modified time of
+      //              the inbox directory (the "heartbeat" proxy — chokidar's
+      //              watch tick fires on any file write, but the dir mtime
+      //              is the cheapest cross-platform freshness signal).
+      //   deliveryLog[]: last 24h of cross-agent send/post/ask traffic from
+      //              the delivery queue (status: pending|delivered|failed).
+      //
+      // Inbox dir resolution: agent.memoryPath + "/inbox" (same path
+      // captured.ts uses to write inbox files via writeMessage in
+      // src/collaboration/inbox.ts). For agents with no memoryPath we
+      // return zero counts rather than scanning.
+      case "list-ipc-inboxes": {
+        const { readdir, stat: fsStat } = await import("node:fs/promises");
+        const { join: joinPath } = await import("node:path");
+        const inboxes: Array<{
+          agent: string;
+          pending: number;
+          lastModified: string | null;
+          inboxDir: string;
+          error?: string;
+        }> = [];
+        for (const cfg of resolvedAgents) {
+          if (!cfg.memoryPath) {
+            inboxes.push({
+              agent: cfg.name,
+              pending: 0,
+              lastModified: null,
+              inboxDir: "",
+            });
+            continue;
+          }
+          const inboxDir = joinPath(cfg.memoryPath, "inbox");
+          try {
+            const entries = await readdir(inboxDir);
+            const jsonFiles = entries.filter((f) => f.endsWith(".json"));
+            let lastModifiedMs = 0;
+            for (const f of jsonFiles) {
+              try {
+                const st = await fsStat(joinPath(inboxDir, f));
+                if (st.mtimeMs > lastModifiedMs)
+                  lastModifiedMs = st.mtimeMs;
+              } catch {
+                // unreadable file — skip without failing the whole agent
+              }
+            }
+            inboxes.push({
+              agent: cfg.name,
+              pending: jsonFiles.length,
+              lastModified:
+                lastModifiedMs > 0
+                  ? new Date(lastModifiedMs).toISOString()
+                  : null,
+              inboxDir,
+            });
+          } catch (err) {
+            // ENOENT — inbox dir not yet created. Treat as empty.
+            const errCode = (err as { code?: string }).code;
+            if (errCode === "ENOENT") {
+              inboxes.push({
+                agent: cfg.name,
+                pending: 0,
+                lastModified: null,
+                inboxDir,
+              });
+            } else {
+              inboxes.push({
+                agent: cfg.name,
+                pending: 0,
+                lastModified: null,
+                inboxDir,
+                error:
+                  err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        }
+
+        // Outbound Discord delivery health from delivery-queue.db. The queue
+        // tracks agent → channel SENDS (one row per outbound message).
+        // Cross-agent IPC (send_to_agent / ask_agent) does NOT flow through
+        // this queue — those are file-based via writeMessage to the
+        // recipient's inbox dir + InboxSource pickup (fire-and-forget;
+        // recipient discovery is the inboxes[] surface above).
+        //
+        // We expose:
+        //   - deliveryStats: { pending, inFlight, failed, delivered, totalEnqueued }
+        //   - recentFailures: last 50 permanently-failed sends (for inline
+        //     fleet-wide failure list in the F13 panel)
+        let deliveryStats: unknown = null;
+        let recentFailures: ReadonlyArray<unknown> = [];
+        try {
+          deliveryStats = deliveryQueue.getStats();
+          recentFailures = deliveryQueue.getFailedEntries(50);
+        } catch (err) {
+          log.warn(
+            { err },
+            "[F13] delivery-queue probe failed; returning empty stats",
+          );
+        }
+        return { inboxes, deliveryStats, recentFailures };
+      }
+
+      // F14 — memory subsystem snapshot (READ-ONLY in v1; in-UI editor
+      // explicitly DEFERRED per .planning/phases/116-.../116-DEFERRED.md).
+      //
+      // Aggregates:
+      //   - tier counts (hot/warm/cold) from MemoryStore
+      //   - tier-1 file previews (first 1000 chars each): SOUL.md /
+      //     IDENTITY.md / MEMORY.md / USER.md from agent.memoryPath
+      //   - vec_memories vs vec_memories_v2 migration delta from
+      //     EmbeddingV2Migrator state (Phase 90 / 115)
+      //   - last 5 consolidation events from the dream-pass log dir
+      //     (~/<memoryRoot>/dreams/*.md) — file list with mtime
+      //   - dream-pass schedule status (next fire + last fire timestamp)
+      //     surfaced as a forward-pointer; full surface lives in F15
+      //
+      // For each tier-1 file we also return last-modified + total bytes so
+      // the UI can render "5,234 chars total (showing 1,000)". File reads
+      // are best-effort: ENOENT returns null for that slot rather than
+      // throwing the whole snapshot.
+      case "get-memory-snapshot": {
+        const agent = validateStringParam(params, "agent");
+        const cfg = resolvedAgents.find((a) => a.name === agent);
+        if (!cfg) {
+          throw new ManagerError(`Agent not found: ${agent}`);
+        }
+        const { readFile: rf, stat: fsStat } = await import(
+          "node:fs/promises"
+        );
+        const { join: joinPath } = await import("node:path");
+
+        const PREVIEW_LEN = 1000;
+        const tier1FileNames = [
+          "SOUL.md",
+          "IDENTITY.md",
+          "MEMORY.md",
+          "USER.md",
+        ];
+
+        type FilePreview = {
+          name: string;
+          path: string;
+          preview: string | null;
+          totalChars: number;
+          lastModified: string | null;
+          error?: string;
+        };
+
+        const files: FilePreview[] = [];
+        if (cfg.memoryPath) {
+          for (const fname of tier1FileNames) {
+            const fpath = joinPath(cfg.memoryPath, fname);
+            try {
+              const content = await rf(fpath, "utf8");
+              const st = await fsStat(fpath);
+              files.push({
+                name: fname,
+                path: fpath,
+                preview:
+                  content.length > PREVIEW_LEN
+                    ? content.slice(0, PREVIEW_LEN)
+                    : content,
+                totalChars: content.length,
+                lastModified: new Date(st.mtimeMs).toISOString(),
+              });
+            } catch (err) {
+              const errCode = (err as { code?: string }).code;
+              if (errCode === "ENOENT") {
+                files.push({
+                  name: fname,
+                  path: fpath,
+                  preview: null,
+                  totalChars: 0,
+                  lastModified: null,
+                });
+              } else {
+                files.push({
+                  name: fname,
+                  path: fpath,
+                  preview: null,
+                  totalChars: 0,
+                  lastModified: null,
+                  error:
+                    err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+          }
+        }
+
+        // Tier counts via MemoryStore. The store carries hot/warm/cold
+        // discrimination per Phase 56+ tier model. Returns zeros if the
+        // store isn't running yet (race at agent boot).
+        let tierCounts: {
+          hot: number;
+          warm: number;
+          cold: number;
+          total: number;
+        } = { hot: 0, warm: 0, cold: 0, total: 0 };
+        let migrationDelta: {
+          vecMemoriesRows: number | null;
+          vecMemoriesV2Rows: number | null;
+          phase: string | null;
+        } = {
+          vecMemoriesRows: null,
+          vecMemoriesV2Rows: null,
+          phase: null,
+        };
+        try {
+          const memStore = manager.getMemoryStore(agent);
+          if (memStore) {
+            const db = memStore.getDatabase();
+            // Tier counts — `tier` column is added in Phase 56+ migrations.
+            try {
+              const rows = db
+                .prepare(
+                  `SELECT tier, COUNT(*) as n FROM memories GROUP BY tier`,
+                )
+                .all() as ReadonlyArray<{ tier: string | null; n: number }>;
+              for (const r of rows) {
+                tierCounts.total += r.n;
+                if (r.tier === "hot") tierCounts.hot += r.n;
+                else if (r.tier === "warm") tierCounts.warm += r.n;
+                else if (r.tier === "cold") tierCounts.cold += r.n;
+              }
+            } catch {
+              // Older agents may not yet have the tier column; total only.
+              const row = db
+                .prepare(`SELECT COUNT(*) as n FROM memories`)
+                .get() as { n: number };
+              tierCounts.total = row.n;
+            }
+            // Migration delta — vec_memories vs vec_memories_v2. Tables may
+            // not exist; guard each.
+            try {
+              const v1 = db
+                .prepare(`SELECT COUNT(*) as n FROM vec_memories`)
+                .get() as { n: number };
+              migrationDelta.vecMemoriesRows = v1.n;
+            } catch {
+              // table absent — leave null
+            }
+            try {
+              const v2 = db
+                .prepare(`SELECT COUNT(*) as n FROM vec_memories_v2`)
+                .get() as { n: number };
+              migrationDelta.vecMemoriesV2Rows = v2.n;
+            } catch {
+              // table absent — leave null
+            }
+          }
+        } catch (err) {
+          log.warn(
+            { err, agent },
+            "[F14] memory snapshot store probe failed; returning partial",
+          );
+        }
+
+        // Last 5 dream/consolidation log entries from the daily dream-log
+        // markdown files. Pattern from src/manager/dream-log-writer.ts.
+        type ConsolidationEntry = {
+          file: string;
+          lastModified: string;
+          sizeBytes: number;
+        };
+        const consolidations: ConsolidationEntry[] = [];
+        if (cfg.memoryPath) {
+          const dreamsDir = joinPath(cfg.memoryPath, "dreams");
+          try {
+            const { readdir: rd } = await import("node:fs/promises");
+            const entries = await rd(dreamsDir);
+            const mdFiles = entries.filter((e) => e.endsWith(".md"));
+            const stats = await Promise.all(
+              mdFiles.map(async (f) => {
+                try {
+                  const st = await fsStat(joinPath(dreamsDir, f));
+                  return {
+                    file: f,
+                    lastModified: new Date(st.mtimeMs).toISOString(),
+                    sizeBytes: st.size,
+                  };
+                } catch {
+                  return null;
+                }
+              }),
+            );
+            for (const s of stats) {
+              if (s) consolidations.push(s);
+            }
+            consolidations.sort((a, b) =>
+              b.lastModified.localeCompare(a.lastModified),
+            );
+            consolidations.splice(5);
+          } catch {
+            // dreams dir absent — empty list
+          }
+        }
+
+        return {
+          agent,
+          memoryPath: cfg.memoryPath ?? null,
+          files,
+          tierCounts,
+          migrationDelta,
+          consolidations,
+          editAffordance: {
+            available: false,
+            // Operator-facing hint surfacing the CLI flow (per 116-DEFERRED
+            // operator decision — in-UI editor is a separate follow-up
+            // phase). UI renders this as a tooltip on each disabled "Edit"
+            // button.
+            hint: "In-UI editing is deferred. Use `clawcode memory edit <agent> <file>` (filesystem CLI flow) — see 116-DEFERRED.md for rationale.",
+          },
+        };
+      }
+
+      // F15 — dream-pass queue snapshot.
+      //
+      // Three data sources, each best-effort:
+      //   1. Last 7 dream events from the per-agent dream-log markdown
+      //      files (~/<memoryRoot>/dreams/YYYY-MM-DD.md). Each file may
+      //      hold multiple "## [HH:MM UTC] Dream pass" sections; we
+      //      grep-count headers + read the most-recent's metadata.
+      //   2. Pending D-10 veto windows from dream-veto-pending.jsonl
+      //      (createDreamVetoStore().list() reducing by runId to latest).
+      //   3. Next scheduled fire — derived from the agent's cron config
+      //      (config.agents[*].dream.cron). The actual cron scheduler
+      //      isn't directly registered in daemon.ts today (see
+      //      `grep registerDreamCron` — wired via test paths); we surface
+      //      the configured CRON string + the cfg.dream.* fields so the
+      //      UI can render "next fire: ~Xh from now" using croner client-
+      //      side parsing without round-tripping through the daemon for
+      //      every refresh.
+      case "get-dream-queue": {
+        const agent = validateStringParam(params, "agent");
+        const cfg = resolvedAgents.find((a) => a.name === agent);
+        if (!cfg) {
+          throw new ManagerError(`Agent not found: ${agent}`);
+        }
+        const { readFile: rf, stat: fsStat, readdir: rd } = await import(
+          "node:fs/promises"
+        );
+        const { join: joinPath } = await import("node:path");
+
+        // 1. Last 7 dream events
+        type DreamEvent = {
+          file: string;
+          lastModified: string;
+          headerCount: number; // number of "## " headers in the file
+        };
+        const events: DreamEvent[] = [];
+        if (cfg.memoryPath) {
+          const dreamsDir = joinPath(cfg.memoryPath, "dreams");
+          try {
+            const entries = await rd(dreamsDir);
+            const mdFiles = entries.filter((e) => e.endsWith(".md"));
+            for (const f of mdFiles) {
+              try {
+                const fpath = joinPath(dreamsDir, f);
+                const st = await fsStat(fpath);
+                const content = await rf(fpath, "utf8");
+                const headerCount = (content.match(/^## /gm) ?? []).length;
+                events.push({
+                  file: f,
+                  lastModified: new Date(st.mtimeMs).toISOString(),
+                  headerCount,
+                });
+              } catch {
+                // skip unreadable
+              }
+            }
+            events.sort((a, b) =>
+              b.lastModified.localeCompare(a.lastModified),
+            );
+            events.splice(7);
+          } catch {
+            // ENOENT — no dreams yet
+          }
+        }
+
+        // 2. Pending D-10 veto windows. Lazy import to avoid cost when no
+        //    veto path has ever fired.
+        type VetoWindow = {
+          runId: string;
+          agentName: string;
+          candidateCount: number;
+          deadline: number;
+          isPriorityPass: boolean;
+          status: string;
+          scheduledAt: string;
+        };
+        const pending: VetoWindow[] = [];
+        try {
+          const { createDreamVetoStore } = await import(
+            "./dream-veto-store.js"
+          );
+          const store = createDreamVetoStore();
+          const rows = await store.list();
+          // Reduce by runId to latest row, then filter to pending matching
+          // this agent.
+          const byRunId = new Map<string, (typeof rows)[number]>();
+          for (const r of rows) {
+            byRunId.set(r.runId, r);
+          }
+          for (const r of byRunId.values()) {
+            if (r.agentName === agent && r.status === "pending") {
+              pending.push({
+                runId: r.runId,
+                agentName: r.agentName,
+                candidateCount: r.candidates.length,
+                deadline: r.deadline,
+                isPriorityPass: r.isPriorityPass,
+                status: r.status,
+                scheduledAt: r.scheduledAt,
+              });
+            }
+          }
+        } catch (err) {
+          log.warn(
+            { err, agent },
+            "[F15] dream-veto-store probe failed; returning empty pending list",
+          );
+        }
+
+        // 3. Next-fire schedule — config-derived. The dream-cron scheduler
+        //    fires when the agent has been idle for `idleMinutes` minutes.
+        //    The schema doesn't carry a literal cron string; the UI renders
+        //    "next fire: idle ≥ Xm" rather than a wall-clock countdown.
+        //    retentionDays surfaces so the operator sees the consolidation
+        //    horizon at a glance.
+        const dreamConfig = cfg.dream
+          ? {
+              enabled: cfg.dream.enabled,
+              idleMinutes: cfg.dream.idleMinutes,
+              model: cfg.dream.model,
+              retentionDays: cfg.dream.retentionDays ?? null,
+            }
+          : null;
+
+        return {
+          agent,
+          events,
+          pendingVetoWindows: pending,
+          dreamConfig,
+        };
+      }
+
+      // F15 — operator-fired veto on a D-10 pending window. The plan's
+      // `:windowId` and the VetoStore's `runId` are the same identifier;
+      // we use `runId` in the IPC contract for parity with the store.
+      // Rationale is required (operator-supplied free text) and capped at
+      // 200 chars defensively (same truncation the veto-store applies).
+      case "veto-dream-run": {
+        const runId = validateStringParam(params, "runId");
+        const reason = validateStringParam(params, "reason");
+        if (reason.length === 0) {
+          throw new ManagerError("veto reason must be non-empty");
+        }
+        const { createDreamVetoStore } = await import(
+          "./dream-veto-store.js"
+        );
+        const store = createDreamVetoStore();
+        await store.vetoRun(runId, reason);
+        log.info({ runId, reasonLen: reason.length }, "[F15] dream veto recorded");
+        return { runId, vetoed: true, recordedAt: new Date().toISOString() };
+      }
+
+      // Phase 116-postdeploy 2026-05-12 — list recent dream-pass artefacts
+      // for the dashboard /memory page. Reads memory/dreams/*.md from the
+      // target agent's memoryPath. Best-effort + ENOENT-tolerant: a fresh
+      // agent with no dreams yet returns `{artifacts: []}` rather than
+      // erroring. Body content is truncated to `previewChars` (default 800)
+      // to keep IPC payloads small; the SPA renders the preview in a card
+      // and an operator can open the file in their editor for the full text.
+      case "list-dream-artifacts": {
+        const agentName = validateStringParam(params, "agent");
+        const limit =
+          typeof params.limit === "number" && params.limit > 0
+            ? Math.min(Math.floor(params.limit), 100)
+            : 20;
+        const previewChars =
+          typeof params.previewChars === "number" && params.previewChars > 0
+            ? Math.min(Math.floor(params.previewChars), 4000)
+            : 800;
+        const cfg = resolvedAgents.find((a) => a.name === agentName);
+        if (!cfg) {
+          throw new ManagerError(`Agent not found: ${agentName}`);
+        }
+        if (!cfg.memoryPath) {
+          return { artifacts: [], memoryPath: null };
+        }
+        const { readdir, readFile, stat: fsStat } = await import(
+          "node:fs/promises"
+        );
+        const { join: joinPath } = await import("node:path");
+        // memoryPath is already the root that contains dreams/ + inbox/ as
+        // direct children (cf. writeDreamLog in src/manager/dream-log-writer.ts
+        // which joins `${memoryRoot}/dreams`, and the list-ipc-inboxes
+        // handler above which joins `${memoryPath}/inbox`). Do NOT nest
+        // another "memory" segment in between — that would silently return
+        // empty results in production.
+        const dreamsDir = joinPath(cfg.memoryPath, "dreams");
+        let names: string[];
+        try {
+          names = await readdir(dreamsDir);
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code === "ENOENT") {
+            return { artifacts: [], memoryPath: dreamsDir };
+          }
+          throw err;
+        }
+        const mdFiles = names.filter((n) => n.endsWith(".md"));
+        // Sort by name descending — dream filenames are YYYY-MM-DD.md so a
+        // lexicographic sort gives newest-first without a stat() each.
+        mdFiles.sort((a, b) => b.localeCompare(a));
+        const slice = mdFiles.slice(0, limit);
+        const artifacts: Array<{
+          file: string;
+          path: string;
+          date: string | null;
+          sizeBytes: number;
+          mtime: string | null;
+          preview: string;
+        }> = [];
+        for (const name of slice) {
+          const filePath = joinPath(dreamsDir, name);
+          let st;
+          try {
+            st = await fsStat(filePath);
+          } catch {
+            continue;
+          }
+          let raw = "";
+          try {
+            raw = await readFile(filePath, "utf-8");
+          } catch {
+            // unreadable — push placeholder + size from stat
+          }
+          const dateMatch = name.match(/^(\d{4}-\d{2}-\d{2})/);
+          const preview = raw
+            ? raw.slice(0, previewChars) +
+              (raw.length > previewChars ? "…" : "")
+            : "";
+          artifacts.push({
+            file: name,
+            path: filePath,
+            date: dateMatch ? dateMatch[1]! : null,
+            sizeBytes: st.size,
+            mtime: new Date(st.mtimeMs).toISOString(),
+            preview,
+          });
+        }
+        return { artifacts, memoryPath: dreamsDir };
+      }
+
+      // =====================================================================
+      // Phase 116-05 — Fleet-scale + cost IPC handlers (F16/F17).
+      // Same closure-intercept convention as 116-03/116-04 above. Both
+      // handlers read from already-open singletons (per-agent UsageTracker
+      // via SessionManager + the daemon-scope EscalationBudget). No new
+      // schema, no new singletons.
+      //
+      // F17 — cost dashboard:
+      //   costs-daily    -> per-day cost rows for the trend chart.
+      //   budget-status  -> EscalationBudget gauges (tokens) per agent
+      //                     per model per period (daily + weekly).
+      //
+      // F16 reuses existing per-agent IPC routes — no new daemon surface.
+      //
+      // SCOPE CAVEAT: `getRunningAgents()` is used for both handlers, same
+      // as the existing `costs` handler at line ~9201. UsageTracker
+      // instances close on stopAgent; rebuilding them for historical reads
+      // on stopped agents would mean opening usage.db from disk + caching.
+      // Out of scope for 116-05; documented as a forward-pointer in the
+      // SUMMARY. Operators viewing a 30d trend for a stopped agent will
+      // see zero rows; restart the agent to surface its historical data.
+      // =====================================================================
+
+      case "costs-daily": {
+        // F17 per-day cost trend rows. Params:
+        //   days?  (number, 1..90, default 30) — window size in days,
+        //          UTC-aligned from start-of-day (now - days+1) through now.
+        //   agent? (string)                    — restrict to one agent
+        // Returns: { days, since, until, rows: CostByDay[] }
+        //
+        // Each CostByDay row is one (date, agent, model) bucket. The
+        // dashboard re-stacks client-side (per-agent OR per-model toggle).
+        const rawDays = (params as { days?: unknown }).days;
+        const days =
+          typeof rawDays === "number" && Number.isFinite(rawDays)
+            ? Math.max(1, Math.min(Math.floor(rawDays), 90))
+            : 30;
+        const agentFilter =
+          typeof (params as { agent?: unknown }).agent === "string" &&
+          (params as { agent: string }).agent.length > 0
+            ? (params as { agent: string }).agent
+            : null;
+        const now = new Date();
+        // UTC start-of-day(now - (days-1)) → inclusive lower bound covering
+        // exactly `days` daily buckets.
+        const sinceUtc = new Date(
+          Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - (days - 1),
+            0,
+            0,
+            0,
+            0,
+          ),
+        );
+        const sinceIso = sinceUtc.toISOString();
+        const untilIso = now.toISOString();
+
+        const agentList = agentFilter
+          ? [agentFilter]
+          : manager.getRunningAgents();
+
+        const rows: Array<{
+          date: string;
+          agent: string;
+          model: string;
+          tokens_in: number;
+          tokens_out: number;
+          cost_usd: number;
+        }> = [];
+        for (const agentName of agentList) {
+          const tracker = manager.getUsageTracker(agentName);
+          if (!tracker) continue;
+          const dayRows = tracker.getCostsByDay(sinceIso, untilIso);
+          for (const r of dayRows) {
+            rows.push({
+              date: r.date,
+              agent: r.agent,
+              model: r.model,
+              tokens_in: r.tokens_in,
+              tokens_out: r.tokens_out,
+              cost_usd: r.cost_usd,
+            });
+          }
+        }
+        return {
+          days,
+          since: sinceIso,
+          until: untilIso,
+          rows,
+        };
+      }
+
+      case "budget-status": {
+        // F17 budget gauges. Returns one row per (agent, model, period)
+        // pairing the configured token limit with the current period's
+        // tokens_used. Models with no limit configured are omitted (no
+        // gauge to render). Periods covered: daily + weekly (the two
+        // EscalationBudget natively tracks).
+        //
+        // UNITS: TOKENS (matches schema). The dashboard renders these on a
+        // separate row from the USD spend cards. Conversion to USD would
+        // need a model-pricing lookup per row — defensible alternative but
+        // we keep this contract token-native to match the underlying
+        // AgentBudgetConfig surface. See 116-05-SUMMARY decisions.
+        const rows: Array<{
+          agent: string;
+          model: string;
+          period: "daily" | "weekly";
+          tokens_used: number;
+          tokens_limit: number;
+          pct: number;
+          status: "ok" | "warning" | "exceeded";
+        }> = [];
+        for (const [agent, cfg] of budgetConfigs.entries()) {
+          for (const period of ["daily", "weekly"] as const) {
+            const periodCfg = cfg[period];
+            if (!periodCfg) continue;
+            for (const model of ["sonnet", "opus"] as const) {
+              const limit = periodCfg[model];
+              if (typeof limit !== "number" || limit <= 0) continue;
+              const used = escalationBudget.getUsageForPeriod(
+                agent,
+                model,
+                period,
+              );
+              const pct = limit > 0 ? used / limit : 0;
+              let status: "ok" | "warning" | "exceeded" = "ok";
+              if (pct >= 1.0) status = "exceeded";
+              else if (pct >= 0.8) status = "warning";
+              rows.push({
+                agent,
+                model,
+                period,
+                tokens_used: used,
+                tokens_limit: limit,
+                pct,
+                status,
+              });
+            }
+          }
+        }
+        return { rows };
+      }
+      // === end Phase 116-05 IPC handlers ===
+
+      // =====================================================================
+      // Phase 116-06 — Tier 3 polish + cutover IPC handlers (F18/F20/F22/F23
+      // + telemetry). Same closure-intercept convention as the earlier 116-XX
+      // blocks. T01 (heatmaps) reads from per-agent TraceStore singletons via
+      // manager.getTraceStore(). T04 (audit) appends to a JSONL via the
+      // DashboardAuditTrail singleton wired into the dashboard server. T07
+      // (telemetry) reuses the same audit infrastructure with an "action"
+      // discriminator so we don't multiply on-disk JSONL files.
+      //
+      // F19 swim-lane DEFERRED OUT OF PHASE 116 (see 116-DEFERRED.md).
+      // =====================================================================
+
+      case "activity-by-day": {
+        // F18 (per-agent) + F22 (fleet) — calendar-grid activity heatmap.
+        // Params:
+        //   days? (number, 1..90, default 30) — window size; UTC-aligned
+        //                                       start-of-day(now - days+1).
+        //   agent? (string)                   — restrict to one agent.
+        // Returns: { days, since, until, rows: [{date, agent, turn_count}] }
+        //
+        // SCOPE NOTE: getTraceStore returns the per-agent TraceStore for
+        // every agent the daemon has spun up since boot (including stopped
+        // agents whose stores haven't closed). We iterate the agentList
+        // (resolved agents — every agent in clawcode.yaml, running or not)
+        // so the fleet aggregate reflects ALL configured agents that have
+        // recorded turns. An agent whose TraceStore hasn't initialized (no
+        // turns ever) yields zero rows; the heatmap renders a blank lane.
+        const rawDays = (params as { days?: unknown }).days;
+        const days =
+          typeof rawDays === "number" && Number.isFinite(rawDays)
+            ? Math.max(1, Math.min(Math.floor(rawDays), 90))
+            : 30;
+        const agentFilter =
+          typeof (params as { agent?: unknown }).agent === "string" &&
+          (params as { agent: string }).agent.length > 0
+            ? (params as { agent: string }).agent
+            : null;
+        const now = new Date();
+        const sinceUtc = new Date(
+          Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - (days - 1),
+            0,
+            0,
+            0,
+            0,
+          ),
+        );
+        const sinceIso = sinceUtc.toISOString();
+        const untilIso = now.toISOString();
+
+        const agentList = agentFilter
+          ? [agentFilter]
+          : resolvedAgents.map((a) => a.name);
+
+        const rows: Array<{
+          date: string;
+          agent: string;
+          turn_count: number;
+        }> = [];
+        for (const agentName of agentList) {
+          const store = manager.getTraceStore(agentName);
+          if (!store) continue;
+          // activityByDay returns ALL agent rows in that DB filtered by
+          // started_at. In ClawCode each agent owns its own traces.db so
+          // every row legitimately belongs to `agentName`. We still echo
+          // the row's `agent` column verbatim (defensive — survives any
+          // future cross-agent traces.db restructure).
+          for (const r of store.getActivityByDay(sinceIso)) {
+            rows.push({
+              date: r.date,
+              agent: r.agent,
+              turn_count: r.turn_count,
+            });
+          }
+        }
+        return {
+          days,
+          since: sinceIso,
+          until: untilIso,
+          rows,
+        };
+      }
+      case "list-dashboard-audit": {
+        // F23 — read the dashboard audit log tail. Filters: since (ISO
+        // 8601), action (exact match), agent (target match), limit
+        // (default 500, max 5000). Returns rows DESCENDING by timestamp
+        // so the F23 viewer renders the freshest at the top.
+        if (!dashboardAuditTrail) {
+          return { rows: [], filePath: null };
+        }
+        const opts: {
+          since?: string;
+          action?: string;
+          target?: string;
+          limit?: number;
+        } = {};
+        const sinceRaw = (params as { since?: unknown }).since;
+        if (typeof sinceRaw === "string" && sinceRaw.length > 0) {
+          opts.since = sinceRaw;
+        }
+        const actionRaw = (params as { action?: unknown }).action;
+        if (typeof actionRaw === "string" && actionRaw.length > 0) {
+          opts.action = actionRaw;
+        }
+        const agentRaw = (params as { agent?: unknown }).agent;
+        if (typeof agentRaw === "string" && agentRaw.length > 0) {
+          opts.target = agentRaw;
+        }
+        const limitRaw = (params as { limit?: unknown }).limit;
+        if (typeof limitRaw === "number" && Number.isFinite(limitRaw)) {
+          opts.limit = limitRaw;
+        }
+        const rows = await dashboardAuditTrail.listActions(opts);
+        return { rows, filePath: dashboardAuditTrail.getFilePath() };
+      }
+
+      case "dashboard-telemetry-summary": {
+        // T07 — count v2 page-view + error events in the last 24h. Drives
+        // the small "v2 page views: N · errors: M" badge.
+        if (!dashboardAuditTrail) {
+          return {
+            pageViews24h: 0,
+            errors24h: 0,
+            since: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+          };
+        }
+        return dashboardAuditTrail.telemetrySummary24h();
+      }
+      // === end Phase 116-06 IPC handlers ===
+    }
+
+    return routeMethod(manager, resolvedAgents, method, params, routingTableRef, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, threadManager, webhookManager, deliveryQueue, subagentThreadSpawner, allowlistMatchers, approvalLog, securityPolicies, escalationMonitor, advisorBudget, discordBridgeRef, configPath, config.defaults.basePath, taskManager, taskStore, schedulerSource, botDirectSenderRef, advisorService, config.defaults, compactionEventLog);
   };
 
   // 11. Create IPC server
   const server = createIpcServer(SOCKET_PATH, handler);
 
-  // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token)
+  // 11. Resolve Discord bot token from config (COEX-01: no fallback to shared plugin token).
+  //
+  // Phase 104 — route through warmed cache + retry shim instead of an
+  // inline execSync. preResolveAll above already populated the cache for
+  // this URI on the happy path; resolve() here is either a free cache hit
+  // OR a one-shot retry if pre-resolve failed for botToken specifically.
+  // Critical-secret fail-closed contract preserved: any resolution failure
+  // throws and refuses to start the Discord bridge.
   let botToken: string;
   if (config.discord?.botToken) {
     const raw = config.discord.botToken;
     if (raw.startsWith("op://")) {
       try {
-        botToken = execSync(`op read "${raw}"`, { encoding: "utf-8", timeout: 10_000 }).trim();
-      } catch {
+        botToken = await secretsResolver.resolve(raw);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         throw new Error(
-          "Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. " +
-          "Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken"
+          `Failed to resolve Discord bot token from 1Password — refusing to start Discord bridge. `
+            + `Reason: ${reason}. Fix: ensure 1Password CLI is authenticated (op signin) or set a literal token in clawcode.yaml discord.botToken`,
         );
       }
     } else {
@@ -3290,7 +7661,7 @@ export async function startDaemon(
   let discordBridge: DiscordBridge | null = null;
   if (botToken && routingTable.channelToAgent.size > 0) {
     discordBridge = new DiscordBridge({
-      routingTable,
+      routingTableRef,
       sessionManager: manager,
       turnDispatcher,
       threadManager,
@@ -3298,6 +7669,25 @@ export async function startDaemon(
       securityPolicies,
       botToken,
       log,
+      // Phase 117 Plan 117-11 T06 — share the boot-time VerboseState with the
+      // bridge so the mutation point at bridge.ts:~810 reads the same
+      // per-channel level state that the /clawcode-verbose IPC handler writes.
+      verboseState,
+      // Phase 116-03 F27 — fire `conversation-turn` SSE events after each
+      // recordTurn write. Metadata only (NO content). Ref reads .current at
+      // fire time so the post-startDashboardServer assignment is visible.
+      onConversationTurn: (info) => {
+        const sse = sseManagerRef.current;
+        if (!sse) return;
+        try {
+          sse.broadcast("conversation-turn", info);
+        } catch (err) {
+          log.warn(
+            { err, agent: info.agent, turnId: info.turnId },
+            "[F27] SSE conversation-turn broadcast failed (non-fatal)",
+          );
+        }
+      },
     });
     try {
       await discordBridge.start();
@@ -3310,16 +7700,43 @@ export async function startDaemon(
       // provisioner no-oped). Captures the bridge via closure.
       {
         const bridgeForGreeting = discordBridge;
-        manager.setBotDirectSender({
+        const botDirectImpl: import("./restart-greeting.js").BotDirectSender = {
           async sendEmbed(channelId, embed) {
             const channel = await bridgeForGreeting.discordClient.channels.fetch(channelId);
             if (!channel || !channel.isTextBased() || !("send" in channel)) {
               throw new Error(`channel ${channelId} is not a sendable text channel`);
             }
+            // Phase 122 — wrap agent-generated description body before send.
+            // setDescription mutates the embed in place so the same builder
+            // is dispatched. Embed.data is always defined on a real
+            // EmbedBuilder; optional-chain protects test doubles.
+            const description = embed.data?.description;
+            if (typeof description === "string" && description.length > 0) {
+              embed.setDescription(wrapMarkdownTablesInCodeFence(description));
+            }
             const msg = await (channel as import("discord.js").TextBasedChannel & { send: (opts: { embeds: import("discord.js").EmbedBuilder[] }) => Promise<{ id: string }> }).send({ embeds: [embed] });
             return msg.id;
           },
-        });
+          // Phase 100 follow-up — plain-text bot-direct send. Mirrors the
+          // sendEmbed shape but accepts a content string. Used as the
+          // bot-identity fallback for TriggerEngine's deliveryFn when the
+          // agent has no per-agent webhook provisioned. Phase 122 wraps
+          // here so the Phase 119 A2A-01 bot-direct rung
+          // (daemon-post-to-agent-ipc.ts:220) and the 999.12 ask-agent
+          // mirror (daemon-ask-agent-ipc.ts:286) both inherit the wrap.
+          async sendText(channelId, content) {
+            const channel = await bridgeForGreeting.discordClient.channels.fetch(channelId);
+            if (!channel || !channel.isTextBased() || !("send" in channel)) {
+              throw new Error(`channel ${channelId} is not a sendable text channel`);
+            }
+            const wrapped = wrapMarkdownTablesInCodeFence(content);
+            const msg = await (channel as import("discord.js").TextBasedChannel & { send: (opts: { content: string }) => Promise<{ id: string }> }).send({ content: wrapped });
+            return msg.id;
+          },
+        };
+        manager.setBotDirectSender(botDirectImpl);
+        // Phase 100 follow-up — also expose to the TriggerEngine deliveryFn.
+        botDirectSenderRef.current = botDirectImpl;
       }
 
       // Auto-provision webhooks for agents without manual webhookUrl
@@ -3329,7 +7746,38 @@ export async function startDaemon(
         manualIdentities: manualWebhookIdentities,
         log,
       });
-      webhookManager = new WebhookManager({ identities: allWebhookIdentities, log });
+      // Phase 119 A2A-02 — reprovisioner closure for the 401/404 recovery
+      // path in WebhookManager.sendAsAgent. Bounded to the resolved-agent
+      // snapshot at boot — runtime config reloads do NOT update this closure
+      // (a daemon restart already covers the YAML-change path). Returns
+      // undefined when the agent has no channel binding or provisioning
+      // throws — caller surfaces the original 401/404.
+      const bridgeForReprovision = discordBridge;
+      const reprovisionWebhook = async (agentName: string) => {
+        const agentCfg = resolvedAgents.find((a) => a.name === agentName);
+        if (!agentCfg?.webhook?.displayName) return undefined;
+        const channelId = agentCfg.channels[0];
+        if (!channelId) return undefined;
+        const status = await verifyAgentWebhookIdentity({
+          client: bridgeForReprovision.discordClient,
+          agentName,
+          channelId,
+          displayName: agentCfg.webhook.displayName,
+          avatarUrl: agentCfg.webhook.avatarUrl,
+          log,
+        });
+        if (status.status === "missing") return undefined;
+        return {
+          displayName: status.displayName,
+          avatarUrl: agentCfg.webhook.avatarUrl,
+          webhookUrl: status.webhookUrl,
+        };
+      };
+      webhookManager = new WebhookManager({
+        identities: allWebhookIdentities,
+        log,
+        reprovisionWebhook,
+      });
       discordBridge.setWebhookManager(webhookManager);
       log.info(
         { total: allWebhookIdentities.size, manual: manualWebhookIdentities.size, autoProvisioned: allWebhookIdentities.size - manualWebhookIdentities.size },
@@ -3386,13 +7834,42 @@ export async function startDaemon(
   // greetings are no-ops. Exactly one call, post-convergence.
   manager.setWebhookManager(webhookManager);
 
+  // Phase 130 Plan 03 T-01 — fire-and-forget Discord notification per agent
+  // for any skills that the Plan 02 manifest loader refused at boot.
+  // Single emission point: the unloadedSkillsByAgent map is sealed once
+  // at boot (no hot-reload yet for this surface — D-06 reload-on-edit
+  // belongs to a follow-up plan). Fire-and-forget per Phase 89 canary —
+  // boot continues regardless of webhook delivery outcome.
+  notifyUnloadedSkills({ unloadedSkillsByAgent, webhookManager, log });
+
+  // Phase 100 follow-up — also expose to the TriggerEngine deliveryFn
+  // closure constructed earlier at boot (~line 1935). The closure reads
+  // `.current` lazily at trigger-fire time, so this single post-convergence
+  // assignment covers all three webhook-construction branches above.
+  webhookManagerRef.current = webhookManager;
+
   // 11b2. Create SubagentThreadSpawner for IPC-driven subagent thread creation
-  const subagentThreadSpawner = discordBridge
+  // 2026-05-08 hotfix: assignment-only (declaration moved up to step 4z to
+  // end TDZ for early-IPC-request handlers — see comment there).
+  subagentThreadSpawner = discordBridge
     ? new SubagentThreadSpawner({
         sessionManager: manager,
+        // Phase 999.57 (2026-05-15) — required dep. The spawner upserts the
+        // subagent's heartbeat-disabled config into the runner's local map
+        // immediately after sessionManager.startAgent so the existing
+        // runner.ts:271 gate fires for subagent sessions. heartbeatRunner
+        // is constructed at line 3300 above, well before this point.
+        heartbeatRunner,
         registryPath: THREAD_REGISTRY_PATH,
         discordClient: discordBridge.discordClient,
         log,
+        // Phase 99 sub-scope M (2026-04-26) — auto-relay subagent completion
+        // to parent agent. When wired, the spawner fetches the subagent's
+        // last reply on session-end and dispatches a synthetic turn to the
+        // parent ("your subagent finished, summarize for the user"). The
+        // parent's response posts in the main channel via the normal Discord
+        // pipeline, closing the loop without operator intervention.
+        turnDispatcher,
       })
     : null;
   if (subagentThreadSpawner) {
@@ -3427,7 +7904,6 @@ export async function startDaemon(
 
   // 11d. Initialize config hot-reload
   const auditTrailPath = join(MANAGER_DIR, "config-audit.jsonl");
-  const routingTableRef = { current: routingTable };
 
   const configReloader = new ConfigReloader({
     sessionManager: manager,
@@ -3442,7 +7918,52 @@ export async function startDaemon(
   const configWatcher = new ConfigWatcher({
     configPath,
     auditTrailPath,
-    onChange: async (diff, newResolvedAgents) => {
+    onChange: async (diff, newResolvedAgents, newConfig) => {
+      // Phase 999.X — replace the daemon's `config` reference so closures
+      // reading `config.defaults.<dial>` (orphan-claude reaper,
+      // subagent-session reaper, both inside onTickAfter) see the live
+      // yaml on the next tick. Done FIRST so any failure in the rest of
+      // this handler still leaves config in sync with what the watcher
+      // believes is current.
+      config = newConfig;
+      // Phase 104 plan 03 (SEC-05) — reconcile the secrets cache against
+      // the diff BEFORE applyChanges so the reload's downstream agent
+      // restarts/spawns hit a hot, fresh cache. Walks the diff for op:// URI
+      // changes: invalidates old URIs, warm-resolves new ones. Failures are
+      // logged inside applySecretsDiff and never propagate (configReloader
+      // must still run for the non-secret parts of the diff).
+      await applySecretsDiff(diff, secretsResolver, log);
+      // Phase 108 — Pitfall 2: hot-reload of OP_SERVICE_ACCOUNT_TOKEN is
+      // explicitly NOT supported (CONTEXT.md §"Out of scope"). The broker
+      // pins each agent → tokenHash on first connect; a yaml edit that
+      // changes a token literal mid-flight is caught at the broker's
+      // sticky-pin check and rejected per-connection. Surface an
+      // operator-visible warning here so the rejection isn't a silent
+      // surprise. Walk the diff for any 1password-token change.
+      try {
+        for (const newAgent of newResolvedAgents) {
+          const newOverride =
+            newAgent.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+          const oldAgent = resolvedAgents.find((a) => a.name === newAgent.name);
+          const oldOverride =
+            oldAgent?.mcpEnvOverrides?.["1password"]?.OP_SERVICE_ACCOUNT_TOKEN;
+          if (newOverride !== oldOverride) {
+            brokerLog.error(
+              {
+                agent: newAgent.name,
+                hadOverride: oldOverride !== undefined,
+                hasOverride: newOverride !== undefined,
+              },
+              "mcp-broker: hot-reload of OP_SERVICE_ACCOUNT_TOKEN is NOT supported — restart daemon to apply (broker token pin is sticky per-agent)",
+            );
+          }
+        }
+      } catch (err) {
+        brokerLog.warn(
+          { err: String(err) },
+          "mcp-broker: hot-reload token-diff probe threw (non-fatal)",
+        );
+      }
       const summary = await configReloader.applyChanges(diff, newResolvedAgents);
       log.info({ subsystems: summary.subsystemsReloaded, agents: summary.agentsAffected }, "config hot-reloaded");
     },
@@ -3450,7 +7971,11 @@ export async function startDaemon(
     // Hot-reload must resolve op:// refs too — otherwise adding a new
     // mcpServers entry with `op://...` env on a running daemon would still
     // crash the child. Matches the boot-time resolver above.
-    opRefResolver: defaultOpRefResolver,
+    //
+    // Phase 104 — uses the shared cached sync wrapper so hot-reload
+    // hits the warmed cache. The applySecretsDiff call above (SEC-05) pre-
+    // resolves new op:// refs so this sync wrapper finds them in the cache.
+    opRefResolver: cachedOpRefResolver,
   });
   await configWatcher.start();
   log.info({ configPath, auditTrail: auditTrailPath }, "config watcher started");
@@ -3470,7 +7995,28 @@ export async function startDaemon(
           log,
         )
       : undefined;
-    dashboard = await startDashboardServer({ port: dashboardPort, host: dashboardHost, socketPath: SOCKET_PATH, webhookHandler });
+    // Phase 116-06 T08 — cutover redirect closure reads the LIVE config
+    // ref. `config` is the `let`-bound mutable reference reassigned on
+    // every ConfigWatcher reload tick (see line 1818 + reassignment at
+    // the ConfigReloader applyChanges callsite). The dashboard server
+    // invokes this getter on every incoming `GET /` request, so a
+    // `clawcode config set defaults.dashboardCutoverRedirect true` edit
+    // takes effect on the very next request after chokidar fires the
+    // debounce timer — no daemon restart needed.
+    const cutoverRedirectEnabled = (): boolean =>
+      config.defaults.dashboardCutoverRedirect === true;
+    dashboard = await startDashboardServer({
+      port: dashboardPort,
+      host: dashboardHost,
+      socketPath: SOCKET_PATH,
+      webhookHandler,
+      cutoverRedirectEnabled,
+      auditTrail: dashboardAuditTrail,
+    });
+    // Phase 116-03 F27 — publish the SseManager into the late-binding ref so
+    // the bridge's onConversationTurn closure picks it up. From now on, every
+    // captureDiscordExchange call broadcasts a `conversation-turn` event.
+    sseManagerRef.current = dashboard.sseManager;
     log.info({ port: dashboardPort, host: dashboardHost }, "dashboard server started");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -3515,13 +8061,314 @@ export async function startDaemon(
   });
   log.info({ pattern: "0 9 * * *" }, "daily summary cron scheduled (09:00 UTC)");
 
+  // 11f'. Phase 115-postdeploy 2026-05-12 — embedding-v2 migration cron.
+  // Phase 115 Plan 06 shipped the state machine + IPC handlers + runner
+  // but NEVER shipped a scheduler that called `runReEmbedBatch`. The
+  // operator's "Start re-embedding" click flipped the phase to
+  // `re-embedding` and then progress sat at 0% forever because nothing
+  // on the daemon side invoked the runner. Silent-path-bifurcation
+  // anti-pattern (see `feedback_silent_path_bifurcation.md`).
+  //
+  // Cron iterates `manager.getRunningAgents()` every 30s, calls
+  // `runReEmbedBatch` for each agent in a working phase (`dual-write`
+  // or `re-embedding`). Skips paused agents per
+  // `defaults.embeddingMigration.pausedAgents`. The one-shot kick from
+  // the transition IPC handler (see `embedding-migration-transition`
+  // case below) gives the operator immediate progress without waiting
+  // up to 30s for the first tick.
+  //
+  // Sentinel test: `src/memory/migrations/__tests__/migration-cron-wiring.test.ts`
+  // statically asserts `runReEmbedBatch` has at least one production
+  // caller in `src/manager/migration-cron.ts` so this bug class can't
+  // recur silently.
+  const migrationCron: MigrationCronHandle = scheduleMigrationCron({
+    manager,
+    config,
+    log,
+  });
+  log.info(
+    { pattern: "*/30 * * * * *" },
+    "embedding-v2 migration cron scheduled (every 30s)",
+  );
+
+  // 11g. Phase 999.14 — start the periodic MCP orphan reaper. Runs every 60s
+  // AFTER manager.startAll has had time to spawn fresh MCP children (the
+  // first tick fires at t=60s, by which time the npm-wrapper exec handoff
+  // is complete and the 5s-young filter excludes any in-progress spawn).
+  //
+  // The onTickAfter callback runs the MCP-09 stale-binding sweep AFTER the
+  // orphan reap completes — locked decision per CONTEXT.md (sweep observes
+  // post-reap registry state). Disabled when defaults.threadIdleArchiveAfter
+  // === "0" or subagentThreadSpawner is null (Discord disabled).
+  if (mcpTracker) {
+    const idleAfter =
+      (config.defaults as { threadIdleArchiveAfter?: string }).threadIdleArchiveAfter ?? "24h";
+    let idleMs = 0;
+    try {
+      idleMs = parseIdleDuration(idleAfter);
+    } catch (err) {
+      mcpLog.error(
+        { err: String(err), idleAfter },
+        "invalid threadIdleArchiveAfter; sweep disabled",
+      );
+    }
+    // Phase 999.15 TRACK-01 — reconciler ALWAYS runs (independent of the
+    // 999.14 stale-binding sweep). Both calls are wrapped in their own
+    // try/catch so a failure in one does NOT block the other or propagate
+    // to startOrphanReaper (which would crash the 60s tick loop).
+    const sweepEnabled = idleMs > 0 && subagentThreadSpawner != null;
+    // 2026-05-08 hotfix: snapshot for TS narrowing post-TDZ-fix (outer is `let`).
+    const sweepSpawner = subagentThreadSpawner;
+    // Phase 999.36 sub-bug D — dedupe quiescence warnings per binding so
+    // a stuck subagent doesn't generate a warning every quiescenceMinutes.
+    // Map keyed by threadId; value = timestamp of last warning emitted.
+    // In-memory only (resets on daemon restart — quiescence resumes from
+    // a fresh sweep cycle which is acceptable).
+    const idleWarningEmittedAt = new Map<string, number>();
+    const onTickAfter = async () => {
+      if (sweepEnabled && sweepSpawner) {
+        try {
+          await sweepStaleBindings({
+            spawner: sweepSpawner,
+            registryPath: THREAD_REGISTRY_PATH,
+            now: Date.now(),
+            idleMs,
+            log: mcpLog,
+            // Phase 999.X — when a stale binding belongs to an auto-
+            // spawned subagent thread (name regex match), also stop
+            // the underlying session. Operator-defined agent bindings
+            // are filtered inside sweepStaleBindings via
+            // isSubagentThreadName, so this callback is safe to pass
+            // unconditionally.
+            stopSubagentSession: (name) => manager.stopAgent(name),
+          });
+        } catch (err) {
+          mcpLog.error(
+            { err: String(err) },
+            "stale-binding sweep failed (non-fatal)",
+          );
+        }
+      }
+      // Phase 999.15 TRACK-01 — tracker reconciliation (independent of sweep).
+      if (mcpTracker) {
+        try {
+          await reconcileAllAgents({
+            tracker: mcpTracker,
+            daemonPid: process.pid,
+            log: mcpLog,
+            getClaudePid: getClaudePidByName,
+          });
+        } catch (err) {
+          mcpLog.error(
+            { err: String(err) },
+            "reconcileAllAgents failed (non-fatal)",
+          );
+        }
+      }
+      // Phase 109-B — orphan-claude reaper. Runs AFTER the reconciler so a
+      // freshly-discovered SDK respawn (TRACK-02 polled discovery) gets
+      // registered before this scan can mark it as orphaned. Reads the
+      // current mode from the live config defaults so a yaml hot-reload
+      // (defaults.orphanClaudeReaper.mode) takes effect on the next tick
+      // without a daemon restart.
+      if (
+        mcpTracker &&
+        mcpBootTimeUnix !== undefined &&
+        mcpClockTicksPerSec !== undefined
+      ) {
+        const oc = (config.defaults as {
+          orphanClaudeReaper?: {
+            mode?: OrphanClaudeReaperMode;
+            minAgeSeconds?: number;
+          };
+        }).orphanClaudeReaper;
+        const mode: OrphanClaudeReaperMode = oc?.mode ?? "alert";
+        const minAgeSeconds = oc?.minAgeSeconds ?? 30;
+        const mcpUidForReaper = process.getuid?.() ?? -1;
+        try {
+          await tickOrphanClaudeReaper({
+            daemonPid: process.pid,
+            tracker: mcpTracker,
+            uid: mcpUidForReaper,
+            minAgeSeconds,
+            bootTimeUnix: mcpBootTimeUnix,
+            clockTicksPerSec: mcpClockTicksPerSec,
+            mode,
+            log: mcpLog.child({ subsystem: "orphan-claude-reaper" }),
+          });
+        } catch (err) {
+          mcpLog.error(
+            { err: String(err) },
+            "orphan-claude reaper tick failed (non-fatal)",
+          );
+        }
+      }
+      // Phase 999.X — subagent-thread session reaper. Walks the
+      // session registry + thread bindings to find auto-spawned
+      // subagent sessions (`*-via-*-<nanoid6>` / `*-sub-<nanoid6>`)
+      // that are: (a) orphaned (binding gone but session still
+      // running) or (b) idle (binding lastActivity > idleTimeout).
+      // Reads config.defaults.subagentReaper each tick so a yaml
+      // hot-reload takes effect on the next 60s sweep. Wrapped in
+      // its own try/catch so a failure here does NOT crash the
+      // tick loop or block other reapers.
+      try {
+        const sr = (config.defaults as {
+          subagentReaper?: {
+            mode?: SubagentReaperMode;
+            idleTimeoutMinutes?: number;
+            minAgeSeconds?: number;
+          };
+        }).subagentReaper;
+        const subMode: SubagentReaperMode = sr?.mode ?? "reap";
+        const subIdleTimeoutMinutes = sr?.idleTimeoutMinutes ?? 1440;
+        const subMinAgeSeconds = sr?.minAgeSeconds ?? 300;
+        // Snapshot both registries at tick start (matches the
+        // orphan-claude-reaper invariant: the decision uses one
+        // consistent snapshot, no mid-walk mutation).
+        const sessionRegistry = await readRegistry(REGISTRY_PATH);
+        const sessions: readonly RunningSessionInfo[] = sessionRegistry.entries.map(
+          (e) => ({
+            name: e.name,
+            status: e.status,
+            startedAt: e.startedAt,
+          }),
+        );
+        const threadRegistry = await readThreadRegistry(THREAD_REGISTRY_PATH);
+        await tickSubagentSessionReaper({
+          sessions,
+          bindings: threadRegistry.bindings,
+          idleTimeoutMinutes: subIdleTimeoutMinutes,
+          minAgeSeconds: subMinAgeSeconds,
+          mode: subMode,
+          log: mcpLog.child({ subsystem: "subagent-session-reaper" }),
+          stopAgent: (name) => manager.stopAgent(name),
+        });
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "subagent-session reaper tick failed (non-fatal)",
+        );
+      }
+      // Phase 999.36 sub-bug D — subagent quiescence sweep. Phase 999.25
+      // wired this to fire `relayCompletionToParent` after `quiescenceMinutes`
+      // of inactivity, which caused the premature-relay class: a mid-think
+      // subagent (between tool calls, 5+ min wait) had its completion summary
+      // posted to the parent's main channel while the actual final chunks
+      // never arrived (compound with sub-bug B truncation). Phase 999.36
+      // re-classes quiescence as observational: emit a soft
+      // `subagent_idle_warning` log line (in-memory dedupe per binding per
+      // quiescenceMinutes cycle) for operator visibility — do NOT fire relay,
+      // do NOT autoArchive.
+      //
+      // Real completion paths now: explicit `subagent_complete` tool,
+      // `postInitialMessage` delivery-confirmed stamp, OR session-end backstop.
+      try {
+        const scCfg = (config.defaults as {
+          subagentCompletion?: {
+            enabled?: boolean;
+            quiescenceMinutes?: number;
+          };
+        }).subagentCompletion;
+        const completionEnabled = scCfg?.enabled !== false;
+        const quiescenceMinutes = scCfg?.quiescenceMinutes ?? 5;
+        // Snapshot both registries (consistent-snapshot invariant
+        // matches subagent-session-reaper above).
+        const sessionRegistryForCompletion = await readRegistry(REGISTRY_PATH);
+        const sessionsForCompletion = sessionRegistryForCompletion.entries.map(
+          (e) => ({ name: e.name, status: e.status }),
+        );
+        const threadRegistryForCompletion = await readThreadRegistry(
+          THREAD_REGISTRY_PATH,
+        );
+        await tickSubagentCompletionSweep({
+          sessions: sessionsForCompletion,
+          bindings: threadRegistryForCompletion.bindings,
+          quiescenceMinutes,
+          enabled: completionEnabled,
+          log: mcpLog.child({ subsystem: "subagent-completion-sweep" }),
+          onQuiescent: async (c) => {
+            // Phase 999.36 sub-bug D (D-13) — quiescence is NOT a completion
+            // signal. Emit a soft warning for operator visibility, deduped
+            // per-binding per-cycle (in-memory Map). Do NOT call relay.
+            const result = handleSubagentQuiescenceWarning({
+              candidate: c,
+              emittedAt: idleWarningEmittedAt,
+              now: Date.now(),
+              quiescenceMinutes,
+              log: mcpLog,
+            });
+            return { ok: true, reason: result };
+          },
+        });
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "subagent-completion sweep tick failed (non-fatal)",
+        );
+      }
+    };
+    const mcpUid = process.getuid?.() ?? -1;
+    const bootTimeUnixForReaper = await readBootTimeUnix();
+    const mcpPatternsForReaper = buildMcpCommandRegexes(mcpServersConfig);
+    reaperInterval = startOrphanReaper({
+      uid: mcpUid,
+      patterns: mcpPatternsForReaper,
+      clockTicksPerSec: readClockTicksPerSec(),
+      bootTimeUnix: bootTimeUnixForReaper,
+      intervalMs: 60_000,
+      log: mcpLog,
+      onTickAfter,
+    });
+    mcpLog.info(
+      {
+        intervalMs: 60_000,
+        sweepEnabled,
+        reconcilerEnabled: true, // Phase 999.15 TRACK-01 — always-on
+        idleMs,
+      },
+      "mcp orphan reaper + stale-binding sweep + reconciler started",
+    );
+  }
+
   // 12. Register signal handlers per D-15
   const shutdown = async (): Promise<void> => {
     log.info("shutdown signal received");
+    // Phase 999.6 SNAP-01 — write running-fleet snapshot FIRST so a hang
+    // anywhere downstream still leaves boot with a valid restore record.
+    // getRunningAgents() reflects the live SDK-attached sessions; this is
+    // the moment of truth before drain/stopAll begin tearing down.
+    try {
+      await writePreDeploySnapshot(
+        PRE_DEPLOY_SNAPSHOT_PATH,
+        manager.getRunningAgents().map((name) => ({
+          name,
+          sessionId: manager.getSessionHandle?.(name)?.sessionId ?? null,
+        })),
+        log,
+      );
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "pre-deploy snapshot write failed (non-fatal — boot falls back to static autoStart)",
+      );
+    }
+    // Phase 108 — broker preDrainNotify BEFORE manager.drain. Stops new
+    // shim connections immediately while existing ones continue serving
+    // any in-flight tool calls until manager.drain finishes the agents'
+    // last turns. RESEARCH.md §5 ordering invariant.
+    try {
+      shimServer.preDrainNotify();
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "mcp-broker preDrainNotify threw (non-fatal)",
+      );
+    }
     // 260419-q2z Fix B — drain in-flight session summaries BEFORE closing any
     // downstream resource. The 15s ceiling matches summarizeSession's internal
     // 10s timeout + 5s slack for embed + insert + markSummarized. After drain
-    // returns, new turn dispatches via streamFromAgent/sendToAgent reject
+    // returns, new turn dispatches via streamFromAgent/dispatchTurn reject
     // with SessionError('shutting down ...'), so stopAll() below is safe from
     // races with an in-progress turn.
     try {
@@ -3536,6 +8383,34 @@ export async function startDaemon(
       log.warn(
         { err: (err as Error).message },
         "session manager drain threw unexpectedly (non-fatal)",
+      );
+    }
+    // Phase 108 — drain the broker AFTER manager.drain so any shim-routed
+    // tool calls in-flight during the agents' final turns can complete.
+    // The 2000ms ceiling matches Pitfall 3 (last-ref drain timeout). We
+    // wrap in try/catch so a hung broker shutdown doesn't block the rest
+    // of daemon shutdown — log + continue.
+    try {
+      await shimServer.shutdown(2000);
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "mcp-broker shutdown threw (non-fatal)",
+      );
+    }
+    try {
+      brokerNetServer.close();
+      // Best-effort cleanup of the socket file so the next daemon boot
+      // doesn't trip on EADDRINUSE.
+      try {
+        await unlink(MCP_BROKER_SOCKET_PATH);
+      } catch {
+        // socket may not exist — fine.
+      }
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "mcp-broker socket close threw (non-fatal)",
       );
     }
     // Phase 69 — close OpenAI endpoint FIRST: activeStreams drained + server
@@ -3576,6 +8451,8 @@ export async function startDaemon(
     taskScheduler.stop();    // Stop handler-based cron jobs
     heartbeatRunner.stop();
     dailySummaryCron.stop();
+    // Phase 115-postdeploy 2026-05-12 — embedding-v2 migration cron stop.
+    migrationCron.stop();
     // Clean up all subagent thread bindings before stopping agents
     if (subagentThreadSpawner) {
       const subBindings = await subagentThreadSpawner.getSubagentBindings();
@@ -3583,16 +8460,151 @@ export async function startDaemon(
         try { await subagentThreadSpawner.cleanupSubagentThread(binding.threadId); } catch { /* best-effort */ }
       }
     }
-    // Clean up all thread sessions before stopping agents
+    // Clean up all thread sessions before stopping agents.
+    // Phase 999.14 MCP-08 — also route every binding through
+    // cleanupThreadWithClassifier so the registry is pruned on Discord
+    // 50001/10003/404 even during shutdown (operator pain regression:
+    // today's incident left 3 stale fin-acquisition bindings because
+    // shutdown's catch swallowed the error path).
     const allBindings = await threadManager.getActiveBindings();
     for (const binding of allBindings) {
-      try { await threadManager.removeThreadSession(binding.threadId); } catch { /* thread cleanup is best-effort during shutdown */ }
+      try { await threadManager.removeThreadSession(binding.threadId); } catch (err) {
+        log.debug({ err: String(err), threadId: binding.threadId }, "removeThreadSession failed during shutdown (non-fatal)");
+      }
+      if (subagentThreadSpawner) {
+        try {
+          await cleanupThreadWithClassifier({
+            spawner: subagentThreadSpawner,
+            registryPath: THREAD_REGISTRY_PATH,
+            threadId: binding.threadId,
+            agentName: binding.agentName ?? "(unknown)",
+            log,
+          });
+        } catch (err) {
+          log.warn({ err: String(err), threadId: binding.threadId }, "cleanupThreadWithClassifier failed during shutdown (non-fatal)");
+        }
+      }
     }
     deliveryQueue.stop();
     deliveryDb.close();
     advisorBudgetDb.close();
     webhookManager.destroy();
+
+    // FIND-123-A.next T-03 — structural group-kill of every per-agent claude
+    // process tree BEFORE manager.stopAll(). The SDK's own close path
+    // (invoked by stopAll) lets MCP grandchildren reparent to PID 1; here
+    // we preempt that by killing the entire process group of each claude
+    // subprocess via the PID captured by makeDetachedSpawn (T-02).
+    //
+    // Why BEFORE stopAll, not after:
+    //   - stopAll's dispose() removes the SessionHandle from sessions,
+    //     which clears its pidSink in `close()`. By the time killAll
+    //     would run, every handle.getClaudePid() returns null.
+    //   - Issuing SIGTERM to the negative-PID FIRST guarantees the
+    //     claude tree (and its MCP grandchildren) receive the signal
+    //     while the daemon still owns the kill-permission grant
+    //     (PID 1 doesn't yet "own" the reparented children).
+    //
+    // Read each handle's claudePid via getClaudePid() — additive-optional
+    // on the SessionHandle TYPE, so legacy/mock handles without the
+    // wrapper silently skip and rely on the existing backstop reaper.
+    //
+    // killAgentGroup's negative-PID kill in mcpTracker.killAll() STAYS as
+    // additive defense-in-depth (research §Out-of-scope; advisor #6).
+    try {
+      const runningAgents = manager.getRunningAgents();
+      const claudePidSnapshot: Array<{ agent: string; claudePid: number }> = [];
+      for (const agentName of runningAgents) {
+        const handle = manager.getSessionHandle(agentName);
+        const pid = handle?.getClaudePid?.();
+        if (typeof pid === "number" && pid > 1) {
+          claudePidSnapshot.push({ agent: agentName, claudePid: pid });
+        }
+      }
+      for (const { agent, claudePid } of claudePidSnapshot) {
+        let killed = false;
+        try {
+          process.kill(-claudePid, "SIGTERM");
+          killed = true;
+        } catch (err) {
+          // ESRCH is benign (process group already gone); anything else
+          // gets logged but never blocks shutdown.
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== "ESRCH") {
+            mcpLog.warn(
+              { agent, claudePid, err: String(err) },
+              "123-A-next-shutdown-pgkill: SIGTERM to claude process group failed",
+            );
+          }
+        }
+        mcpLog.info(
+          { agent, claudePid, killed },
+          "[123-A-next-shutdown-pgkill]",
+        );
+      }
+      // Grace period — let SIGTERM propagate before the SDK's normal close
+      // races with us in stopAll(). 1500ms matches the 2s window the
+      // existing shutdown-scan reaper uses (research §implementation).
+      if (claudePidSnapshot.length > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+      }
+    } catch (err) {
+      mcpLog.warn(
+        { err: String(err) },
+        "123-A-next-shutdown-pgkill: snapshot/dispatch failed (non-fatal — backstop reaper still runs)",
+      );
+    }
+
     await manager.stopAll();
+    // Phase 999.14 MCP-04 — clear the reaper interval and SIGTERM/SIGKILL
+    // any tracked MCP child PIDs that survived stopAll. Runs AFTER stopAll
+    // (so per-agent killAgentGroup hooks have already fired) and BEFORE
+    // pid-file/socket cleanup. Idempotent on dead PIDs (ESRCH treated as
+    // success). 5s grace before SIGKILL — matches systemd's TimeoutStopSec.
+    if (reaperInterval) {
+      clearInterval(reaperInterval);
+      reaperInterval = null;
+    }
+    if (mcpTracker) {
+      try {
+        await mcpTracker.killAll(5_000);
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "mcp tracker killAll failed during shutdown (non-fatal)",
+        );
+      }
+    }
+    // FIND-123-A — synchronous orphan sweep AFTER killAll. ClawCode does
+    // not own the `claude` subprocess spawn (the Claude Agent SDK does,
+    // non-detached) so the tracker's negative-pid kills in killAll silently
+    // ESRCH on MCP-wrapper PIDs that share the daemon's pgid. When claude
+    // exits, its `mcp-server-mysql` grandchildren reparent to PID 1 and
+    // wait up to one reaper interval (≥60s, observed 9 min) before the
+    // periodic sweep on the next daemon boot reaps them. Running reapOrphans
+    // here, at the exact moment we know the orphans have just appeared,
+    // closes the window. 2s grace is sufficient — these processes were
+    // alive seconds ago and SIGTERM-then-SIGKILL is the same path the
+    // periodic reaper already exercises.
+    if (mcpTracker && mcpPatterns !== undefined && mcpUid !== undefined
+        && mcpBootTimeUnix !== undefined && mcpClockTicksPerSec !== undefined) {
+      try {
+        await reapOrphans({
+          uid: mcpUid,
+          patterns: mcpPatterns,
+          clockTicksPerSec: mcpClockTicksPerSec,
+          bootTimeUnix: mcpBootTimeUnix,
+          reason: "shutdown-scan",
+          log: mcpLog,
+          graceMs: 2_000,
+        });
+      } catch (err) {
+        mcpLog.error(
+          { err: String(err) },
+          "mcp shutdown-scan reap failed (non-fatal)",
+        );
+      }
+    }
     // Close TaskStore AFTER manager.stopAll() so any in-flight agent
     // transition that writes to the store completes first (Phase 58 Plan 03).
     try {
@@ -3609,6 +8621,18 @@ export async function startDaemon(
         log.error({ error: (err as Error).message }, "mysql2 pool close failed");
       }
     }
+    // Phase 115 Plan 07 sub-scope 15 — close the tool-cache singleton
+    // and stop the size-metric sampler. Best-effort; an unclean close
+    // doesn't block shutdown.
+    try {
+      clearInterval(toolCacheSizeReporter);
+      toolCacheStore.close();
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        "tool-cache close failed (non-fatal)",
+      );
+    }
     await unlink(SOCKET_PATH).catch((err) => { log.debug({ path: SOCKET_PATH, error: (err as Error).message }, "socket file cleanup failed (may not exist)"); });
     await unlink(PID_PATH).catch((err) => { log.debug({ path: PID_PATH, error: (err as Error).message }, "pid file cleanup failed (may not exist)"); });
   };
@@ -3621,21 +8645,190 @@ export async function startDaemon(
     void shutdown().then(() => process.exit(0));
   });
 
+  // Phase 999.23 — SIGHUP handler. Without this, an agent inside the daemon
+  // that runs `kill -HUP <pid>` (or systemctl reload, which sends SIGHUP by
+  // default) terminates the daemon silently because Node's default SIGHUP
+  // disposition is to exit. Combined with `Restart=on-failure`, systemd
+  // does NOT restart on a SIGHUP-induced exit (treated as clean). Outage
+  // 2026-05-01 06:07: Admin Clawdy fell back to `kill -HUP` after sudo
+  // refused systemctl reload; daemon died silently and stayed down.
+  //
+  // Behavior: graceful shutdown then exit with code 129 (128 + signal 1).
+  // The systemd unit declares RestartForceExitStatus=129 so that exit code
+  // is treated as a failure trigger, restoring the restart loop.
+  process.on("SIGHUP", () => {
+    log.info("received SIGHUP — initiating clean shutdown (will systemd-restart)");
+    void shutdown().then(() => process.exit(129));
+  });
+
   log.info({ socket: SOCKET_PATH }, "manager daemon started");
 
-  // Auto-start all configured agents on daemon boot
+  // Auto-start all configured agents on daemon boot.
+  //
+  // Phase 100 follow-up — operator-curated active fleet. The full
+  // `resolvedAgents` array is preserved for routeMethod (so the `start
+  // <name>` IPC handler at line ~3990 can find dormant configs via
+  // `configs.find((c) => c.name === name)` and the operator can manually
+  // boot them later). Only the boot auto-start path filters out
+  // `autoStart=false` agents — they don't get an SDK session on daemon
+  // start, cutting cold-start time from O(N agents × 2-3s) to
+  // O(active agents × 2-3s). Skipped agents are logged at info level so
+  // operators can verify the skip happened (not a silent failure).
+  // Phase 999.6 SNAP-02 — read pre-deploy snapshot and union into autoStart set.
+  // Awaited synchronously (sub-10ms). Reader deletes the file before returning
+  // to prevent infinite auto-revive loops on partial-startAll failures.
+  const snapshotKnownAgentNames = new Set(resolvedAgents.map((c) => c.name));
+  const restoredFromSnapshot = await readAndConsumePreDeploySnapshot(
+    PRE_DEPLOY_SNAPSHOT_PATH,
+    snapshotKnownAgentNames,
+    config.defaults.preDeploySnapshotMaxAgeHours ?? 24,
+    log,
+  );
+
+  const autoStartAgents = resolvedAgents.filter((cfg) => {
+    if (cfg.autoStart !== false) return true;
+    if (restoredFromSnapshot.has(cfg.name)) {
+      log.info(
+        { agent: cfg.name },
+        "boot auto-start via pre-deploy snapshot (yaml autoStart=false overridden for one boot)",
+      );
+      return true;
+    }
+    log.info(
+      { agent: cfg.name },
+      "skipping boot auto-start — autoStart=false (manually startable via `clawcode start <name>`)",
+    );
+    return false;
+  });
+
+  // Clean up stale "starting" or "running" statuses for skipped agents.
+  // reconcileRegistry ignores "starting" entries entirely, so an agent that
+  // stalled during warmup (e.g. MCP timeout on a previous boot) keeps that
+  // status forever — the fleet shows it as "starting" indefinitely. "running"
+  // is also stale: if the session never resumed or was not attempted
+  // (autoStart=false), the registry should reflect that the agent is stopped.
+  {
+    const skippedNames = new Set(
+      resolvedAgents
+        .filter((cfg) => !autoStartAgents.includes(cfg))
+        .map((cfg) => cfg.name),
+    );
+    if (skippedNames.size > 0) {
+      try {
+        let reg = await readRegistry(REGISTRY_PATH);
+        let changed = false;
+        for (const entry of reg.entries) {
+          if (skippedNames.has(entry.name) && (entry.status === "starting" || entry.status === "running")) {
+            reg = updateEntry(reg, entry.name, { status: "stopped" });
+            changed = true;
+            log.info({ agent: entry.name, was: entry.status }, "cleared stale active status for autoStart=false agent");
+          }
+        }
+        if (changed) await writeRegistry(REGISTRY_PATH, reg);
+      } catch (err) {
+        log.warn({ error: (err as Error).message }, "failed to clear stale registry statuses for skipped agents (non-fatal)");
+      }
+    }
+  }
+
+  // Phase 999.25 — sort by wakeOrder (lower = earlier). `undefined` becomes
+  // Infinity so unordered agents boot LAST. Stable sort: ties + same-priority
+  // groups preserve YAML order. Boot remains sequential (startAll uses
+  // `for...await`); this only changes the order, not the total time.
+  const sortedAutoStartAgents = [...autoStartAgents].sort(
+    (a, b) => (a.wakeOrder ?? Infinity) - (b.wakeOrder ?? Infinity),
+  );
+  if (sortedAutoStartAgents.some((c) => c.wakeOrder !== undefined)) {
+    log.info(
+      {
+        order: sortedAutoStartAgents.map((c) => ({
+          name: c.name,
+          wakeOrder: c.wakeOrder ?? null,
+        })),
+      },
+      "wake-order applied to auto-start sequence",
+    );
+  }
   void (async () => {
     try {
-      await manager.startAll(resolvedAgents);
-      log.info({ agents: resolvedAgents.length }, "all agents auto-started");
+      await manager.startAll(sortedAutoStartAgents);
+      log.info(
+        {
+          agents: sortedAutoStartAgents.length,
+          skipped: resolvedAgents.length - sortedAutoStartAgents.length,
+        },
+        "all agents auto-started",
+      );
     } catch (err) {
       log.error({ error: (err as Error).message }, "failed to auto-start agents");
+    }
+    // Phase 119 A2A-01 sentinel — D-02 (revised 2026-05-14 post-deploy).
+    // Verifies the bot-direct fallback wiring is reachable on the production
+    // path WITHOUT actually delivering a side-effecting message. The original
+    // sentinel called handlePostToAgentIpc self-ping which delivered a real
+    // webhook message to the agent's channel — operator-visible noise in
+    // #admin-clawdy on every boot (4 sentinel messages from 2 deploys).
+    //
+    // The original silent-path-bifurcation it was designed to prevent: "we
+    // added the bot-direct fallback in code but production never executes
+    // it." The dependency presence check below catches that EXACT class of
+    // bug (DI wiring break post-deploy) without the round-trip side effect.
+    // Unit tests at daemon-post-to-agent-ipc.test.ts continue to exercise
+    // the dispatch chain end-to-end with mocks.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") return;
+    try {
+      const running = manager.getRunningAgents();
+      const probeAgent = sortedAutoStartAgents.find((a) =>
+        running.includes(a.name),
+      )?.name;
+      if (!probeAgent) {
+        log.warn(
+          { sentinel: "A2A-01" },
+          "[A2A-01-sentinel] FAIL — no running agent available to probe",
+        );
+        return;
+      }
+      const sender = botDirectSenderRef.current;
+      const probeChannels = routingTableRef.current.agentToChannels.get(probeAgent);
+      const wiringOk =
+        webhookManager !== undefined &&
+        sender !== null &&
+        sender !== undefined &&
+        typeof sender.sendText === "function" &&
+        probeChannels !== undefined &&
+        probeChannels.length > 0;
+      if (wiringOk) {
+        log.info(
+          {
+            sentinel: "A2A-01",
+            probeAgent,
+            channels: probeChannels.length,
+          },
+          "[A2A-01-sentinel] OK — wiring verified (webhookManager + botDirectSender + agent-channels registered)",
+        );
+      } else {
+        log.warn(
+          {
+            sentinel: "A2A-01",
+            probeAgent,
+            hasWebhookManager: webhookManager !== undefined,
+            hasBotDirectSender: sender !== null && sender !== undefined,
+            hasAgentChannels: probeChannels !== undefined && probeChannels.length > 0,
+          },
+          "[A2A-01-sentinel] FAIL — DI wiring incomplete",
+        );
+      }
+    } catch (err) {
+      log.warn(
+        { sentinel: "A2A-01", error: (err as Error).message },
+        "[A2A-01-sentinel] FAIL",
+      );
     }
   })();
 
   // TaskManager owns no external resources (inflight timers .unref()'d,
   // db handle owned by TaskStore via PayloadStore). No explicit shutdown needed.
-  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, policyWatcher, routingTableRef, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
+  return { server, manager, taskStore, taskManager, payloadStore, triggerEngine, routingTable, rateLimiter, heartbeatRunner, taskScheduler, skillsCatalog, slashHandler, threadManager, webhookManager, discordBridge, subagentThreadSpawner, configWatcher, configReloader, policyWatcher, routingTableRef, secretsResolver, dashboard: dashboard ?? { server: null as unknown as ReturnType<typeof import("node:http").createServer>, sseManager: null as unknown as import("../dashboard/sse.js").SseManager, close: async () => {} }, shutdown };
 }
 
 /**
@@ -3665,6 +8858,27 @@ async function routeMethod(
   agentsBasePath: string,
   taskManager: TaskManager,
   taskStore: TaskStore,
+  schedulerSource: SchedulerSource,
+  // Phase 999.12 IPC-02 — bot-direct sender ref for ask-agent's no-webhook
+  // fallback path. Mutable ref so the closure reads `.current` at call time
+  // (Pitfall 7: pre-bridge boot leaves .current null).
+  botDirectSenderRef: { current: import("./restart-greeting.js").BotDirectSender | null },
+  // Phase 117 Plan 07 T01 — provider-neutral advisor service. The
+  // `ask-advisor` IPC handler dispatches through this. `advisorBudget`
+  // is also passed (unchanged) because the native short-circuit path
+  // reports `budget_remaining` straight from the budget without going
+  // through the service.
+  advisorService: AdvisorService,
+  // Phase 117 Plan 07 T02 — daemon-wide defaults block for advisor
+  // backend resolution at the IPC handler gate (`resolveAdvisorBackend`).
+  // Closes over `config.defaults` so the handler can short-circuit for
+  // native-backend agents before invoking the service.
+  advisorDefaults: { readonly advisor?: { readonly backend?: string } } | undefined,
+  // Phase 124 Plan 04 T-01 — in-memory log of last-compaction timestamps.
+  // Read by `heartbeat-status` (surfaces `last_compaction_at` per agent)
+  // and written by `compact-session` on `ok:true`. Single source of truth
+  // for both the telemetry surface and the auto-trigger cooldown gate.
+  compactionEventLog: CompactionEventLog,
 ): Promise<unknown> {
   switch (method) {
     case "start": {
@@ -3736,32 +8950,72 @@ async function routeMethod(
       };
     }
 
-    case "heartbeat-status": {
-      const results = heartbeatRunner.getLatestResults();
-      const zoneStatuses = heartbeatRunner.getZoneStatuses();
-      const agents: Record<string, unknown> = {};
-      for (const [agentName, checks] of results) {
-        const checksObj: Record<string, unknown> = {};
-        let worstStatus: CheckStatus = "healthy";
-        for (const [checkName, { result, lastChecked }] of checks) {
-          checksObj[checkName] = {
-            status: result.status,
-            message: result.message,
-            lastChecked,
-            ...(result.metadata ? { metadata: result.metadata } : {}),
-          };
-          if (result.status === "critical" || (result.status === "warning" && worstStatus !== "critical")) {
-            worstStatus = result.status;
-          }
-        }
-        const zoneData = zoneStatuses.get(agentName);
-        agents[agentName] = {
-          checks: checksObj,
-          overall: worstStatus,
-          ...(zoneData ? { zone: zoneData.zone, fillPercentage: zoneData.fillPercentage } : {}),
-        };
+    case "list-rate-limit-snapshots": {
+      // Phase 103 OBS-06 — per-agent OAuth Max usage snapshots. Resolves the
+      // RateLimitTracker via SessionManager (returns undefined when agent is
+      // not running OR when the agent has no UsageTracker DB to share — see
+      // Plan 02 startAgent flow). Empty `snapshots: []` when no data so the
+      // /clawcode-usage embed can render the "No usage data yet" graceful
+      // path (Pitfall 7).
+      //
+      // NOT the same as the existing `rate-limit-status` case above —
+      // that's the Discord outbound rate-limiter token bucket (Pitfall 5).
+      const { handleListRateLimitSnapshotsIpc } = await import(
+        "./daemon-rate-limit-ipc.js"
+      );
+      const agent = validateStringParam(params, "agent");
+      return handleListRateLimitSnapshotsIpc(
+        { agent },
+        {
+          getRateLimitTrackerForAgent: (name) =>
+            manager.getRateLimitTrackerForAgent(name),
+        },
+      );
+    }
+
+    case "list-rate-limit-snapshots-fleet": {
+      // Phase 116-postdeploy — fleet aggregate of subscription utilisation
+      // snapshots. Mirrors the `costs` aggregation pattern at daemon.ts:9547:
+      // iterates `manager.getRunningAgents()`, asks each for its
+      // RateLimitTracker, and rolls up `getAllSnapshots()` into a single
+      // wire payload so the Usage page can render fleet-level bars without
+      // doing N round-trips from the SPA.
+      //
+      // Empty `agents: []` when no agents are running OR none have emitted
+      // a `rate_limit_event` yet — the SPA renders the "data appears after
+      // first turn" graceful path on empty.
+      const { handleListRateLimitSnapshotsIpc } = await import(
+        "./daemon-rate-limit-ipc.js"
+      );
+      const agents: Array<{
+        agent: string;
+        snapshots: ReturnType<typeof handleListRateLimitSnapshotsIpc>["snapshots"];
+      }> = [];
+      for (const agentName of manager.getRunningAgents()) {
+        const result = handleListRateLimitSnapshotsIpc(
+          { agent: agentName },
+          {
+            getRateLimitTrackerForAgent: (name) =>
+              manager.getRateLimitTrackerForAgent(name),
+          },
+        );
+        agents.push({ agent: result.agent, snapshots: result.snapshots });
       }
       return { agents };
+    }
+
+    case "heartbeat-status": {
+      // Phase 124 Plan 04 T-01 — delegated to the pure builder so the
+      // telemetry surface (session_tokens, last_compaction_at) stays
+      // unit-testable. Pre-Plan-04 inline body preserved verbatim inside
+      // the builder; behavior is additive (existing consumers parse the
+      // same shape).
+      return buildHeartbeatStatusPayload({
+        results: heartbeatRunner.getLatestResults(),
+        zoneStatuses: heartbeatRunner.getZoneStatuses(),
+        getLastCompactionAt: (a) => compactionEventLog.getLastCompactionAt(a),
+        getContextFillProvider: (a) => manager.getContextFillProvider(a),
+      });
     }
 
     case "context-zone-status": {
@@ -3789,14 +9043,43 @@ async function routeMethod(
           )
         : allAssignments;
 
-      return { catalog, assignments };
+      // Phase 130 Plan 03 T-02 — surface refused skills per agent. When
+      // `agent` is supplied, return only that agent's unloaded list (matches
+      // the `assignments` filter shape). When unfiltered, return the full map.
+      const unloadedSkills: Record<string, readonly UnloadedSkillEntry[]> = {};
+      if (agentFilter !== undefined) {
+        unloadedSkills[agentFilter] = manager.getUnloadedSkills(agentFilter);
+      } else {
+        for (const c of configs) {
+          unloadedSkills[c.name] = manager.getUnloadedSkills(c.name);
+        }
+      }
+
+      return { catalog, assignments, unloadedSkills };
     }
 
+    // Phase 999.2 Plan 02 D-RNI-IPC-01 — canonical name `ask-agent` and the
+    // deprecated alias `send-message` share a single body via stacked-case.
+    // The deprecated branch logs a one-line metric so operators can grep the
+    // daemon journal for `deprecated.*alias.*used` to verify the 30-day
+    // removal trigger (D-RNX-03 / Open Question 2 in RESEARCH.md).
+    case "ask-agent":
     case "send-message": {
+      if (method === "send-message") {
+        // Operator metric for D-RNX-03's 30-day removal trigger. Operator
+        // greps the daemon journal for `deprecated.*alias.*used` after the
+        // horizon; zero hits → safe to remove the alias. Matches the
+        // console-based logging style used elsewhere in routeMethod (the
+        // daemon-scoped pino `log` is not threaded into this function).
+        console.info(
+          `[deprecated IPC alias used] alias=send-message canonical=ask-agent`,
+        );
+      }
       const from = validateStringParam(params, "from");
       const to = validateStringParam(params, "to");
       const content = validateStringParam(params, "content");
       const priority = typeof params.priority === "string" ? params.priority : "normal";
+      const mirror = params.mirror_to_target_channel === true;
 
       // Find target agent config to get workspace path
       const targetConfig = configs.find((c) => c.name === to);
@@ -3804,95 +9087,153 @@ async function routeMethod(
         throw new ManagerError(`Target agent '${to}' not found in config`);
       }
 
-      // Write message to target agent's inbox
       // Phase 75 SHARED-01 — memoryPath (not workspace) so cross-agent
       // sends deliver to the target's private inbox, never a shared one.
       const inboxDir = join(targetConfig.memoryPath, "inbox");
-      const message = createMessage(from, to, content, priority as "normal" | "high" | "urgent");
-      await writeMessage(inboxDir, message);
 
-      // If target agent is running, send directly and check for escalation
-      const running = manager.getRunningAgents();
-      if (running.includes(to)) {
-        try {
-          let response = await manager.sendToAgent(to, content);
+      // Phase 999.2 Plan 03 — delegate inbox-write + dispatch + mirror to the
+      // pure-DI handler (mirrors the Phase 103 daemon-rate-limit-ipc.ts /
+      // Phase 96 daemon-fs-ipc.ts blueprint). Errors from dispatchTurn now
+      // PROPAGATE to the IPC client (D-SYN-05) — the silent `try {} catch {}`
+      // that lived here pre-Plan-03 (and was masking ALL dispatch errors as
+      // false-success) is GONE.
+      const { handleAskAgentIpc } = await import("./daemon-ask-agent-ipc.js");
+      const askResult = await handleAskAgentIpc(
+        { from, to, content, priority, mirror_to_target_channel: mirror },
+        {
+          runningAgents: manager.getRunningAgents(),
+          dispatchTurn: (toName, msg) => manager.dispatchTurn(toName, msg),
+          writeInbox: async (p) => {
+            const message = createMessage(
+              p.from,
+              p.to,
+              p.content,
+              p.priority as "normal" | "high" | "urgent",
+            );
+            await writeMessage(inboxDir, message);
+            return { messageId: message.id };
+          },
+          webhookManager,
+          configs,
+          // routeMethod has no pino-childed log in scope; console is the
+          // existing tracing surface (matches webhook-failure logging in
+          // post-to-agent at this same case-block).
+          log: {
+            info: (...args: unknown[]) => console.info(...args),
+            warn: (...args: unknown[]) => console.warn(...args),
+            error: (...args: unknown[]) => console.error(...args),
+          },
+          // Phase 999.12 IPC-02 — bot-direct fallback for response mirror
+          // when target lacks a webhook. Late-bound ref read so pre-bridge
+          // boot windows (Pitfall 7) silently skip the mirror without throwing.
+          botDirectSender: {
+            sendText: async (channelId: string, text: string) => {
+              const sender = botDirectSenderRef.current;
+              if (!sender) return;
+              await sender.sendText(channelId, text);
+            },
+          },
+          agentChannels: routingTableRef.current.agentToChannels,
+        },
+      );
 
-          // Error detection heuristic: check for common failure indicators
-          const ERROR_INDICATORS = [
-            "i can't", "i'm unable", "i don't have the capability",
-            "tool_use_error", "error executing",
-          ];
-          const lowerResponse = response.toLowerCase();
-          const isError = ERROR_INDICATORS.some((indicator) => lowerResponse.includes(indicator));
-
-          // Check if escalation is needed
-          if (escalationMonitor.shouldEscalate(to, response, isError)) {
-            response = await escalationMonitor.escalate(to, content);
-            return { ok: true, messageId: message.id, response, escalated: true };
-          }
-
-          return { ok: true, messageId: message.id, response, escalated: false };
-        } catch {
-          // Direct send failed -- inbox write already succeeded, return ok
-          return { ok: true, messageId: message.id };
+      // Phase 999.2 D-SYN-06 — escalation path UNCHANGED. The handler
+      // returns {ok, messageId, response} without inspecting indicators;
+      // escalation runs HERE at the daemon edge, on the response text the
+      // handler returned, and may overwrite the response by re-dispatching
+      // through escalationMonitor.escalate (which talks to the SessionManager
+      // — a dependency we deliberately don't push into the pure module).
+      if (askResult.response !== undefined) {
+        const ERROR_INDICATORS = [
+          "i can't", "i'm unable", "i don't have the capability",
+          "tool_use_error", "error executing",
+        ];
+        const lowerResponse = askResult.response.toLowerCase();
+        const isError = ERROR_INDICATORS.some((indicator) => lowerResponse.includes(indicator));
+        if (escalationMonitor.shouldEscalate(to, askResult.response, isError)) {
+          const escalatedResponse = await escalationMonitor.escalate(to, content);
+          return {
+            ok: true,
+            messageId: askResult.messageId,
+            response: escalatedResponse,
+            escalated: true,
+          };
         }
+        return {
+          ok: true,
+          messageId: askResult.messageId,
+          response: askResult.response,
+          escalated: false,
+        };
       }
 
-      return { ok: true, messageId: message.id };
+      return { ok: true, messageId: askResult.messageId };
     }
 
+    // Phase 999.2 Plan 02 D-RNI-IPC-02 — canonical name `post-to-agent` and
+    // the deprecated alias `send-to-agent` share a single body via stacked-
+    // case. Deprecated branch logs a metric mirroring the ask-agent path.
+    case "post-to-agent":
     case "send-to-agent": {
+      if (method === "send-to-agent") {
+        // Operator metric — see the matching block in case "send-message"
+        // above for rationale (D-RNX-03 / RESEARCH.md Open Question 2).
+        console.info(
+          `[deprecated IPC alias used] alias=send-to-agent canonical=post-to-agent`,
+        );
+      }
       const from = validateStringParam(params, "from");
       const to = validateStringParam(params, "to");
       const message = validateStringParam(params, "message");
 
-      // Validate target agent exists
-      const targetConfig = configs.find((c) => c.name === to);
-      if (!targetConfig) {
-        throw new ManagerError(`Target agent '${to}' not found`);
-      }
-
-      // 1. Always write to filesystem inbox (fallback/record)
-      // Phase 75 SHARED-01 — memoryPath (not workspace) so send-to-agent
-      // writes to the target's private inbox in shared-workspace cases.
-      const inboxDir = join(targetConfig.memoryPath, "inbox");
-      const inboxMsg = createMessage(from, to, message, "normal");
-      await writeMessage(inboxDir, inboxMsg);
-
-      // 2. Post webhook embed to target's Discord channel
-      let delivered = false;
-      const targetChannels = routingTableRef.current.agentToChannels.get(to);
-      if (
-        targetChannels &&
-        targetChannels.length > 0 &&
-        webhookManager.hasWebhook(to)
-      ) {
-        try {
-          const senderConfig = configs.find((c) => c.name === from);
-          const senderDisplayName =
-            senderConfig?.webhook?.displayName ?? from;
-          const senderAvatarUrl = senderConfig?.webhook?.avatarUrl;
-          const embed = buildAgentMessageEmbed(
-            from,
-            senderDisplayName,
-            message,
-          );
-          await webhookManager.sendAsAgent(
-            to,
-            senderDisplayName,
-            senderAvatarUrl,
-            embed,
-          );
-          delivered = true;
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `[send-to-agent] webhook delivery failed from=${from} to=${to} error=${errMsg} — inbox fallback used`,
-          );
-        }
-      }
-
-      return { delivered, messageId: inboxMsg.id };
+      // Quick 260511-pw2 — delegate to the pure-DI handler so all six
+      // silent-skip points emit structured `post-to-agent skipped` logs
+      // with reason tags (mirrors Phase 999.18 / quick 260501-i3r
+      // `subagent relay skipped` substrate). Sender's tool result now
+      // surfaces `{ok, delivered, reason?, messageId}` so the MCP wrapper
+      // can render explicit "queued in inbox" text — fixes the
+      // post-id-looks-task-shaped confusion Admin Clawdy observed.
+      const { handlePostToAgentIpc } = await import("./daemon-post-to-agent-ipc.js");
+      return await handlePostToAgentIpc(
+        { from, to, message },
+        {
+          runningAgents: manager.getRunningAgents(),
+          configs,
+          agentChannels: routingTableRef.current.agentToChannels,
+          webhookManager,
+          writeInbox: async (p) => {
+            const targetConfig = configs.find((c) => c.name === p.to);
+            if (!targetConfig) {
+              // Defensive — handler validated already, but writeInbox is a
+              // pure dep so it owns its own precondition.
+              throw new ManagerError(`Target agent '${p.to}' not found`);
+            }
+            // Phase 75 SHARED-01 — memoryPath (not workspace) so the inbox
+            // write lands in the target's private inbox even in
+            // shared-workspace deployments.
+            const inboxDir = join(targetConfig.memoryPath, "inbox");
+            const inboxMsg = createMessage(p.from, p.to, p.content, "normal");
+            await writeMessage(inboxDir, inboxMsg);
+            return { messageId: inboxMsg.id };
+          },
+          log: {
+            info: (...args: unknown[]) => console.info(...args),
+            warn: (...args: unknown[]) => console.warn(...args),
+            error: (...args: unknown[]) => console.error(...args),
+          },
+          // Phase 119 A2A-01 — bot-direct fallback for the no-webhook path.
+          // Late-bound ref read so pre-bridge boot windows silently skip the
+          // bot-direct rung without throwing (mirrors the ask-agent wiring
+          // shape above at this same case-block).
+          botDirectSender: {
+            sendText: async (channelId: string, text: string) => {
+              const sender = botDirectSenderRef.current;
+              if (!sender) return;
+              await sender.sendText(channelId, text);
+            },
+          },
+        },
+      );
     }
 
     case "set-effort": {
@@ -4066,9 +9407,30 @@ async function routeMethod(
       const channelIdParam =
         typeof params.channel_id === "string" ? params.channel_id : undefined;
 
-      const agentConfig = configs.find((c) => c.name === agentName);
+      // Phase 999.36 sub-bug C (D-09, D-10) [Rule 3 - blocking deviation
+      // from plan's action block] — read the thread registry FIRST and
+      // resolve the subagent binding by sessionName. The agent-config
+      // lookup below uses the PARENT agent's name when `agentName` is
+      // actually a subagent sessionName (subagents are spawned dynamically
+      // and their sessionNames are NOT in the static `configs[]` list, so
+      // the pre-fix lookup threw "Agent not found" for any subagent that
+      // followed Task 4's prompt instruction to pass its own sessionName).
+      // Subagents legitimately inherit the parent's workspace, memoryPath,
+      // and fileAccess for security gating (allowedRoots) — only the
+      // channel routing differs (binding.threadId vs parent.channels[0]).
+      const threadRegistryForShare = await readThreadRegistry(
+        THREAD_REGISTRY_PATH,
+      );
+      const subagentBinding = getBindingForSession(
+        threadRegistryForShare,
+        agentName,
+      );
+      const lookupName = subagentBinding
+        ? subagentBinding.agentName
+        : agentName;
+      const agentConfig = configs.find((c) => c.name === lookupName);
       if (!agentConfig) {
-        throw new ManagerError(`Agent '${agentName}' not found in config`);
+        throw new ManagerError(`Agent '${lookupName}' not found in config`);
       }
 
       const bridge = discordBridgeRef.current;
@@ -4076,21 +9438,66 @@ async function routeMethod(
         throw new ManagerError("Discord bridge not available");
       }
 
-      // Resolve allowedRoots to the agent's workspace + memoryPath.
+      // Resolve allowedRoots to the agent's workspace + memoryPath + Phase 96
+      // D-05/D-06 fileAccess paths (operator-shared via ACL). Without
+      // fileAccess inclusion, share-file refused operator-shared paths even
+      // though the Phase 96 capability probe + clawcode_list_files honored
+      // them — surfaced as deploy bug 2026-04-25 when fin-acquisition tried
+      // to share /home/jjagpal/.openclaw/workspace-finmentum/research/*.pdf
+      // and got "outside the agent workspace; refused" despite the path
+      // being in the resolved fileAccess set.
       const allowedRoots: string[] = [];
       if (agentConfig.workspace) allowedRoots.push(agentConfig.workspace);
       if (agentConfig.memoryPath) allowedRoots.push(agentConfig.memoryPath);
+      // Phase 96.1 hotfix — extend allowedRoots with resolved fileAccess.
+      // resolveFileAccess merges defaults.fileAccess + agent.fileAccess and
+      // expands the {agent} token. Defaults are always populated by zod
+      // default ([/home/clawcode/.clawcode/agents/{agent}/]).
+      const { resolveFileAccess: resolveFileAccessForShare } = await import(
+        "../config/loader.js"
+      );
+      // routeMethod doesn't receive the top-level `config` object — only
+      // the resolved per-agent `configs[]`. Pass undefined for defaults;
+      // resolveFileAccess will skip the defaults merge. The defaults
+      // template `{agent}` expands to the agent's workspace dir which is
+      // already in allowedRoots from line 4172 (agentConfig.workspace),
+      // so no functional loss. Per-agent fileAccess override (which IS
+      // populated for cross-workspace cases like fin-acquisition reading
+      // /home/jjagpal/.openclaw/workspace-finmentum/) still applies.
+      // Bug fix 2026-04-25 evening: original Phase 96.1 hotfix referenced
+      // `config.defaults` but `config` is not in routeMethod scope —
+      // ReferenceError at runtime broke clawcode_share_file entirely.
+      const fileAccessPaths = resolveFileAccessForShare(
+        agentName,
+        agentConfig as unknown as { readonly fileAccess?: readonly string[] },
+        undefined,
+      );
+      for (const p of fileAccessPaths) {
+        if (!allowedRoots.includes(p)) allowedRoots.push(p);
+      }
       if (allowedRoots.length === 0) {
         throw new ManagerError(
-          `Agent '${agentName}' has no workspace or memoryPath configured`,
+          `Agent '${agentName}' has no workspace, memoryPath, or fileAccess configured`,
         );
       }
 
-      // Default channel: explicit param, otherwise first configured channel.
-      const channelId = channelIdParam ?? agentConfig.channels[0];
+      // Phase 999.36 sub-bug C (D-09, D-10) — route through a pure helper
+      // that consults the thread binding registry FIRST. For subagent
+      // invocations (where `agentName` is actually the sessionName like
+      // `fin-acquisition-sub-OV9rkf`), the helper resolves to the bound
+      // thread, NOT to the parent agent's primary channel. For regular
+      // agent invocations, the helper falls through to the existing
+      // `agentConfig.channels[0]` behavior — backwards compatible.
+      // (threadRegistryForShare is read above for the agentConfig lookup.)
+      const channelId = resolveShareFileChannel(
+        agentName,
+        channelIdParam,
+        threadRegistryForShare,
+        agentConfig,
+      );
       if (!channelId) {
         throw new ManagerError(
-          `Agent '${agentName}' has no Discord channels configured and no channel_id provided`,
+          `Agent '${agentName}' has no Discord channels configured, no thread binding, and no channel_id provided`,
         );
       }
 
@@ -4318,6 +9725,155 @@ async function routeMethod(
       return { agent: agentName, period, ...aggregate };
     }
 
+    case "agent-activity": {
+      // Phase 116-postdeploy 2026-05-12 — F03 tile 24h sparkline IPC.
+      // Mirrors the shape of `case "latency":` below. Returns per-hour
+      // turn counts for a single agent over a sliding window.
+      //
+      // Params:
+      //   agent       (string, required)
+      //   windowHours (number, optional, default 24, clamped to 1..168)
+      const agentName = validateStringParam(params, "agent");
+      const rawWindow = (params as { windowHours?: unknown }).windowHours;
+      const windowHours =
+        typeof rawWindow === "number" && Number.isFinite(rawWindow)
+          ? Math.max(1, Math.min(Math.floor(rawWindow), 168))
+          : 24;
+      // sinceToIso accepts "24h", "1h" etc — feed it the clamped value
+      // as a duration string so we stay on the same window-parser the
+      // rest of the trace-store IPC surface uses.
+      let sinceIso: string;
+      try {
+        sinceIso = sinceToIso(`${windowHours}h`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "invalid since duration";
+        throw new ManagerError(`Invalid windowHours: ${msg}`);
+      }
+      const store = manager.getTraceStore(agentName);
+      // Stopped agents (no TraceStore singleton) return an empty
+      // buckets array, NOT an error — the tile renders the "no turns
+      // 24h" empty state in that case.
+      const buckets = store
+        ? store
+            .getActivityByHour(agentName, sinceIso)
+            .map((r) => ({ bucket: r.bucket, turn_count: r.turn_count }))
+        : [];
+      return {
+        agent: agentName,
+        windowHours,
+        since: sinceIso,
+        buckets,
+      };
+    }
+
+    case "fleet-activity-summary": {
+      // Phase 116-postdeploy 2026-05-12 — main-dashboard tile sort.
+      // Operator: "the main dashboard page should show agents ordered by
+      // whats used the most". Returns one row per non-ephemeral agent
+      // with turn counts over rolling 24h / 7d windows plus the last-turn
+      // timestamp. The SPA sorts the tile grid by `turns_24h DESC` with
+      // alphabetical tiebreak.
+      //
+      // Subagents (-sub-) and ephemeral threads (-thread-) are filtered
+      // out — matches the canonical `agentNames` filter at line ~3326 so
+      // the main-dashboard tile grid doesn't sort against transient
+      // execution units that an operator never sees as tiles anyway.
+      //
+      // Stopped agents (no TraceStore singleton) surface with zero
+      // counts; they still appear in the response so the client can
+      // render their tiles in the dormant footer without missing data.
+      const nowMs = Date.now();
+      const since24hIso = new Date(nowMs - 24 * 3_600_000).toISOString();
+      const since7dIso = new Date(nowMs - 7 * 24 * 3_600_000).toISOString();
+      // `configs` is the in-scope ResolvedAgentConfig[] for the IPC
+      // handler (see daemon.ts:1122). Filter matches the canonical
+      // `agentNames` projection used elsewhere in this module so the
+      // main-dashboard tile grid doesn't sort against ephemeral
+      // subagents/threads.
+      const tileAgents = configs.filter(
+        (a) => !a.name.includes("-sub-") && !a.name.includes("-thread-"),
+      );
+      const summary = tileAgents.map((cfg) => {
+        const store = manager.getTraceStore(cfg.name);
+        if (!store) {
+          return {
+            agent: cfg.name,
+            turns_24h: 0,
+            turns_7d: 0,
+            last_turn_at: null as string | null,
+          };
+        }
+        const r24 = store.getTurnSummarySince(cfg.name, since24hIso);
+        const r7d = store.getTurnSummarySince(cfg.name, since7dIso);
+        return {
+          agent: cfg.name,
+          turns_24h: r24.n,
+          turns_7d: r7d.n,
+          // 7d MAX is always >= 24h MAX, so use it as the most-recent
+          // signal. Falls back to null when the agent has zero turns in
+          // the last week (operator-stopped fleet, fresh install, etc.).
+          last_turn_at: r7d.last_at,
+        };
+      });
+      return {
+        since_24h: since24hIso,
+        since_7d: since7dIso,
+        agents: summary,
+      };
+    }
+
+    case "list-planning-tasks": {
+      // Phase 116-postdeploy 2026-05-12 — Tasks Kanban planning-artefact
+      // ingest. Scans the repo's `.planning/` tree at request time;
+      // missing dir (production install at /opt/clawcode) returns the
+      // empty response — never errors so the SPA's Tasks page degrades
+      // gracefully. Heavy I/O is bounded (one readdir + per-file stat;
+      // bodies parsed for frontmatter + first-paragraph excerpt only).
+      const { listPlanningTasks } = await import("./planning-tasks.js");
+      return await listPlanningTasks();
+    }
+
+    case "restart-daemon": {
+      // Phase 116-postdeploy 2026-05-12 — Basic-mode "Restart daemon"
+      // quick action. Sends SIGHUP to ourselves; the SIGHUP handler at
+      // daemon.ts:~7563 runs graceful shutdown and exits with code 129,
+      // which systemd's RestartForceExitStatus=129 turns into a clean
+      // restart. Phase 999.6 pre-deploy snapshot preserves running agents.
+      //
+      // setImmediate ordering: schedule the signal on the NEXT tick so
+      // the IPC response + socket flush land BEFORE shutdown begins.
+      // Without this, the dashboard sees a network error instead of the
+      // "daemon restarting…" toast we want to surface.
+      //
+      // Original design was `restart-discord-bot` (stop→start on the
+      // bridge singleton). Withdrawn before deploy because
+      // DiscordBridge.stop() calls client.destroy() and every consumer
+      // that captured `bridge.discordClient` at boot (WebhookManager,
+      // SubagentThreadSpawner, restart-greeting BotDirectSender) holds
+      // a reference to the destroyed Client — bridge-restart alone
+      // can't repair those closures. Daemon restart sidesteps the
+      // entire problem by rebuilding everything from scratch.
+      setImmediate(() => {
+        try {
+          process.kill(process.pid, "SIGHUP");
+        } catch (err) {
+          // Logging only — by the time we get here the IPC response is
+          // already on the wire. If signal delivery fails (unusual on a
+          // unix host), systemd's idle-watchdog will eventually notice.
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error(
+            { component: "daemon", error: msg },
+            "restart-daemon: SIGHUP self-signal failed",
+          );
+        }
+      });
+      return {
+        ok: true,
+        message:
+          "SIGHUP scheduled — daemon will restart via systemd (RestartForceExitStatus=129). Reconnect in ~3-5s.",
+      };
+    }
+
     case "latency": {
       const since = typeof params.since === "string" && params.since.length > 0 ? params.since : "24h";
       let sinceIso: string;
@@ -4415,6 +9971,9 @@ async function routeMethod(
       ): CacheTelemetryReport & {
         readonly status: CacheHitRateStatus;
         readonly cache_effect_ms: number | null;
+        readonly tool_cache_hit_rate: number | null;
+        readonly tool_cache_size_mb: number | null;
+        readonly tool_cache_turns: number;
       } => {
         const store = manager.getTraceStore(agentName);
         if (!store) {
@@ -4442,10 +10001,21 @@ async function routeMethod(
             "cache delivering no first-token benefit (expected delta < 0)",
           );
         }
+        // Phase 115 Plan 07 T04 — aggregate tool-cache telemetry over the
+        // same window. Surfaced next to prompt_cache_hit_rate on the
+        // dashboard (sub-scope 16(c) per roadmap line 875).
+        // tool_cache_hit_rate is the per-turn average from traces.db;
+        // tool_cache_size_mb is fleet-wide and may be NULL on per-turn
+        // rollups — the live value is folded into the response by the
+        // closure intercept of `cache` IPC (see tool_cache_size_mb_live).
+        const toolCache = store.getToolCacheTelemetry(agentName, sinceIso);
         return Object.freeze({
           ...report,
           status,
           cache_effect_ms: effect,
+          tool_cache_hit_rate: toolCache.avgToolCacheHitRate,
+          tool_cache_size_mb: toolCache.avgToolCacheSizeMb,
+          tool_cache_turns: toolCache.turnsWithCacheEvents,
         });
       };
 
@@ -4531,7 +10101,7 @@ async function routeMethod(
       // Phase 51: invoked by `clawcode bench` to run a single prompt against a
       // running agent and capture a trace. Not exposed via Discord; CLI /
       // harness only. Caller-owned Turn lifecycle matches the Phase 50
-      // contract: SessionManager.sendToAgent NEVER calls turn.end(); this
+      // contract: SessionManager.dispatchTurn NEVER calls turn.end(); this
       // handler does, in both success and error paths.
       //
       // Phase 54 Plan 03 — response shape extended with rate_limit_errors:
@@ -4561,7 +10131,7 @@ async function routeMethod(
       const turn = collector.startTurn(turnId, agentName, null);
       let rateLimitErrors = 0;
       try {
-        const response = await manager.sendToAgent(agentName, prompt, turn);
+        const response = await manager.dispatchTurn(agentName, prompt, turn);
         turn.end("success");
         return { turnId, response, rate_limit_errors: rateLimitErrors };
       } catch (err) {
@@ -4645,15 +10215,115 @@ async function routeMethod(
       const systemPrompt = typeof params.systemPrompt === "string" ? params.systemPrompt : undefined;
       const task = typeof params.task === "string" ? params.task : undefined;
       const model = typeof params.model === "string" ? params.model as "sonnet" | "opus" | "haiku" : undefined;
+      // Phase 999.3 — D-EDG-04: empty string treated as not-set; D-ARC-02:
+      // validate delegate exists at IPC boundary so the verbatim error
+      // surfaces to the MCP caller (per Phase 85 TOOL-04 verbatim-error pattern).
+      const delegateToRaw = typeof params.delegateTo === "string" ? params.delegateTo : undefined;
+      const delegateTo = delegateToRaw && delegateToRaw.length > 0 ? delegateToRaw : undefined;
+      if (delegateTo) {
+        const delegateConfig = manager.getAgentConfig(delegateTo);
+        if (!delegateConfig) {
+          throw new ManagerError(`Delegate agent '${delegateTo}' not found in config`);
+        }
+      }
+      // Phase 100 follow-up — post-reply chain.
+      //   autoRelay (default true): parent gets a synthetic turn in main channel
+      //   autoArchive (default false): also archive thread + stop session
+      //   autoArchive implies autoRelay
+      const autoArchive = params.autoArchive === true;
+      const autoRelay = params.autoRelay === undefined
+        ? true
+        : params.autoRelay !== false;
       const result = await subagentThreadSpawner.spawnInThread({
         parentAgentName: parentAgent,
         threadName,
         systemPrompt,
         model,
         task,
+        autoRelay,
+        autoArchive,
+        delegateTo,
       });
-      // Register session end callback for automatic cleanup (SATH-04)
+      // Register session end callback for automatic cleanup (SATH-04).
+      // Phase 99 sub-scope M (2026-04-26) — also auto-relay completion to
+      // parent agent BEFORE cleanup so the binding (parent agent + channel)
+      // is still readable. Relay is fire-and-forget (errors logged, never
+      // thrown) so cleanup always runs.
+      //
+      // Phase 999.25 — dedupe with the explicit `subagent_complete` tool
+      // and the quiescence sweep. If `binding.completedAt` is already
+      // set, both prior paths fired; skip the relay here to avoid a
+      // duplicate post in the parent channel. Cleanup still runs.
       manager.registerSessionEndCallback(result.sessionName, async () => {
+        try {
+          const reg = await readThreadRegistry(THREAD_REGISTRY_PATH);
+          const binding = getBindingForThread(reg, result.threadId);
+          if (binding?.completedAt !== undefined && binding?.completedAt !== null) {
+            logger.info(
+              {
+                component: "subagent-thread-spawner",
+                action: "skip-session-end-relay",
+                reason: "already-completed",
+                threadId: result.threadId,
+                sessionName: result.sessionName,
+                completedAt: binding.completedAt,
+              },
+              "session-end relay skipped — completion already relayed",
+            );
+          } else {
+            // Phase 999.36 sub-bug D diag (D-12) — session-end firing log.
+            // This path fires when the subagent's claude session naturally
+            // ends and neither the explicit-tool nor quiescence-sweep
+            // beat it to the relay.
+            logger.info(
+              {
+                source: "session-end",
+                threadId: result.threadId,
+                sessionName: result.sessionName,
+              },
+              "[diag] subagent-complete-fired",
+            );
+            // Phase 999.36 sub-bug D backstop — session-end is
+            // delivery-equivalent. If the agent's session ended without an
+            // explicit lastDeliveryAt stamp (crash mid-stream, manual stop,
+            // etc.), the operator still deserves notification. Stamp delivery
+            // now so markRelayCompleted's gate passes.
+            try {
+              const stamp = await stampLastDeliveryAt(
+                THREAD_REGISTRY_PATH,
+                result.threadId,
+                Date.now(),
+              );
+              if (!stamp.ok) {
+                logger.warn(
+                  { threadId: result.threadId, reason: stamp.reason },
+                  "session-end backstop lastDeliveryAt stamp failed (relay may refuse)",
+                );
+              }
+            } catch (err) {
+              logger.warn(
+                {
+                  threadId: result.threadId,
+                  error: (err as Error).message,
+                },
+                "session-end backstop lastDeliveryAt stamp threw (relay may refuse)",
+              );
+            }
+            await subagentThreadSpawner.relayCompletionToParent(result.threadId);
+          }
+        } catch (err) {
+          // Best-effort: relay failure must not block cleanup. Matches
+          // the pre-Phase-999.25 fire-and-forget posture.
+          logger.warn(
+            {
+              component: "subagent-thread-spawner",
+              err: String(err),
+              threadId: result.threadId,
+              sessionName: result.sessionName,
+            },
+            "session-end relay errored (non-fatal); cleanup continues",
+          );
+        }
         await subagentThreadSpawner.cleanupSubagentThread(result.threadId);
       });
       return { ok: true, ...result };
@@ -4666,6 +10336,136 @@ async function routeMethod(
       const threadId = validateStringParam(params, "threadId");
       await subagentThreadSpawner.cleanupSubagentThread(threadId);
       return { ok: true };
+    }
+
+    case "archive-discord-thread": {
+      // Phase 100 follow-up — operator/agent-driven Discord thread archive +
+      // auto-prune the thread-bindings.json registry entry.
+      //
+      // Phase 999.14 MCP-08 — now routed through cleanupThreadWithClassifier
+      // so Discord 50001 (Missing Access) and 10003 (Unknown Channel) — both
+      // indicating the thread is gone server-side — prune the registry entry
+      // instead of throwing. Returns success-with-classification on every
+      // path (CLI uses classification to print the right message).
+      if (!subagentThreadSpawner) {
+        throw new ManagerError("Discord thread archive requires Discord bridge");
+      }
+      const threadId = validateStringParam(params, "threadId");
+      const lock = params.lock === true;
+      // Resolve agentName for log triage (operator regression — fin-acq vs fin-test).
+      let agentName = "(unknown)";
+      try {
+        const reg = await readThreadRegistry(THREAD_REGISTRY_PATH);
+        agentName = getBindingForThread(reg, threadId)?.agentName ?? "(unknown)";
+      } catch {
+        /* best-effort — non-fatal if registry read fails */
+      }
+      const result = await cleanupThreadWithClassifier({
+        spawner: subagentThreadSpawner,
+        registryPath: THREAD_REGISTRY_PATH,
+        threadId,
+        agentName,
+        log: logger,
+        lock,
+      });
+      return { ok: true, ...result };
+    }
+
+    case "threads-prune-stale": {
+      // Phase 999.14 MCP-10 — operator escape hatch: run the stale-binding
+      // sweep on demand with an operator-supplied threshold (overrides the
+      // daemon-wide defaults.threadIdleArchiveAfter).
+      if (!subagentThreadSpawner) {
+        throw new ManagerError("Stale-binding prune requires Discord bridge");
+      }
+      const staleAfter = validateStringParam(params, "staleAfter");
+      const idleMs = parseIdleDuration(staleAfter);
+      const result = await sweepStaleBindings({
+        spawner: subagentThreadSpawner,
+        registryPath: THREAD_REGISTRY_PATH,
+        now: Date.now(),
+        idleMs,
+        log: logger,
+      });
+      return { ok: true, ...result };
+    }
+
+    case "threads-prune-agent": {
+      // Phase 999.14 MCP-10 — last-resort operator escape hatch. Force-prunes
+      // ALL bindings for the named agent without calling Discord. Used when
+      // the registry has bindings whose Discord state is unknown / unreachable
+      // (today's incident: 3 fin-acquisition bindings, all Discord-50001).
+      const agentName = validateStringParam(params, "agent");
+      const reg = await readThreadRegistry(THREAD_REGISTRY_PATH);
+      const bindings = getBindingsForAgent(reg, agentName);
+      let next = reg;
+      for (const b of bindings) {
+        next = removeBinding(next, b.threadId);
+      }
+      if (next !== reg) {
+        await writeThreadRegistry(THREAD_REGISTRY_PATH, next);
+      }
+      logger.info(
+        {
+          component: "thread-cleanup",
+          action: "force-prune-agent",
+          agent: agentName,
+          prunedCount: bindings.length,
+        },
+        "force-pruned all bindings for agent (no Discord call)",
+      );
+      return { ok: true, prunedCount: bindings.length };
+    }
+
+    case "schedule-reminder": {
+      // Phase 100 follow-up (operator-surfaced 2026-04-27) — backs the
+      // `schedule_reminder` MCP tool. Agents promise "ping me at 7:58 PM"
+      // but had no scheduling primitive — the reminder leaked into context
+      // and bled into the next inbound turn instead of firing as its own
+      // standalone message. This routes through SchedulerSource +
+      // TriggerEngine + the f984008 delivery callback, so the agent's reply
+      // posts to its bound Discord channel.
+      //
+      // Accepts `at` as either ISO 8601 (`2026-04-27T19:58:00-07:00`) or a
+      // relative expression ("in 15 min", "in 2 hours", "in 30s", "in 3
+      // days"). In-memory only — daemon restart loses pending reminders.
+      const agentName = validateStringParam(params, "agent");
+      const prompt = validateStringParam(params, "prompt");
+      const atRaw = validateStringParam(params, "at");
+
+      let fireAt: Date;
+      const relMatch = atRaw.match(
+        /^in\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?)$/i,
+      );
+      if (relMatch) {
+        const n = parseInt(relMatch[1]!, 10);
+        const unit = relMatch[2]!.toLowerCase();
+        let ms: number;
+        if (unit.startsWith("s")) ms = n * 1000;
+        else if (unit.startsWith("m")) ms = n * 60 * 1000;
+        else if (unit.startsWith("h")) ms = n * 60 * 60 * 1000;
+        else if (unit.startsWith("d")) ms = n * 24 * 60 * 60 * 1000;
+        else throw new ManagerError(`Unsupported time unit: ${unit}`);
+        fireAt = new Date(Date.now() + ms);
+      } else {
+        fireAt = new Date(atRaw);
+        if (isNaN(fireAt.getTime())) {
+          throw new ManagerError(
+            `Invalid 'at' format. Use ISO 8601 (e.g. 2026-04-27T19:58:00-07:00) or relative ("in 15 min").`,
+          );
+        }
+      }
+
+      const result = await schedulerSource.addOneShotReminder({
+        fireAt,
+        agentName,
+        prompt,
+      });
+      return {
+        ok: true,
+        reminderId: result.reminderId,
+        fireAt: fireAt.toISOString(),
+      };
     }
 
     case "approve-command": {
@@ -4875,7 +10675,14 @@ async function routeMethod(
       const { makeRealCallTool, makeRealListTools } = await import(
         "../mcp/json-rpc-call.js"
       );
-      const rep = await performMcpReadinessHandshake(mcpServers);
+      // Phase 999.27 — skip broker-pooled servers from on-demand probes.
+      // The 1password broker shim probe would spawn with daemon-default
+      // env (clawdbot token), causing broker rebind cycles. Broker has
+      // its own heartbeat at `heartbeat/checks/mcp-broker.ts`.
+      const probableServers = (
+        await import("../mcp/broker-shim-detect.js")
+      ).filterOutBrokerPooled(mcpServers);
+      const rep = await performMcpReadinessHandshake(probableServers);
 
       // Carry prior capabilityProbe blocks for lastSuccessAt preservation.
       const prevProbeByName = new Map<
@@ -4890,7 +10697,7 @@ async function routeMethod(
 
       const probeLog = (await import("pino")).default({ level: "silent" });
       const serversByName = new Map(
-        mcpServers.map((s) => [
+        probableServers.map((s) => [
           s.name,
           {
             name: s.name,
@@ -5049,66 +10856,184 @@ async function routeMethod(
     }
 
     case "ask-advisor": {
+      // Phase 117-07 T02 — dispatch delegated to `handleAskAdvisor` for
+      // testability + to make the dispatch shape (native short-circuit
+      // vs fork-via-AdvisorService) reviewable without scrolling the
+      // 60-line inline body that used to live here. Truncation + budget
+      // gate + recordCall now live in `DefaultAdvisorService.ask`
+      // (Plan 117-02 T06) — single source of truth for
+      // `ADVISOR_RESPONSE_MAX_LENGTH`. Memory-context retrieval dropped
+      // by design — see the AdvisorService composition comment at the
+      // daemon-boot site for the parity-loss rationale.
       const agentName = validateStringParam(params, "agent");
       const question = validateStringParam(params, "question");
+      return await handleAskAdvisor(
+        { manager, advisorService, advisorBudget, advisorDefaults },
+        { agent: agentName, question },
+      );
+    }
 
-      // Check budget before doing any expensive work
-      if (!advisorBudget.canCall(agentName)) {
-        throw new ManagerError(
-          `Advisor budget exhausted for agent '${agentName}' (0 calls remaining today)`,
-        );
-      }
-
-      // Retrieve top 5 relevant memories for context
-      let memoryContext = "";
-      const store = manager.getMemoryStore(agentName);
-      if (store) {
+    // Phase 124 Plan 01 T-03 — hybrid compaction primitive. Wires the
+    // pure-DI handler at daemon-compact-session-ipc.ts. Operator-callable
+    // via `clawcode session compact <agent>`. Per Path B (advisor-consulted
+    // before write), live-handle hot-swap is deferred — the fork JSONL is
+    // produced on disk + memory.db grows + `forked_to` is surfaced; the
+    // live worker continues writing to the original session. Tracked as a
+    // follow-up in 124-01-SUMMARY.md.
+    case "compact-session": {
+      const agentName = validateStringParam(params, "agent");
+      const { handleCompactSession } = await import(
+        "./daemon-compact-session-ipc.js"
+      );
+      // Phase 136 T-04 — direct SDK import replaced by the
+      // src/llm-runtime/ seam chokepoint. Mirror of the heartbeat
+      // auto-trigger callsite above; silent-path-bifurcation gate
+      // (CONTEXT D-06) — BOTH sites updated in the same commit.
+      const { loadAnthropicAgentSdkModule } = await import(
+        "../llm-runtime/index.js"
+      );
+      const sdk = await loadAnthropicAgentSdkModule();
+      // Phase 125 Plan 02 — D-01 single extractor seam. Identical
+      // construction to the auto-trigger callsite above. Tier 1 runs
+      // here so preserved turns ride through `buildTieredExtractor`'s
+      // head; daily-log durability is preserved (getConversationTurns
+      // below still returns ALL turns to compactForAgent's flush step).
+      const {
+        buildTieredExtractor: buildExtIpc,
+        partitionForVerbatim: partitionIpc,
+      } = await import("./compact-extractors/index.js");
+      const cfgForAgentIpc = configs.find(
+        (a: ResolvedAgentConfig) => a.name === agentName,
+      );
+      const preserveLastTurnsIpc = cfgForAgentIpc?.preserveLastTurns ?? 10;
+      const preserveVerbatimIpc =
+        cfgForAgentIpc?.preserveVerbatimPatterns ?? [];
+      const allTurnsIpc = (() => {
+        const sid = manager.getActiveConversationSessionId(agentName);
+        const store = manager.getConversationStore(agentName);
+        if (!sid || !store) return [];
+        return store
+          .getTurnsForSession(sid)
+          .filter((t) => t.role !== "system")
+          .map((t) => ({
+            timestamp: t.createdAt,
+            role: t.role as "user" | "assistant",
+            content: t.content,
+          }));
+      })();
+      const partitionDepsIpc = {
+        preserveLastTurns: preserveLastTurnsIpc,
+        preserveVerbatimPatterns: preserveVerbatimIpc,
+        clock: () => new Date(),
+        log: logger,
+        agentName,
+      };
+      const { preserved: preservedIpc } = partitionIpc(
+        allTurnsIpc,
+        partitionDepsIpc,
+      );
+      // Phase 125 Plan 03 — Tier 2 Haiku-driven structured extraction
+      // (mirror of the auto-trigger site above; silent-path-bifurcation
+      // gate from Plan 02 continues to apply — BOTH sites updated in the
+      // same commit).
+      const onTier2FactsIpc = async (facts: import("./compact-extractors/types.js").Tier2Facts): Promise<void> => {
         try {
-          const embedder = manager.getEmbedder();
-          const queryEmbedding = await embedder.embed(question);
-          const search = new SemanticSearch(store.getDatabase());
-          const results = search.search(queryEmbedding, 5);
-          if (results.length > 0) {
-            memoryContext = results
-              .map((r, i) => `[${i + 1}] ${r.content}`)
-              .join("\n");
-          }
-        } catch {
-          // Memory search failure is non-fatal for advisor
+          const { buildActiveStateBlock } = await import(
+            "./active-state/builder.js"
+          );
+          const { writeActiveStateYaml } = await import(
+            "./active-state/yaml-writer.js"
+          );
+          const fsPromises = await import("node:fs/promises");
+          const operatorMsgs = allTurnsIpc
+            .filter((t) => t.role === "user")
+            .slice(-5)
+            .map((t) => t.content);
+          const block = buildActiveStateBlock({
+            recentOperatorMessages: operatorMsgs,
+            recentAgentTurns: allTurnsIpc as unknown as readonly import("../memory/conversation-types.js").ConversationTurn[],
+            agentName: agentName,
+            clock: () => new Date(),
+            tier2Facts: facts,
+          });
+          await writeActiveStateYaml(agentName, block, {
+            baseDir: join(homedir(), ".clawcode", "agents"),
+            fs: fsPromises,
+            clock: () => new Date(),
+          });
+        } catch (err) {
+          logger.warn(
+            { agent: agentName, error: (err as Error).message },
+            "[125-03-tier2-haiku] onTier2Facts (ipc) failed (non-fatal)",
+          );
         }
-      }
-
-      // Fork a session with opus model for one-shot advice
-      const systemPrompt = [
-        `You are an advisor to agent "${agentName}". Provide concise, actionable guidance.`,
-        ...(memoryContext
-          ? ["\nRelevant context from agent's memory:", memoryContext]
-          : []),
-      ].join("\n");
-
-      const fork = await manager.forkSession(agentName, {
-        modelOverride: "opus" as const,
-        systemPromptOverride: systemPrompt,
+      };
+      const extractMemories = buildExtIpc({
+        ...partitionDepsIpc,
+        preservedTurns: preservedIpc,
+        tier2Summarize: (prompt, opts) => summarizeWithHaiku(prompt, opts),
+        onTier2Facts: onTier2FactsIpc,
       });
-
-      let answer: string;
-      try {
-        answer = await manager.sendToAgent(fork.forkName, question);
-      } finally {
-        // Always clean up the fork
-        await manager.stopAgent(fork.forkName).catch(() => {});
+      // Phase 124 follow-up — wire the producer-side turnStartedAt slot
+      // into the handler's safety-budget gate. Build a 1-entry map at call
+      // time from SessionManager.getTurnStartedAt(); when no turn is in
+      // flight (or the agent is not running) the map stays empty and the
+      // gate falls through. `maxTurnAgeMs` is left to its 10-min default
+      // per CONTEXT D-03 step 2.
+      const turnStartedAtIpc = (() => {
+        const ts = manager.getTurnStartedAt(agentName);
+        return ts !== null ? new Map([[agentName, ts]]) : new Map<string, number>();
+      })();
+      const compactResult = await handleCompactSession(
+        { agent: agentName },
+        {
+          manager: {
+            getSessionHandle: (n) => manager.getSessionHandle(n),
+            getConversationTurns: (n) => {
+              const sid = manager.getActiveConversationSessionId(n);
+              const store = manager.getConversationStore(n);
+              if (!sid || !store) return [];
+              // Map ConversationStore.ConversationTurn → compaction.ConversationTurn.
+              // The compaction primitive only reads {timestamp, role, content}.
+              // System turns are dropped (compaction shape is user|assistant only).
+              return store.getTurnsForSession(sid)
+                .filter((t) => t.role !== "system")
+                .map((t) => ({
+                  timestamp: t.createdAt,
+                  role: t.role as "user" | "assistant",
+                  content: t.content,
+                }));
+            },
+            getContextFillProvider: (n) => manager.getContextFillProvider(n),
+            compactForAgent: (n, conv, ex) =>
+              manager.compactForAgent(n, conv, ex),
+            hasCompactionManager: (n) => {
+              // No public accessor — mirror the throw guard at
+              // session-manager.ts:2208 by checking through a known surface.
+              // SessionLogger is created in the same memory-init step, so
+              // its presence is a proxy for compactionManager presence.
+              return manager.getSessionLogger(n) !== undefined;
+            },
+          },
+          sdkForkSession: async (id, opts) => {
+            const result = await sdk.forkSession(id, opts);
+            return { sessionId: result.sessionId };
+          },
+          extractMemories,
+          log: logger,
+          daemonReady: true,
+          turnStartedAt: turnStartedAtIpc,
+        },
+      );
+      // Phase 124 Plan 04 T-01 — record into the in-memory log so
+      // `heartbeat-status` surfaces `last_compaction_at` AND the heartbeat
+      // auto-trigger cooldown gate (T-02) sees both manual and auto
+      // compactions through the same source of truth. Only successful
+      // compactions are recorded — failed attempts must NOT enter cooldown.
+      if (compactResult.ok === true) {
+        compactionEventLog.record(agentName);
       }
-
-      // Truncate response to 2000 chars
-      if (answer.length > ADVISOR_RESPONSE_MAX_LENGTH) {
-        answer = answer.slice(0, ADVISOR_RESPONSE_MAX_LENGTH);
-      }
-
-      // Record the call after success
-      advisorBudget.recordCall(agentName);
-      const budgetRemaining = advisorBudget.getRemaining(agentName);
-
-      return { answer, budget_remaining: budgetRemaining };
+      return compactResult;
     }
 
     case "set-model": {
@@ -5149,40 +11074,506 @@ async function routeMethod(
         const tracker = manager.getUsageTracker(agentName);
         if (tracker) {
           const agentCosts = tracker.getCostsByAgentModel(since.toISOString(), now.toISOString());
-          results.push(...agentCosts);
+          // CostByAgentModel uses `tokens_in/tokens_out`; the IPC wire shape
+          // here uses `input_tokens/output_tokens`. Map field names rather
+          // than push() the row directly.
+          for (const row of agentCosts) {
+            results.push({
+              agent: row.agent,
+              model: row.model,
+              input_tokens: row.tokens_in,
+              output_tokens: row.tokens_out,
+              cost_usd: row.cost_usd,
+            });
+          }
         }
       }
       return { period, costs: results };
     }
 
     case "ingest-document": {
+      // Phase 101 Plan 02 T04 — single ingestion entry point per
+      // `feedback_silent_path_bifurcation`. Wires the Phase 101 ingestion
+      // engine (`src/document-ingest/index.ts`) + optional structured
+      // extraction (`extractStructured`) + atomic temp+rename writes to
+      // `<workspace>/documents/<doc-slug>-<date>.{md,json}`.
       const agentName = validateStringParam(params, "agent");
       const filePath = validateStringParam(params, "file_path");
-      const source = typeof params.source === "string" && params.source.length > 0 ? params.source : filePath;
+      const source =
+        typeof params.source === "string" && params.source.length > 0
+          ? params.source
+          : filePath;
+      const taskHintRaw = params.taskHint;
+      const taskHint: TaskHint | undefined =
+        taskHintRaw === "high-precision" || taskHintRaw === "standard"
+          ? taskHintRaw
+          : undefined;
+      const extractRaw = params.extract;
+      const extract: "text" | "structured" | "both" =
+        extractRaw === "structured" || extractRaw === "both"
+          ? extractRaw
+          : "text";
+      const schemaNameRaw = params.schemaName;
+      const schemaName: ExtractionSchemaName =
+        schemaNameRaw === "taxReturn" ? "taxReturn" : "taxReturn";
+      const backendRaw = params.backend;
+      const backend: OcrBackend | undefined =
+        backendRaw === "tesseract-cli" ||
+        backendRaw === "tesseract-wasm" ||
+        backendRaw === "claude-haiku" ||
+        backendRaw === "claude-sonnet" ||
+        backendRaw === "mistral" ||
+        backendRaw === "none"
+          ? backendRaw
+          : undefined;
+      const force = params.force === true;
 
       const docStore = manager.getDocumentStore(agentName);
       if (!docStore) {
-        throw new ManagerError(`Document store not found for agent '${agentName}' (agent may not be running)`);
+        throw new ManagerError(
+          `Document store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+
+      // T-101-08 mitigation — resolve file_path against the agent's
+      // workspace root. Reject path traversal outside the workspace.
+      // `path.relative` returns a string starting with `..` when the
+      // resolved target is outside `workspaceRoot`.
+      const agentConfig = configs.find((c) => c.name === agentName);
+      const workspaceRoot = agentConfig?.workspace;
+      const path = await import("node:path");
+      if (workspaceRoot) {
+        const resolvedTarget = path.resolve(filePath);
+        const resolvedRoot = path.resolve(workspaceRoot);
+        const rel = path.relative(resolvedRoot, resolvedTarget);
+        if (
+          rel.startsWith("..") ||
+          path.isAbsolute(rel)
+        ) {
+          throw new ManagerError(
+            `file_path '${filePath}' is outside agent workspace '${workspaceRoot}' — refused (T-101-08)`,
+          );
+        }
+      }
+
+      // Compute docSlug + atomic-write target paths (Phase 96 pattern).
+      // Phase 101 Plan 03 T03 — slug logic centralized in
+      // `src/document-ingest/index.ts::computeDocSlug` so the daemon + the
+      // cross-ingest seam derive identical slugs from the same filePath.
+      const docSlug = computeDocSlug(filePath);
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const docsDir = workspaceRoot
+        ? path.join(workspaceRoot, "documents")
+        : path.join(process.cwd(), "documents");
+      const textMdPath = path.join(docsDir, `${docSlug}-${dateStr}.md`);
+      const structuredJsonPath = path.join(
+        docsDir,
+        `${docSlug}-${dateStr}.json`,
+      );
+
+      // D-07 cache short-circuit: when force !== true AND a structured
+      // JSON output exists with matching extractionSchemaVersion, return
+      // the cached structured result without re-extracting.
+      const fsPromises = await import("node:fs/promises");
+      if (!force && (extract === "structured" || extract === "both")) {
+        try {
+          const cached = JSON.parse(
+            await fsPromises.readFile(structuredJsonPath, "utf-8"),
+          );
+          if (cached?.extractionSchemaVersion === "v1") {
+            logger.info(
+              { docSlug, agent: agentName, cached: true },
+              "phase101-ingest cache hit (force=false; D-07)",
+            );
+            return {
+              ok: true,
+              source,
+              chunks_created: 0,
+              total_chars: 0,
+              structured: cached,
+              paths: { textMd: textMdPath, structuredJson: structuredJsonPath },
+              telemetry: { cached: true, docSlug, type: "cached" as const },
+            };
+          }
+        } catch {
+          // No cached file — fall through to full ingest.
+        }
       }
 
       const fileBuffer = await readFile(filePath);
-      const chunks = filePath.endsWith(".pdf")
-        ? await chunkPdf(fileBuffer)
-        : chunkText(fileBuffer.toString("utf-8"));
+
+      // Run the Phase 101 engine to get text + telemetry. Pass the explicit
+      // backend override (if provided) through; the engine forwards it to
+      // ocrPage when image-bearing handlers fire.
+      let ingestResult;
+      try {
+        ingestResult = await ingestDocumentEngine(fileBuffer, filePath, {
+          taskHint,
+          backend,
+        });
+      } catch (err) {
+        // T05 — fail-mode alerts for the two engine-side terminal errors:
+        // max-pages-exceeded (DoS guard) and mistral-disabled (D-08 gate).
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/MAX_PAGES/.test(msg)) {
+          await recordIngestAlert({
+            docSlug,
+            type: "unknown",
+            reason: "max-pages-exceeded",
+            severity: "error",
+            agent: agentName,
+          }).catch(() => {
+            /* alerts never poison the ingest path */
+          });
+        } else if (/Mistral OCR backend disabled/.test(msg)) {
+          await recordIngestAlert({
+            docSlug,
+            type: "unknown",
+            reason: "mistral-disabled",
+            severity: "error",
+            agent: agentName,
+          }).catch(() => {
+            /* alerts never poison the ingest path */
+          });
+        }
+        throw err;
+      }
+      // `backend` is now threaded through ingestDocumentEngine → ocrPage above.
+
+      // Structured extraction (U4) when extract != 'text'.
+      let structured: unknown | undefined;
+      if (extract === "structured" || extract === "both") {
+        try {
+          structured = await extractStructured(
+            ingestResult.text,
+            schemaName,
+            { taskHint },
+          );
+        } catch (err) {
+          if (err instanceof DocIngestError) {
+            // T05 — fail-mode alert (extraction-missing-required).
+            const missingFields = (err as DocIngestError & {
+              missingFields?: readonly string[];
+            }).missingFields;
+            await recordIngestAlert({
+              docSlug,
+              type: ingestResult.telemetry.type,
+              reason: "extraction-missing-required",
+              severity: "error",
+              missingFields,
+              agent: agentName,
+            }).catch(() => {
+              /* alerts never poison the ingest path */
+            });
+            throw new ManagerError(
+              `structured extraction failed: ${err.message}`,
+            );
+          }
+          throw err;
+        }
+      }
+
+      // Atomic temp+rename writes (Phase 96 pattern). Skip when text is
+      // empty (degenerate ingest case from text-only docs etc.).
+      await fsPromises.mkdir(docsDir, { recursive: true });
+      if (ingestResult.text.length > 0) {
+        const tmpMd = `${textMdPath}.tmp-${process.pid}-${Date.now()}`;
+        await fsPromises.writeFile(tmpMd, ingestResult.text, "utf-8");
+        await fsPromises.rename(tmpMd, textMdPath);
+      }
+      if (structured !== undefined) {
+        const tmpJson = `${structuredJsonPath}.tmp-${process.pid}-${Date.now()}`;
+        await fsPromises.writeFile(
+          tmpJson,
+          JSON.stringify(structured, null, 2),
+          "utf-8",
+        );
+        await fsPromises.rename(tmpJson, structuredJsonPath);
+      }
+
+      // Chunk + embed + persist into the DocumentStore (legacy contract
+      // preserved). Prefer the engine's extracted text when present;
+      // otherwise fall back to the legacy chunker for parity with the
+      // pre-101 daemon behavior.
+      const chunks =
+        ingestResult.text.length > 0
+          ? chunkText(ingestResult.text)
+          : filePath.endsWith(".pdf")
+            ? await chunkPdf(fileBuffer)
+            : chunkText(fileBuffer.toString("utf-8"));
 
       if (chunks.length === 0) {
-        return { ok: true, source, chunks_created: 0, total_chars: 0 };
+        const telemetryFull = {
+          ...ingestResult.telemetry,
+          chunksCreated: 0,
+        };
+        logIngest(telemetryFull, logger);
+        return {
+          ok: true,
+          source,
+          chunks_created: 0,
+          total_chars: ingestResult.text.length,
+          ...(structured !== undefined ? { structured } : {}),
+          paths: {
+            textMd: textMdPath,
+            ...(structured !== undefined
+              ? { structuredJson: structuredJsonPath }
+              : {}),
+          },
+          telemetry: telemetryFull,
+        };
       }
 
       const embedder = manager.getEmbedder();
-      const embeddings: Float32Array[] = [];
-      for (const chunk of chunks) {
-        embeddings.push(await embedder.embed(chunk.content));
+      // CF-2 (Phase 101 D-09): document write path uses embedV2 (bge-small int8).
+      // The vec_document_chunks vec0 table is int8[384] — Float32 embeddings
+      // would fail the MATCH operator's type check.
+      const embeddings: Int8Array[] = [];
+      try {
+        for (const chunk of chunks) {
+          embeddings.push(await embedder.embedV2(chunk.content));
+        }
+      } catch (err) {
+        // T05 — fail-mode alert (embedder-failure).
+        await recordIngestAlert({
+          docSlug,
+          type: ingestResult.telemetry.type,
+          reason: "embedder-failure",
+          severity: "error",
+          agent: agentName,
+        }).catch(() => {
+          /* alerts never poison the ingest path */
+        });
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new ManagerError(`embedder.embedV2 failed: ${msg}`);
       }
 
       const result = docStore.ingest(source, chunks, embeddings);
-      return { ok: true, source, chunks_created: result.chunksCreated, total_chars: result.totalChars };
+
+      // Phase 101 Plan 03 T03 (U6) — cross-ingest the document chunks into
+      // the agent's memory_chunks pipeline so Phase 90 hybrid-RRF surfaces
+      // them on subsequent operator turns. Failure here MUST NOT poison the
+      // parent ingest (docStore.ingest already succeeded — the document IS
+      // ingested; the memory mirror is a best-effort retrieval enhancement).
+      let memoryChunksWritten = 0;
+      let migrationPhaseAfter:
+        | "v1-only"
+        | "dual-write"
+        | "v2-only"
+        | undefined;
+      try {
+        const memoryStore = manager.getMemoryStore(agentName);
+        if (!memoryStore) {
+          throw new Error(
+            `MemoryStore not found for agent '${agentName}' — skipping cross-ingest`,
+          );
+        }
+        const crossResult = await crossIngestToMemory({
+          agent: agentName,
+          docSlug,
+          chunks: chunks.map((c, i) => ({ index: i, content: c.content })),
+          embedderV1: embedder,
+          embedderV2: embedder,
+          memoryStore,
+          migrationPhaseStore: new MigrationPhaseStore(memoryStore, agentName),
+        });
+        memoryChunksWritten = crossResult.chunksWritten;
+        migrationPhaseAfter = crossResult.migrationPhaseAfter;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { docSlug, agent: agentName, err: msg },
+          "phase101-ingest cross-ingest-failed",
+        );
+        // T05 — record as embedder-failure (closest available reason; the
+        // cross-ingest path's actual failure modes are an embedV1/embedV2
+        // throw or a SQLite write throw, both of which the embedder-failure
+        // category covers semantically). Alerts never poison the ingest.
+        await recordIngestAlert({
+          docSlug,
+          type: ingestResult.telemetry.type,
+          reason: "embedder-failure",
+          severity: "error",
+          agent: agentName,
+        }).catch(() => {
+          /* alerts never poison the ingest path */
+        });
+      }
+
+      const telemetryFull = {
+        ...ingestResult.telemetry,
+        chunksCreated: result.chunksCreated,
+        memoryChunksWritten,
+        ...(migrationPhaseAfter !== undefined ? { migrationPhaseAfter } : {}),
+      };
+      logIngest(telemetryFull, logger);
+      return {
+        ok: true,
+        source,
+        chunks_created: result.chunksCreated,
+        total_chars: result.totalChars,
+        ...(structured !== undefined ? { structured } : {}),
+        paths: {
+          textMd: textMdPath,
+          ...(structured !== undefined
+            ? { structuredJson: structuredJsonPath }
+            : {}),
+        },
+        telemetry: telemetryFull,
+      };
     }
+
+    case "auto-ingest-attachment": {
+      // Phase 999.43 Plan 02 T03 — handler body extracted to
+      // `src/manager/auto-ingest-handler.ts` for direct testability
+      // (memory-lookup-handler.ts precedent — Phase 68-02). This case
+      // becomes a thin DI wrapper: validate IPC params, then delegate
+      // to `handleAutoIngestAttachment(params, deps)`.
+      //
+      // SINGLE auto-ingest entry point per feedback_silent_path_bifurcation.md.
+      // Manual `ingest-document` case above remains the operator-driven path.
+
+      const { handleAutoIngestAttachment } = await import(
+        "./auto-ingest-handler.js"
+      );
+
+      const agentName = validateStringParam(params, "agent");
+      const filePath = validateStringParam(params, "file_path");
+      const filename = validateStringParam(params, "filename");
+      const channelId = validateStringParam(params, "channel_id");
+      const messageId = validateStringParam(params, "message_id");
+      const userId = validateStringParam(params, "user_id");
+      const userName = validateStringParam(params, "user_name");
+      const mimeType =
+        typeof params.mime_type === "string" && params.mime_type.length > 0
+          ? params.mime_type
+          : null;
+      const size = typeof params.size === "number" ? params.size : 0;
+      const visionAnalysis =
+        typeof params.vision_analysis === "string" &&
+        params.vision_analysis.length > 0
+          ? params.vision_analysis
+          : null;
+
+      // Delegate to the pure handler. configs.find honors hot-reload
+      // (live array reference mutated by setAllAgentConfigs at ~line 5583).
+      return await handleAutoIngestAttachment(
+        {
+          agent: agentName,
+          file_path: filePath,
+          filename,
+          mime_type: mimeType,
+          size,
+          vision_analysis: visionAnalysis,
+          channel_id: channelId,
+          message_id: messageId,
+          user_id: userId,
+          user_name: userName,
+        },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getMemoryStore: (a) => manager.getMemoryStore(a),
+          getEmbedder: () => manager.getEmbedder(),
+          getAgentConfig: (a) => configs.find((c) => c.name === a),
+          logger,
+          engine: ingestDocumentEngine,
+        },
+      );
+    }
+
+    // Phase 999.43 Plan 04 T01 — single set-doc-priority write surface.
+    // Two entrypoints (by source + by message_id) and one bulk variant
+    // delegate to handlers in `src/manager/set-doc-priority-handler.ts`.
+    // D-08 sandbox + Phase 90 isolation enforced in the handler — agents
+    // cannot escalate own doc beyond MEDIUM; agents cannot mutate docs
+    // they did not ingest. Audit log at `${memoryPath}/audit-priority-
+    // changes.jsonl` (writeAuditLog inside the handler). All runtime log
+    // lines from this path carry tag `phase999.43-priority` (grep target
+    // for `journalctl -u clawcode -g phase999.43-priority`).
+    case "set-doc-priority": {
+      const { handleSetDocPriority } = await import(
+        "./set-doc-priority-handler.js"
+      );
+      const agentName = validateStringParam(params, "agent");
+      const source = validateStringParam(params, "source");
+      const levelRaw = validateStringParam(params, "level");
+      if (levelRaw !== "high" && levelRaw !== "medium" && levelRaw !== "low") {
+        throw new ManagerError(`invalid level '${levelRaw}'`);
+      }
+      const whoRaw = typeof params.who === "string" ? params.who : "operator";
+      const who: "operator" | "agent" =
+        whoRaw === "agent" ? "agent" : "operator"; // default operator
+      const callerAgent =
+        typeof params.callerAgent === "string" ? params.callerAgent : undefined;
+      const reason =
+        typeof params.reason === "string" ? params.reason : undefined;
+
+      return await handleSetDocPriority(
+        { agent: agentName, source, level: levelRaw, who, callerAgent, reason },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getAgentMemoryPath: (a) =>
+            configs.find((c) => c.name === a)?.memoryPath,
+          logger,
+        },
+      );
+    }
+
+    case "set-doc-priority-by-message": {
+      const { handleSetDocPriorityByMessage } = await import(
+        "./set-doc-priority-handler.js"
+      );
+      const agentName = validateStringParam(params, "agent");
+      const messageId = validateStringParam(params, "message_id");
+      const levelRaw = validateStringParam(params, "level");
+      if (levelRaw !== "high" && levelRaw !== "medium" && levelRaw !== "low") {
+        throw new ManagerError(`invalid level '${levelRaw}'`);
+      }
+      const whoRaw = typeof params.who === "string" ? params.who : "operator";
+      const who: "operator" | "agent" =
+        whoRaw === "agent" ? "agent" : "operator";
+      const callerAgent =
+        typeof params.callerAgent === "string" ? params.callerAgent : undefined;
+      const reason =
+        typeof params.reason === "string" ? params.reason : undefined;
+
+      return await handleSetDocPriorityByMessage(
+        {
+          agent: agentName,
+          message_id: messageId,
+          level: levelRaw,
+          who,
+          callerAgent,
+          reason,
+        },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getAgentMemoryPath: (a) =>
+            configs.find((c) => c.name === a)?.memoryPath,
+          logger,
+        },
+      );
+    }
+
+    case "reclassify-docs": {
+      const { handleReclassifyDocs } = await import(
+        "./set-doc-priority-handler.js"
+      );
+      const agentName = validateStringParam(params, "agent");
+      const rule = validateStringParam(params, "rule");
+      // CLI-only entry point — `who` is always "operator" regardless of
+      // what the caller sends. Keeps the audit-trail discriminator honest.
+      return await handleReclassifyDocs(
+        { agent: agentName, rule, who: "operator" },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getAgentMemoryPath: (a) =>
+            configs.find((c) => c.name === a)?.memoryPath,
+          logger,
+        },
+      );
+    }
+
 
     case "search-documents": {
       const agentName = validateStringParam(params, "agent");
@@ -5196,8 +11587,38 @@ async function routeMethod(
       }
 
       const embedder = manager.getEmbedder();
-      const queryEmbedding = await embedder.embed(query);
-      const results = docStore.search(queryEmbedding, limit, source);
+      // CF-2 (Phase 101 D-09): search-documents query embedding must match
+      // the int8[384] vec_document_chunks column the write path now produces.
+      // Rule 3 deviation: plan named only the write path at line 11011, but
+      // leaving search on Float32 .embed() would break every search call
+      // post-migration. Documented in 101-01-SUMMARY.md.
+      const queryEmbedding = await embedder.embedV2(query);
+
+      // Phase 999.43 Plan 03 — D-01 axis 1 (agent priority) LOCKED VERBATIM:
+      //   high: 1.5, medium: 1.0, low: 0.7
+      // Resolved LIVE from the agent's current `ingestionPriority` config
+      // value (not the snapshotted agent_priority_weight_at_ingest column)
+      // so `clawcode reload` takes effect immediately per Plan 01 SUMMARY
+      // hot-reload promise. The DocumentStore applies the D-02 score formula
+      // (similarity × agentWeight × contentWeight × recencyBoost) — see
+      // src/documents/store.ts `search` method.
+      const SEARCH_AGENT_PRIORITY_WEIGHTS = {
+        high: 1.5,
+        medium: 1.0,
+        low: 0.7,
+      } as const;
+      const searchAgentConfig = configs.find((c) => c.name === agentName);
+      const searchAgentPriority =
+        searchAgentConfig?.ingestionPriority ?? "medium";
+      const searchAgentWeight =
+        SEARCH_AGENT_PRIORITY_WEIGHTS[searchAgentPriority];
+
+      const results = docStore.search(
+        queryEmbedding,
+        limit,
+        source,
+        searchAgentWeight,
+      );
 
       return {
         results: results.map((r) => ({
@@ -5206,6 +11627,11 @@ async function routeMethod(
           chunk_index: r.chunkIndex,
           content: r.content,
           similarity: r.similarity,
+          // Phase 999.43 Plan 03 — additive payload fields (MCP consumer at
+          // server.ts:1220-1234 ignores unknown fields; legacy clients see
+          // identical `similarity` shape).
+          weighted_score: r.weightedScore,
+          recency_boost_applied: r.recencyBoostApplied,
           context_before: r.contextBefore,
           context_after: r.contextAfter,
         })),
@@ -5352,54 +11778,217 @@ async function routeMethod(
       return { id: entry.id };
     }
 
+    // ── Phase 115 sub-scope 7 — lazy-load memory tools ─────────────────
+    //
+    // The four MCP tool handlers. Each resolves the agent context via
+    // `validateStringParam(params, "agent")` (mirrors memory-save / memory-
+    // lookup), then dispatches to the pure tool function with the per-
+    // agent MemoryStore. Cross-agent isolation is enforced at this
+    // resolution layer.
+    case "clawcode-memory-search": {
+      const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer. Increment
+      // FIRST so observability is recorded even if the handler throws on
+      // an unknown agent or empty store. Best-effort — TraceCollector
+      // method is missing on legacy daemons, hence the typeof guard
+      // (mirrors session-config.ts recordTier1TruncationEvent pattern).
+      const tcSearch = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcSearch && typeof tcSearch.recordLazyRecallCall === "function") {
+        tcSearch.recordLazyRecallCall(agentName, "clawcode_memory_search");
+      }
+
+      const query = validateStringParam(params, "query");
+      const k = typeof params.k === "number" ? params.k : 10;
+      const includeTags = Array.isArray(params.includeTags)
+        ? (params.includeTags as string[])
+        : undefined;
+      const excludeTags = Array.isArray(params.excludeTags)
+        ? (params.excludeTags as string[])
+        : undefined;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+      const embedder = manager.getEmbedder();
+      const lazyLoadLog = logger.child({ component: "clawcode-memory-search" });
+
+      const result = await clawcodeMemorySearch(
+        { query, k, includeTags, excludeTags },
+        { store, embedder, agentName, log: lazyLoadLog },
+      );
+      return result;
+    }
+
+    case "clawcode-memory-recall": {
+      const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer.
+      const tcRecall = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcRecall && typeof tcRecall.recordLazyRecallCall === "function") {
+        tcRecall.recordLazyRecallCall(agentName, "clawcode_memory_recall");
+      }
+
+      const memoryId = validateStringParam(params, "memoryId");
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+
+      const result = await clawcodeMemoryRecall(
+        { memoryId },
+        { store, agentName },
+      );
+      return result;
+    }
+
+    case "clawcode-memory-edit": {
+      const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer.
+      const tcEdit = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcEdit && typeof tcEdit.recordLazyRecallCall === "function") {
+        tcEdit.recordLazyRecallCall(agentName, "clawcode_memory_edit");
+      }
+
+      const path = validateStringParam(params, "path") as "MEMORY.md" | "USER.md";
+      const mode = validateStringParam(params, "mode") as
+        | "view"
+        | "create"
+        | "str_replace"
+        | "append";
+      const oldStr = typeof params.oldStr === "string" ? params.oldStr : undefined;
+      const newStr = typeof params.newStr === "string" ? params.newStr : undefined;
+      const content = typeof params.content === "string" ? params.content : undefined;
+
+      const cfg = manager.getAgentConfig(agentName) ?? configs.find((a) => a.name === agentName);
+      const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+      if (memoryRoot.length === 0) {
+        throw new ManagerError(
+          `Memory root not found for agent '${agentName}' (agent may not be configured)`,
+        );
+      }
+
+      const editLog = logger.child({ component: "clawcode-memory-edit" });
+      const result = await clawcodeMemoryEdit(
+        { path, mode, oldStr, newStr, content },
+        {
+          memoryRoot,
+          agentName,
+          log: {
+            warn: (obj, msg) => editLog.warn(obj, msg),
+            error: (obj, msg) => editLog.error(obj, msg),
+          },
+        },
+      );
+      return result;
+    }
+
+    case "clawcode-memory-archive": {
+      const agentName = validateStringParam(params, "agent");
+      // Phase 115 Plan 05 T04 — lazy_recall_call_count writer.
+      const tcArchive = manager.getTraceCollector(agentName) as
+        | (TraceCollector & {
+            recordLazyRecallCall?: (agent: string, tool: string) => void;
+          })
+        | undefined;
+      if (tcArchive && typeof tcArchive.recordLazyRecallCall === "function") {
+        tcArchive.recordLazyRecallCall(agentName, "clawcode_memory_archive");
+      }
+
+      const chunkId = validateStringParam(params, "chunkId");
+      const targetPath = validateStringParam(params, "targetPath") as
+        | "MEMORY.md"
+        | "USER.md";
+      const wrappingPrefix =
+        typeof params.wrappingPrefix === "string" ? params.wrappingPrefix : undefined;
+      const wrappingSuffix =
+        typeof params.wrappingSuffix === "string" ? params.wrappingSuffix : undefined;
+
+      const store = manager.getMemoryStore(agentName);
+      if (!store) {
+        throw new ManagerError(
+          `Memory store not found for agent '${agentName}' (agent may not be running)`,
+        );
+      }
+      const cfg = manager.getAgentConfig(agentName) ?? configs.find((a) => a.name === agentName);
+      const memoryRoot = cfg?.memoryPath ?? cfg?.workspace ?? "";
+      if (memoryRoot.length === 0) {
+        throw new ManagerError(
+          `Memory root not found for agent '${agentName}' (agent may not be configured)`,
+        );
+      }
+
+      const archiveLog = logger.child({ component: "clawcode-memory-archive" });
+      const result = await clawcodeMemoryArchive(
+        { chunkId, targetPath, wrappingPrefix, wrappingSuffix },
+        {
+          store,
+          memoryRoot,
+          agentName,
+          log: {
+            info: (obj, msg) => archiveLog.info(obj, msg),
+            warn: (obj, msg) => archiveLog.warn(obj, msg),
+            error: (obj, msg) => archiveLog.error(obj, msg),
+          },
+        },
+      );
+      return result;
+    }
+
     case "memory-graph": {
+      // Phase 999.8 Plan 01 — body extracted into a pure helper so the
+      // optional `limit` param contract (default 5000, range [1, 50000])
+      // is unit-testable without standing up a full MemoryStore. Mirrors
+      // the handleSetModelIpc / invokeMemoryLookup extraction pattern.
       const agentName = validateStringParam(params, "agent");
       const store = manager.getMemoryStore(agentName);
       if (!store) {
         return { nodes: [], links: [] };
       }
+      return handleMemoryGraphIpc(params, store.getDatabase());
+    }
 
-      const db = store.getDatabase();
-
-      const memories = db.prepare(`
-        SELECT id, content, source, importance, access_count, tags,
-               created_at, tier
-        FROM memories
-        ORDER BY created_at DESC
-        LIMIT 500
-      `).all() as Array<{
-        id: string; content: string; source: string; importance: number;
-        access_count: number; tags: string; created_at: string; tier: string;
-      }>;
-
-      const nodeIds = [...new Set(memories.map(m => m.id))];
-      const placeholders = nodeIds.map(() => "?").join(",") || "NULL";
-      const allLinks = db.prepare(`
-        SELECT source_id, target_id, link_text
-        FROM memory_links
-        WHERE source_id IN (${placeholders})
-          AND target_id IN (${placeholders})
-      `).all(...nodeIds, ...nodeIds) as Array<{
-        source_id: string; target_id: string; link_text: string;
-      }>;
-
-      return {
-        nodes: memories.map(m => ({
-          id: m.id,
-          content: m.content,
-          source: m.source,
-          importance: m.importance,
-          accessCount: m.access_count,
-          tags: JSON.parse(m.tags) as string[],
-          createdAt: m.created_at,
-          tier: m.tier ?? "warm",
-        })),
-        links: allLinks.map(l => ({
-          source: l.source_id,
-          target: l.target_id,
-          text: l.link_text,
-        })),
-      };
+    case "tier-maintenance-tick": {
+      // Phase 999.8 follow-up (2026-04-30) — operator-triggered tier
+      // backfill. When `agent` is set, runs maintenance for that one agent.
+      // When omitted, runs maintenance for every agent that has a
+      // TierManager (the natural set: agents with memory). Returns the
+      // per-agent {promoted, demoted, archived} counts so the CLI can
+      // print a one-line summary. Heartbeat-driven tier-maintenance
+      // (every 6h) still runs unaffected — this is purely an on-demand
+      // shortcut so a fresh deploy doesn't have to wait for the first tick.
+      const agentParam = typeof params.agent === "string" ? params.agent : undefined;
+      const targetNames: readonly string[] = agentParam
+        ? [agentParam]
+        : Array.from(manager.tierManagerNames());
+      const results: Record<string, { promoted: number; demoted: number; archived: number }> = {};
+      const skipped: string[] = [];
+      for (const name of targetNames) {
+        const tm = manager.getTierManager(name);
+        if (!tm) {
+          skipped.push(name);
+          continue;
+        }
+        const r = tm.runMaintenance();
+        results[name] = { promoted: r.promoted, demoted: r.demoted, archived: r.archived };
+      }
+      return { results, skipped };
     }
 
     case "agent-create": {
@@ -5468,7 +12057,49 @@ async function routeMethod(
       const deadline_ms = typeof params.deadline_ms === "number" ? params.deadline_ms : undefined;
       const budgetOwner = typeof params.budgetOwner === "string" ? params.budgetOwner : undefined;
       const parentTaskId = typeof params.parent_task_id === "string" ? params.parent_task_id : undefined;
-      return await taskManager.delegate({ caller, target, schema, payload, deadline_ms, budgetOwner, parentTaskId });
+      try {
+        return await taskManager.delegate({ caller, target, schema, payload, deadline_ms, budgetOwner, parentTaskId });
+      } catch (err) {
+        // Quick 260511-pw3 — translate ValidationError("unknown_schema")
+        // into a JSON-RPC error whose `data` carries the target's accepted
+        // schemas list. The IPC server forwards `error.data` to the wire
+        // (src/ipc/server.ts:121-124). MCP wrapper at delegate_task renders
+        // this list so the sender's LLM can retry with a valid schema
+        // instead of falling back to post_to_agent (which has its own
+        // silent-drop class of bug — quick 260511-pw2).
+        const { ValidationError } = await import("../tasks/errors.js");
+        if (err instanceof ValidationError && err.reason === "unknown_schema") {
+          const acceptedSchemas = taskManager.acceptedSchemasForTarget(target);
+          throw new ManagerError(err.message, {
+            // -32602 = Invalid params (JSON-RPC standard).
+            code: -32602,
+            data: {
+              reason: "unknown_schema",
+              schema,
+              target,
+              acceptedSchemas,
+            },
+          });
+        }
+        throw err;
+      }
+    }
+
+    case "list-agent-schemas": {
+      // Quick 260511-pw3 — schema introspection. Returns the target's
+      // accepted schemas with `callerAllowed` and `registered` flags so
+      // the sender's LLM can choose a valid schema before calling
+      // `delegate_task`. Fixes the discovery gap that drove Admin Clawdy's
+      // 2026-05-11 `bug.report` rejection (RESEARCH.md "where do agents
+      // declare what they accept").
+      const caller = validateStringParam(params, "caller");
+      const target = validateStringParam(params, "target");
+      const targetConfig = configs.find((c) => c.name === target);
+      if (!targetConfig) {
+        throw new ManagerError(`Target agent '${target}' not found`);
+      }
+      const schemas = taskManager.listSchemasForAgent(caller, target);
+      return { target, caller, schemas };
     }
     case "task-status": {
       const task_id = validateStringParam(params, "task_id");

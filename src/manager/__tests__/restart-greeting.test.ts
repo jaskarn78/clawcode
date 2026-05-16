@@ -26,6 +26,8 @@ import {
   classifyRestart,
   isForkAgent,
   isSubagentThread,
+  isApiErrorDominatedSession,
+  PLATFORM_ERROR_RECOVERY_MESSAGE,
   buildRestartGreetingPrompt,
   buildCleanRestartEmbed,
   buildCrashRecoveryEmbed,
@@ -56,11 +58,16 @@ function makeConfig(
     allowedModels: ["haiku", "sonnet", "opus"],
     greetOnRestart: true,
     greetCoolDownMs: 300_000,
+    autoCompactAt: 0.7, // Phase 124 D-06
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: undefined,
     identity: undefined,
@@ -332,12 +339,17 @@ describe("sendRestartGreeting — skip paths", () => {
   });
 
   it("P8: last session endedAt 8 days ago → skipped-dormant with lastActivityMs", async () => {
+    // The dormant candidate must carry turns so the loop picks it as
+    // `lastSession`; otherwise the helper short-circuits into the Phase 90.1
+    // minimal-embed branch BEFORE the dormancy check fires.
     const eightDaysAgo = FIXED_NOW - 8 * 24 * 3600_000;
     const dormantSession = makeSession({
       endedAt: new Date(eightDaysAgo).toISOString(),
     });
     const deps = makeDeps({
-      conversationStore: stubStore([dormantSession], {}),
+      conversationStore: stubStore([dormantSession], {
+        "sess-abc": [makeTurn()],
+      }),
     });
     const result = await sendRestartGreeting(deps, {
       agentName: "clawdy",
@@ -397,7 +409,13 @@ describe("sendRestartGreeting — skip paths", () => {
     expect(result).toEqual({ kind: "skipped-empty-state" });
   });
 
-  it("P12: getTurnsForSession returns [] → skipped-empty-state (defensive)", async () => {
+  it("P12: getTurnsForSession returns [] AND no summaryMemoryId → minimal-embed kind:sent", async () => {
+    // Phase 90.1 hotfix relaxed D-11 to send a "no prior session to recap"
+    // minimal embed instead of silently skipping; Phase 99-D added a
+    // summaryMemoryId fallback before that branch fires. With no turns AND
+    // no summaryMemoryId, the helper still ends up at the minimal-embed
+    // branch — this test pins that the operator sees visible feedback
+    // rather than a silent skip on a fully-empty agent.
     const deps = makeDeps({
       conversationStore: stubStore([makeSession()], { "sess-abc": [] }),
     });
@@ -406,7 +424,12 @@ describe("sendRestartGreeting — skip paths", () => {
       config: makeConfig(),
       restartKind: "clean",
     });
-    expect(result).toEqual({ kind: "skipped-empty-state" });
+    expect(result.kind).toBe("sent");
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toMatch(/no prior session to recap/);
   });
 
   it("P13: cool-down entry 4 min ago + coolDown=5 min → skipped-cool-down (lastGreetingAtMs populated)", async () => {
@@ -525,5 +548,330 @@ describe("buildRestartGreetingPrompt", () => {
       "crash-suspected",
     );
     expect(prompt).toContain("unexpected shutdown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-04-30 fix — API-error-dominated session detector + bypass
+// ---------------------------------------------------------------------------
+
+describe("isApiErrorDominatedSession", () => {
+  it("returns false for empty turn list", () => {
+    expect(isApiErrorDominatedSession([])).toBe(false);
+  });
+
+  it("returns false when all turns are normal content", () => {
+    const turns = [
+      makeTurn({ role: "user", content: "Hello, can you help me?" }),
+      makeTurn({ role: "assistant", content: "Sure, what's up?" }),
+      makeTurn({ role: "user", content: "Build me a thing." }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(false);
+  });
+
+  it("returns true when ≥50% of turns match an API-error fingerprint", () => {
+    const turns = [
+      makeTurn({ role: "assistant", content: "Failed to authenticate. API Error: 403" }),
+      makeTurn({ role: "assistant", content: "API Error: 529 overloaded_error" }),
+      makeTurn({ role: "user", content: "Hello?" }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(true);
+  });
+
+  it("detects 'Credit balance is too low' (the operator-observed false positive)", () => {
+    const turns = [
+      makeTurn({ role: "assistant", content: "Credit balance is too low" }),
+      makeTurn({ role: "assistant", content: "Credit balance is too low" }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(true);
+  });
+
+  it("detects permission_error verbatim Anthropic phrasing", () => {
+    const turns = [
+      makeTurn({
+        role: "assistant",
+        content: '{"type":"error","error":{"type":"permission_error","message":"not a member of the organization"}}',
+      }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(true);
+  });
+
+  it("returns false when only 1 of 3 turns is an error (below 50% threshold)", () => {
+    const turns = [
+      makeTurn({ role: "user", content: "Hello" }),
+      makeTurn({ role: "assistant", content: "Working on it..." }),
+      makeTurn({ role: "assistant", content: "Failed to authenticate. API Error: 403" }),
+    ];
+    expect(isApiErrorDominatedSession(turns)).toBe(false);
+  });
+});
+
+describe("sendRestartGreeting — API-error-dominated session bypass", () => {
+  it("uses verbatim PLATFORM_ERROR_RECOVERY_MESSAGE and skips Haiku when prior session is dominated by API errors", async () => {
+    const errorTurns = [
+      makeTurn({ role: "assistant", content: "Failed to authenticate. API Error: 403" }),
+      makeTurn({ role: "assistant", content: "API Error: 529 overloaded_error" }),
+      makeTurn({ role: "assistant", content: "Credit balance is too low" }),
+    ];
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([makeSession()], { "sess-abc": errorTurns }),
+      summarize: summarizeSpy,
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "crash-suspected",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    // Webhook send was called with an embed whose description is the verbatim recovery message
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+
+  it("verbatim recovery message does NOT contain 'Credit balance' (OAuth/Max-friendly)", () => {
+    expect(PLATFORM_ERROR_RECOVERY_MESSAGE).not.toContain("Credit balance");
+    expect(PLATFORM_ERROR_RECOVERY_MESSAGE).not.toContain("credit balance");
+    expect(PLATFORM_ERROR_RECOVERY_MESSAGE.length).toBeLessThanOrEqual(DESCRIPTION_MAX_CHARS);
+  });
+
+  it("normal session summarization is unchanged when turns are NOT error-dominated", async () => {
+    const normalTurns = [
+      makeTurn({ role: "user", content: "Build me a thing." }),
+      makeTurn({ role: "assistant", content: "Working on it. Here's the plan." }),
+    ];
+    const summarizeSpy = vi.fn().mockResolvedValue("I was building a thing.");
+    const deps = makeDeps({
+      conversationStore: stubStore([makeSession()], { "sess-abc": normalTurns }),
+      summarize: summarizeSpy,
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "crash-suspected",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).toHaveBeenCalledTimes(1);
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe("I was building a thing.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 260501-nxm — cached-summary fast-path API-error guard
+// ---------------------------------------------------------------------------
+// The fast-path at L483-488 (Phase 99 D-fix) reuses lastSession.summaryMemoryId
+// verbatim — but if the cached summary was written BEFORE the 2026-04-30
+// isApiErrorDominatedSession guard landed, it can contain platform-error junk
+// like "Credit balance is too low". Operator observed this at 10:03 AM on
+// 2026-05-01 after `/clawcode-restart Admin Clawdy`. Guard mirrors the
+// upstream fingerprint set so write-side and read-side share one source of
+// truth.
+
+describe("sendRestartGreeting — cached-summary fast-path API-error guard", () => {
+  it("substitutes PLATFORM_ERROR_RECOVERY_MESSAGE when cached summary contains 'Credit balance is too low' (operator-observed 2026-05-01 bug)", async () => {
+    const session = makeSession({ summaryMemoryId: "mem_test_001" });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([session], { "sess-abc": [makeTurn()] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue("Credit balance is too low"),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+
+  it("preserves the cached summary verbatim when content has no API-error fingerprint (happy-path regression guard)", async () => {
+    const session = makeSession({ summaryMemoryId: "mem_test_002" });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([session], { "sess-abc": [makeTurn()] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue("I was building a thing."),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe("I was building a thing.");
+  });
+
+  it("substitutes PLATFORM_ERROR_RECOVERY_MESSAGE for any cached summary matching the API_ERROR_FINGERPRINTS array (e.g. 'Failed to authenticate. API Error: 403')", async () => {
+    const session = makeSession({ summaryMemoryId: "mem_test_003" });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore([session], { "sess-abc": [makeTurn()] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi
+        .fn()
+        .mockReturnValue("Failed to authenticate. API Error: 403 — permission_error"),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "crash-suspected",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe(PLATFORM_ERROR_RECOVERY_MESSAGE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 99-D — summaryMemoryId fallback when no candidate has turns
+// ---------------------------------------------------------------------------
+// Operator-observed: agents whose recent terminated sessions are all
+// turn-empty (translator-imported sessions with status='ended' BEFORE turn
+// rows reach the DB, OR sessions whose raw turns were pruned by Gap-2
+// cleanup post-summarize) used to fall through to the "no prior session to
+// recap" minimal embed even when a stored summary memory entry was on hand.
+// The 99-D fallback picks the first candidate with `summaryMemoryId` set
+// and routes through the existing summaryMemoryId fast-path.
+
+describe("sendRestartGreeting — Phase 99-D summaryMemoryId fallback", () => {
+  it("uses cached summary verbatim when ALL recent sessions have zero turns but oldest carries summaryMemoryId", async () => {
+    const empty1 = makeSession({ id: "s1", summaryMemoryId: null });
+    const empty2 = makeSession({ id: "s2", summaryMemoryId: null });
+    const summaryOnly = makeSession({
+      id: "s3",
+      summaryMemoryId: "mem_99d_001",
+      // Older than empty1/empty2 but still well within dormancy.
+      startedAt: new Date(FIXED_NOW - 7_200_000).toISOString(),
+      endedAt: new Date(FIXED_NOW - 5_400_000).toISOString(),
+    });
+    const summarizeSpy = vi.fn().mockResolvedValue("Haiku should NOT be called");
+    const deps = makeDeps({
+      conversationStore: stubStore(
+        [empty1, empty2, summaryOnly],
+        { s1: [], s2: [], s3: [] },
+      ),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue("Reviewed Q3 plan with the team."),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toBe("Reviewed Q3 plan with the team.");
+  });
+
+  it("falls through to skipped-empty-state minimal embed when NO candidate has turns AND none have summaryMemoryId", async () => {
+    const empty1 = makeSession({ id: "s1", summaryMemoryId: null });
+    const empty2 = makeSession({ id: "s2", summaryMemoryId: null });
+    const summarizeSpy = vi.fn();
+    const deps = makeDeps({
+      conversationStore: stubStore([empty1, empty2], { s1: [], s2: [] }),
+      summarize: summarizeSpy,
+      getMemoryById: vi.fn().mockReturnValue(undefined),
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    // Existing minimal-embed branch fires — kind=sent with the "no prior
+    // session to recap" minimal embed (Phase 90.1 hotfix preserved).
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toMatch(/no prior session to recap/);
+  });
+
+  it("ignores summaryMemoryId fallback if getMemoryById is undefined (DI not wired)", async () => {
+    const empty1 = makeSession({ id: "s1", summaryMemoryId: "mem_99d_002" });
+    const summarizeSpy = vi.fn();
+    const deps = makeDeps({
+      conversationStore: stubStore([empty1], { s1: [] }),
+      summarize: summarizeSpy,
+      // no getMemoryById injected
+    });
+
+    const result = await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    // Without getMemoryById the helper cannot resolve the summary, so it
+    // correctly falls through to the minimal-embed branch.
+    expect(result.kind).toBe("sent");
+    expect(summarizeSpy).not.toHaveBeenCalled();
+    const sendAsAgent = (deps.webhookManager as unknown as {
+      sendAsAgent: ReturnType<typeof vi.fn>;
+    }).sendAsAgent;
+    const embedArg = sendAsAgent.mock.calls[0]?.[3];
+    expect(embedArg?.data?.description).toMatch(/no prior session to recap/);
+  });
+
+  it("listRecentTerminatedSessions is called with the bumped Phase 99-D limit (25)", async () => {
+    const summarizeSpy = vi.fn();
+    const listSpy = vi.fn().mockReturnValue([]);
+    const deps = makeDeps({
+      conversationStore: {
+        listRecentTerminatedSessions: listSpy,
+        getTurnsForSession: vi.fn(() => []),
+      },
+      summarize: summarizeSpy,
+    });
+
+    await sendRestartGreeting(deps, {
+      agentName: "clawdy",
+      config: makeConfig(),
+      restartKind: "clean",
+    });
+
+    expect(listSpy).toHaveBeenCalledWith("clawdy", 25);
   });
 });

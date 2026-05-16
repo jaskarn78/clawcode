@@ -77,7 +77,14 @@ describe("DEFAULT_BUDGETS", () => {
 });
 
 describe("assembleContext", () => {
-  it("with all sources populated returns sections in order", () => {
+  it("with all sources populated returns sections in order (Phase 115-04 static-first default)", () => {
+    // Phase 115 Plan 04 sub-scope 5 — DEFAULT_CACHE_BREAKPOINT_PLACEMENT
+    // is "static-first": all static sections (identity, tools) land BEFORE
+    // the breakpoint marker; dynamic sections (hot memories, graph context)
+    // land AFTER. Mutable sections (discord, summary) sit in the mutable
+    // suffix as before. The legacy interleaved order is regression-pinned
+    // separately by `context-assembler-cache-breakpoint.test.ts` legacy-mode
+    // tests.
     const sources = makeSources({
       identity: "I am an agent",
       hotMemories: "- memory 1\n- memory 2",
@@ -90,16 +97,19 @@ describe("assembleContext", () => {
     const result = joinAssembled(assembleContext(sources));
 
     const identityIdx = result.indexOf("I am an agent");
-    const memoriesIdx = result.indexOf("## Key Memories");
     const toolsIdx = result.indexOf("## Available Tools");
+    const memoriesIdx = result.indexOf("## Key Memories");
     const graphIdx = result.indexOf("## Related Context");
     const discordIdx = result.indexOf("## Discord");
     const summaryIdx = result.indexOf("## Context Summary");
 
+    // Static sections come first (identity → tools).
     expect(identityIdx).toBeGreaterThanOrEqual(0);
-    expect(memoriesIdx).toBeGreaterThan(identityIdx);
-    expect(toolsIdx).toBeGreaterThan(memoriesIdx);
-    expect(graphIdx).toBeGreaterThan(toolsIdx);
+    expect(toolsIdx).toBeGreaterThan(identityIdx);
+    // Then dynamic sections (hot memories → graph context).
+    expect(memoriesIdx).toBeGreaterThan(toolsIdx);
+    expect(graphIdx).toBeGreaterThan(memoriesIdx);
+    // Mutable suffix follows the entire stable prefix.
     expect(discordIdx).toBeGreaterThan(graphIdx);
     expect(summaryIdx).toBeGreaterThan(discordIdx);
   });
@@ -146,16 +156,23 @@ describe("assembleContext", () => {
     expect(memContent.length).toBeLessThan(bullets.length);
   });
 
-  it("omits identity section when identity is empty", () => {
+  it("omits identity section when identity is empty (Phase 115-04 static-first default)", () => {
     const sources = makeSources({
       hotMemories: "- some memory",
     });
 
     const result = joinAssembled(assembleContext(sources));
 
-    // Should start with the memories section, no empty identity
+    // No empty identity in the static portion. Hot memories (dynamic) lands
+    // AFTER the cache-breakpoint marker. Phase 115-04 default placement.
     expect(result).toContain("## Key Memories");
-    expect(result.indexOf("## Key Memories")).toBe(0);
+    expect(result).toContain("phase115-cache-breakpoint");
+    // Marker comes before memories (memories is in the dynamic-after-marker
+    // portion).
+    const markerIdx = result.indexOf("phase115-cache-breakpoint");
+    const memoriesIdx = result.indexOf("## Key Memories");
+    expect(markerIdx).toBeGreaterThanOrEqual(0);
+    expect(memoriesIdx).toBeGreaterThan(markerIdx);
   });
 
   it("omits graphContext section when empty", () => {
@@ -527,7 +544,12 @@ function makeMemoryEntry(
 }
 
 describe("assembleContext budget enforcement (Phase 53)", () => {
-  it("Test 1: identity over budget is WARN-and-keep — no truncation (D-03)", () => {
+  it("Test 1: identity over budget is HEAD-TAIL TRUNCATED (Phase 115 D-03)", () => {
+    // Phase 115 D-03 lock — replaces the Phase 53 `warn-and-keep` no-op.
+    // Identity is now head-tail truncated when over budget. SOUL-fingerprint
+    // protection requires the carved sub-source path (see
+    // context-assembler-tier1-budget.test.ts + context-assembler-drop-lowest.test.ts).
+    // Legacy single `identity` field falls through to the simple head-tail path.
     const longIdentity = "X".repeat(10000);
     const warnings: BudgetWarningEvent[] = [];
     const sources = makeSources({ identity: longIdentity });
@@ -537,17 +559,25 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
       onBudgetWarning: (e) => warnings.push(e),
     }) as unknown as { stablePrefix: string };
 
-    // stablePrefix retains full identity (no truncation)
-    expect(result.stablePrefix).toContain(longIdentity);
-    // warn fired exactly once
+    // Identity is no longer preserved verbatim — it's head-tail truncated.
+    // The truncation marker MUST appear; the full 10000-X string MUST NOT.
+    expect(result.stablePrefix).toContain("[TRUNCATED");
+    expect(result.stablePrefix).not.toContain("X".repeat(10000));
+    // Result is significantly shorter than the input
+    expect(result.stablePrefix.length).toBeLessThan(2000);
+    // warn fired exactly once with the new strategy
     expect(warnings).toHaveLength(1);
     expect(warnings[0].section).toBe("identity");
-    expect(warnings[0].strategy).toBe("warn-and-keep");
+    expect(warnings[0].strategy).toBe("drop-lowest-importance");
     expect(warnings[0].budgetTokens).toBe(100);
     expect(warnings[0].beforeTokens).toBeGreaterThan(100);
   });
 
-  it("Test 2: soul over budget is WARN-and-keep (D-03)", () => {
+  it("Test 2: soul over budget is HEAD-TAIL TRUNCATED (Phase 115 D-03)", () => {
+    // Phase 115 D-03 — soul follows the same drop-lowest-importance contract
+    // (real truncation). With D-02 default soul budget = 0 (folded into
+    // identity), soul is fully dropped. This test uses a positive soul
+    // budget to exercise the head-tail path.
     const longSoul = "S".repeat(10000);
     const warnings: BudgetWarningEvent[] = [];
     const sources = makeSources({ identity: "id", soul: longSoul });
@@ -557,10 +587,12 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
       onBudgetWarning: (e) => warnings.push(e),
     }) as unknown as { stablePrefix: string };
 
-    expect(result.stablePrefix).toContain(longSoul);
+    // soul truncated — full long-soul block is NOT in the prefix verbatim.
+    expect(result.stablePrefix).not.toContain(longSoul);
+    expect(result.stablePrefix).toContain("[TRUNCATED");
     const soulWarn = warnings.find((w) => w.section === "soul");
     expect(soulWarn).toBeDefined();
-    expect(soulWarn!.strategy).toBe("warn-and-keep");
+    expect(soulWarn!.strategy).toBe("drop-lowest-importance");
   });
 
   it("Test 3: hot_tier over budget drops LOWEST-importance rows", () => {
@@ -678,9 +710,14 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
     expect(typeof sectionTokens.recent_history).toBe("number");
     expect(typeof sectionTokens.per_turn_summary).toBe("number");
     expect(typeof sectionTokens.resume_summary).toBe("number");
-    // Non-zero for populated sections
+    // Non-zero for populated sections (Phase 115 D-02: soul defaults to 0 budget,
+    // so populating `soul` here with positive content + a positive override
+    // budget keeps the soul section non-zero).
     expect(sectionTokens.identity).toBeGreaterThan(0);
-    expect(sectionTokens.soul).toBeGreaterThan(0);
+    // Soul telemetry: with D-02 default budget = 0, populated soul gets
+    // dropped to "". The metadata still reports a numeric value (just 0).
+    // To assert non-zero here we use a positive-budget override — see
+    // Test 6c below for the D-02-default zero-budget path.
   });
 
   it("Test 6b: missing sources → section_tokens value is 0, not absent", () => {
@@ -782,12 +819,16 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
   });
 
   it("Test 11: no warnings when all sources fit", () => {
+    // Phase 115 Plan 03 D-02: soul budget is now 0 (folded into identity),
+    // so passing any soul content with the default budgets triggers a warn.
+    // Use the legacy Phase 53 starter values inline so this guard test
+    // exercises the no-warn path without the D-02 zero-soul fold.
     const warnings: BudgetWarningEvent[] = [];
     assembleContext(
       makeSources({ identity: "short id", soul: "short soul" }),
       DEFAULT_BUDGETS,
       {
-        memoryAssemblyBudgets: DEFAULT_PHASE53_BUDGETS,
+        memoryAssemblyBudgets: { identity: 1000, soul: 2000 },
         onBudgetWarning: (e) => warnings.push(e),
       },
     );
@@ -868,9 +909,14 @@ describe("assembleContext budget enforcement (Phase 53)", () => {
     // Sentinel test — if any prior assembleContext behavior changed, earlier
     // describe blocks would fail. This just asserts DEFAULT_PHASE53_BUDGETS
     // is shipped frozen with all canonical keys.
+    //
+    // Phase 115 Plan 03 D-02 lock: `soul` is now 0 (folded into identity);
+    // all OTHER sections retain non-zero budgets. The previous assertion
+    // required all > 0 — that intent is now expressed as "exists with
+    // documented type" since `soul: 0` is the locked Phase 115 D-02 value.
     expect(Object.isFrozen(DEFAULT_PHASE53_BUDGETS)).toBe(true);
     expect(DEFAULT_PHASE53_BUDGETS.identity).toBeGreaterThan(0);
-    expect(DEFAULT_PHASE53_BUDGETS.soul).toBeGreaterThan(0);
+    expect(typeof DEFAULT_PHASE53_BUDGETS.soul).toBe("number"); // 0 per D-02
     expect(DEFAULT_PHASE53_BUDGETS.skills_header).toBeGreaterThan(0);
     expect(DEFAULT_PHASE53_BUDGETS.hot_tier).toBeGreaterThan(0);
     expect(DEFAULT_PHASE53_BUDGETS.recent_history).toBeGreaterThan(0);
@@ -1233,5 +1279,96 @@ describe("assembleContext — Phase 67 conversation_context", () => {
 
     const sectionTokens = (capturedMetadata as any).section_tokens;
     expect(sectionTokens.conversation_context).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.13 — DELEG (delegatesBlock injection in stable prefix)
+//
+// Wave 0 RED tests. These FAIL on current main because:
+//   - ContextSources has no `delegatesBlock` field yet (Plan 01 adds it)
+//   - assembleContext() does not yet append the block after toolDefinitions
+//
+// We use `as ContextSources` casts (and `// @ts-expect-error` where needed)
+// so this file still compiles via tsc — the tests will fail at runtime
+// because the production assembler ignores the new field today.
+// ---------------------------------------------------------------------------
+describe("Phase 999.13 — DELEG: delegatesBlock injection", () => {
+  // Use the canonical render output from <canonical_text> in PLAN.md so
+  // drift is caught in either pillar.
+  const CANONICAL_BLOCK = [
+    "## Specialist Delegation",
+    "For tasks matching a specialty below, delegate via the spawn-subagent-thread skill:",
+    "- research → fin-research",
+    "Verify the target is at opus/high before delegating; if mismatch, surface to operator and stop. The subthread posts its summary back to your channel when done.",
+  ].join("\n");
+
+  it("delegates-block-injection: when sources.delegatesBlock is non-empty, stablePrefix contains it AFTER '## Available Tools'", () => {
+    const sources = makeSources({
+      identity: "I am an agent",
+      toolDefinitions: "tool-content-here",
+      // Phase 999.13 RED — Plan 01 adds delegatesBlock to ContextSources.
+      delegatesBlock: CANONICAL_BLOCK,
+    } as Partial<ContextSources> & { delegatesBlock: string });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS);
+    const stablePrefix = (result as { stablePrefix: string }).stablePrefix;
+
+    // Block must appear in the stable prefix at all
+    expect(stablePrefix).toContain("## Specialist Delegation");
+    expect(stablePrefix).toContain("- research → fin-research");
+
+    // Block must appear AFTER the tools section (per CONTEXT.md "block goes
+    // at the bottom of the agent's system prompt").
+    const toolsIdx = stablePrefix.indexOf("## Available Tools");
+    const delegIdx = stablePrefix.indexOf("## Specialist Delegation");
+    expect(toolsIdx).toBeGreaterThan(-1);
+    expect(delegIdx).toBeGreaterThan(toolsIdx);
+  });
+
+  it("delegates-block-injection: arbitrary marker string lands in stablePrefix when threaded as delegatesBlock", () => {
+    // Sentinel marker lets us prove byte-flow from sources.delegatesBlock
+    // through to the assembled stablePrefix without coupling to canonical text.
+    const SENTINEL = "DELEG_BLOCK_SENTINEL_999_13_X";
+    const sources = makeSources({
+      identity: "id",
+      toolDefinitions: "tools",
+      // Phase 999.13 RED — Plan 01 adds delegatesBlock to ContextSources.
+      delegatesBlock: SENTINEL,
+    } as Partial<ContextSources> & { delegatesBlock: string });
+
+    const result = assembleContext(sources, DEFAULT_BUDGETS);
+    const stablePrefix = (result as { stablePrefix: string }).stablePrefix;
+    expect(stablePrefix).toContain(SENTINEL);
+  });
+
+  it("delegates-block-empty-baseline: omitting delegatesBlock vs delegatesBlock='' produces byte-identical stablePrefix", () => {
+    // Per Pitfall 2 — empty/unset must short-circuit with NO header, NO
+    // whitespace pollution. Critical for prompt-cache hash stability.
+    const baseline = makeSources({
+      identity: "I am an agent",
+      toolDefinitions: "tool-content-here",
+    });
+    const withEmpty = makeSources({
+      identity: "I am an agent",
+      toolDefinitions: "tool-content-here",
+      // Phase 999.13 RED — Plan 01 adds delegatesBlock to ContextSources.
+      delegatesBlock: "",
+    } as Partial<ContextSources> & { delegatesBlock: string });
+
+    const baselineResult = assembleContext(baseline, DEFAULT_BUDGETS);
+    const emptyResult = assembleContext(withEmpty, DEFAULT_BUDGETS);
+
+    expect((emptyResult as { stablePrefix: string }).stablePrefix).toBe(
+      (baselineResult as { stablePrefix: string }).stablePrefix,
+    );
+    // Pin the hash so any future drift to the no-delegates baseline fails loud.
+    const baselineHash = createHash("sha256")
+      .update((baselineResult as { stablePrefix: string }).stablePrefix)
+      .digest("hex");
+    const emptyHash = createHash("sha256")
+      .update((emptyResult as { stablePrefix: string }).stablePrefix)
+      .digest("hex");
+    expect(emptyHash).toBe(baselineHash);
   });
 });

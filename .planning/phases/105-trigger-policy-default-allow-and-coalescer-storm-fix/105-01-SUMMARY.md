@@ -1,0 +1,181 @@
+---
+phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix
+plan: 01
+subsystem: triggers
+tags: [policy, default-allow, daemon-boot, trigger-engine, infrastructure]
+
+# Dependency graph
+requires:
+  - phase: 60-trigger-engine
+    provides: TriggerEngine.ingest() ternary that selects evaluatePolicy() default-allow when this.evaluator is undefined (engine.ts:130-132)
+  - phase: 62-trigger-policies
+    provides: PolicyEvaluator class + reloadEvaluator hot-reload swap; evaluatePolicy() function-form default-allow at policy-evaluator.ts:169-188
+  - phase: 105-00
+    provides: POLICY-01 + POLICY-02 regression-lock tests (engine.test.ts) that pin the ternary's default-allow path Plan 01 exploits
+provides:
+  - "Daemon boot fallback to default-allow when ~/.clawcode/policies.yaml is missing (POLICY-01)"
+  - "Hot-reload back-compat: PolicyWatcher.onReload still swaps undefined → real evaluator via reloadEvaluator (POLICY-02)"
+  - "Replacement boot log line that is explicit about default-allow semantic + points to policies.yaml path (POLICY-03)"
+affects: [105-03]
+
+# Tech tracking
+tech-stack:
+  added: []
+  patterns:
+    - "Engine-side ternary selection of default-allow function (Path B) — leave evaluator undefined at boot, reuse existing evaluatePolicy() instead of synthesizing wildcard rules"
+    - "PolicyEvaluator | undefined type widening at single-call-site (no signature change to TriggerEngine — its third arg was already evaluator?: PolicyEvaluator)"
+
+key-files:
+  created: []
+  modified:
+    - "src/manager/daemon.ts (ENOENT branch: bootEvaluator = undefined, replacement log line, +9/-4 lines)"
+
+key-decisions:
+  - "Path B (undefined evaluator) chosen over Path A (synthesize wildcard PolicyEvaluator rule) because PolicyRule.target schema requires concrete agent name (z.string().min(1) at policy-schema.ts:42). Path A would have required generating one rule per configured agent with synthetic ids — strictly more code, more audit-log noise, and re-implements what evaluatePolicy() already does as a pure function."
+  - "Type widened locally (PolicyEvaluator → PolicyEvaluator | undefined) rather than altering TriggerEngine constructor signature, because the constructor already declared evaluator?: PolicyEvaluator at engine.ts:51. Zero engine.ts touches required."
+  - "Boot log retains structured pino payload ({ policyPath }) so operators can grep by path and the field is machine-parseable."
+  - "PolicyWatcher.onReload wiring left untouched — reloadEvaluator() simply assigns to this.evaluator, swapping the undefined fallback for a real evaluator the moment the operator drops a policies.yaml. Hot-reload back-compat preserved with zero new code paths."
+
+requirements-completed: [POLICY-01, POLICY-02, POLICY-03]
+
+# Metrics
+duration: 5 min
+completed: 2026-04-30
+---
+
+# Phase 105 Plan 01: POLICY GREEN — daemon boot default-allow fallback
+
+**Single 13-line surgical edit to `src/manager/daemon.ts` ENOENT branch — set `bootEvaluator = undefined` and replace the misleading "using default policy" log line with explicit default-allow semantic, unblocking every scheduler/reminder/calendar/inbox event that has been silently dropped since `~/.clawcode/policies.yaml` went missing.**
+
+## Performance
+
+- **Duration:** ~5 min
+- **Started:** 2026-04-30T17:50:37Z
+- **Completed:** 2026-04-30T17:56:22Z
+- **Tasks:** 2 (Task 1 daemon edit, Task 2 build + tests verification)
+- **Files modified:** 1
+
+## Accomplishments
+
+- ENOENT branch in `daemon.ts` no longer constructs `new PolicyEvaluator([], configuredAgentNames)` — that fail-closed empty-rules path was responsible for every `reason: "no matching rule"` rejection on clawdy 2026-04-30.
+- Local declaration widened to `PolicyEvaluator | undefined`; engine constructor signature unchanged (third arg was already optional).
+- Replacement boot log line: `"no policies.yaml found — using default-allow evaluator: any configured agent can receive events. Drop a policies.yaml at this path to enable rule-based filtering."` — emitted with structured `{ policyPath }` field so operators can grep by file path.
+- `TriggerEngine.ingest()` ternary at `engine.ts:130-132` now selects `evaluatePolicy(event, configuredAgents)` at boot when no policies.yaml exists, which allows any event whose `targetAgent ∈ configuredAgents` and rejects with `reason: "target agent 'X' not configured"` (NOT `"no matching rule"`) when the target is unconfigured.
+- `PolicyWatcher.onReload` wiring at `daemon.ts:2253-2258` untouched — when an operator drops a real `policies.yaml`, `reloadEvaluator(newEvaluator)` swaps the undefined fallback for the rule-based evaluator atomically. Hot-reload back-compat preserved.
+- Wave 0 POLICY-01 + POLICY-02 regression-lock tests in `engine.test.ts` stay green (19/19 pass), confirming the engine ternary Plan 01 depends on is intact.
+
+## Task Commits
+
+1. **Task 1: daemon.ts ENOENT branch — undefined evaluator + new log line** — `a7a3564` (fix)
+2. **Task 2: Build + tests + ad-hoc daemon-boot smoke** — no commit (verification only — engine + triggers tests green, tsup build green, dist artifact contains new log string)
+
+## Files Created/Modified
+
+- **`src/manager/daemon.ts`** (+9, -4 lines):
+  - Line 2025: `let bootEvaluator: PolicyEvaluator;` → `let bootEvaluator: PolicyEvaluator | undefined;`
+  - Lines 2032-2044: ENOENT branch now sets `bootEvaluator = undefined` and emits the replacement structured log line. Inline 7-line comment block documents the engine ternary semantic, the policy-evaluator anchor (engine.ts:130-132), and the back-compat preservation note for `PolicyWatcher.onReload`.
+
+## Diff hunk
+
+```diff
+   const policyPath = join(homedir(), ".clawcode", "policies.yaml");
+   const policyAuditPath = join(MANAGER_DIR, "policy-audit.jsonl");
+-  let bootEvaluator: PolicyEvaluator;
++  let bootEvaluator: PolicyEvaluator | undefined;
+   try {
+     const policyContent = await readFile(policyPath, "utf-8");
+     const compiledRules = loadPolicies(policyContent);
+@@ -2030,9 +2030,18 @@ export async function startDaemon(
+     log.info({ path: policyPath, ruleCount: compiledRules.length }, "policies.yaml loaded at boot");
+   } catch (err) {
+     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+-      // No policy file — start with empty rules (deny all non-default events)
+-      bootEvaluator = new PolicyEvaluator([], configuredAgentNames);
+-      log.info("no policies.yaml found, using default policy");
++      // No policy file — fall through to TriggerEngine's existing default-allow
++      // function-form (evaluatePolicy) by leaving bootEvaluator undefined.
++      // The engine ternary at engine.ts:130-132 selects evaluatePolicy() when
++      // this.evaluator is undefined, which allows any event whose targetAgent
++      // is in configuredAgents (Phase 105 POLICY-01..03).
++      // PolicyWatcher.onReload still wires reloadEvaluator(real) once the
++      // operator drops a policies.yaml at policyPath — back-compat preserved.
++      bootEvaluator = undefined;
++      log.info(
++        { policyPath },
++        "no policies.yaml found — using default-allow evaluator: any configured agent can receive events. Drop a policies.yaml at this path to enable rule-based filtering.",
++      );
+     } else if (err instanceof PolicyValidationError) {
+```
+
+## Verification Results
+
+### Plan 01 verification asserts (all PASS)
+
+| Check | Command | Result |
+|-------|---------|--------|
+| New log string present | `grep -q "default-allow evaluator" src/manager/daemon.ts` | PASS |
+| Type widened | `grep -q "bootEvaluator: PolicyEvaluator \| undefined" src/manager/daemon.ts` | PASS |
+| Empty-rules construction removed | `! grep -q "new PolicyEvaluator(\[\], configuredAgentNames)" src/manager/daemon.ts` | PASS |
+| Build artifact contains new log | `grep -q "default-allow evaluator" dist/cli/index.js` | PASS (1 occurrence) |
+
+### Test results
+
+- **`src/triggers/__tests__/engine.test.ts`** — 19/19 pass (includes Wave 0 POLICY-01 dispatch, POLICY-01 reject-reason, POLICY-02 reload-swap regression locks).
+- **`src/triggers/`** full suite — 213/213 pass (16 test files).
+- **`npm run build`** — success (`ESM dist/cli/index.js 2.00 MB ⚡️ Build success in 347ms`).
+- **`src/manager/`** — 15 pre-existing failures (matches Plan 00 SUMMARY's documented baseline: bootstrap-integration, daemon-openai, dream-prompt-builder, restart-greeting, session-config, daemon-warmup-probe). None in policy/engine/coalescer code paths. Out of scope per execute-plan.md SCOPE BOUNDARY rule.
+
+### Build artifact smoke
+
+```
+$ grep -c "default-allow evaluator" dist/cli/index.js
+1
+```
+
+The replacement log line is embedded in the production bundle. Plan 03 will run the deploy smoke (`journalctl -u clawcode | grep "default-allow evaluator"` should appear on next daemon restart, followed by `"trigger-engine: event dispatched"` on the next scheduler tick).
+
+## Decisions Made
+
+- **Path B (undefined evaluator) over Path A (synthetic wildcard rule).** Path A is blocked by the policy schema: `PolicyRule.target` is `z.string().min(1)` (concrete agent name required). Synthesizing per-agent rules would pollute audit logs, complicate hot-reload diff output, and re-implement what `evaluatePolicy()` already does as a pure function. Path B is one local-variable type widening + one assignment + one log line — strictly less code, strictly less synthetic surface area.
+- **Local type widening, no engine signature change.** `TriggerEngine` constructor already declared `evaluator?: PolicyEvaluator` at `engine.ts:51`. The fix lives entirely in `daemon.ts` — engine.ts and policy-evaluator.ts untouched. Plan 01 is a one-file diff.
+- **Structured pino payload `{ policyPath }` on the replacement log.** Matches the success-path log convention (`{ path: policyPath, ruleCount: compiledRules.length }`) so operators have a machine-parseable field for journal filtering, and the future-reader can spot which path operators should drop a file at.
+
+## Deviations from Plan
+
+None - plan executed exactly as written. The +9/-4 line diff is at the upper edge of the plan's "tiny diff target ~5 lines" but stays well under the explicit "stop and re-read at >10 lines" trip wire — the extra lines are the inline 7-line comment block making the engine-ternary semantic obvious to a future reader.
+
+## Issues Encountered
+
+- **Pre-existing typecheck noise unrelated to this plan.** `npx tsc --noEmit` reports errors in `src/memory/__tests__/graph.test.ts`, `src/tasks/task-manager.ts`, `src/triggers/__tests__/engine.test.ts:68-69` (mock typing), `src/usage/__tests__/daily-summary.test.ts`, `src/usage/budget.ts`, and three pre-existing `src/manager/daemon.ts` errors at lines 186, 1975, and 5831. None are in or caused by my edit at lines 2025-2050. Out of scope per execute-plan.md SCOPE BOUNDARY rule. Build succeeds via tsup which uses esbuild and does not enforce strict TS for production bundles.
+- **15 pre-existing manager test failures** match the exact pre-existing list documented in Plan 00 SUMMARY (Issues Encountered section). Not caused by this plan; verified by inspecting failure paths — none touch policy/engine/coalescer code. Out of scope per the documented SCOPE BOUNDARY.
+
+## User Setup Required
+
+None — Plan 01 is a code fix with no environment, secrets, or external service changes. Plan 03 will handle the production deploy smoke on clawdy.
+
+## Next Phase Readiness
+
+- **Plan 02 (COAL GREEN)** is independent of this plan — different file (`src/discord/bridge.ts`), different surface (coalescer wrapper idempotency + hasInFlight gate + depth cap + MessageCoalescer.requeue). The two plans are running in parallel (per the prompt's "Plans 01 and 02 are running in parallel"). No coupling.
+- **Plan 03 (verify + deploy smoke)** ready: post-Plan-01 + Plan-02, the build artifact at `dist/cli/index.js` contains the new `"default-allow evaluator"` log string and (Plan 02's) idempotent coalesce + depth cap. Plan 03 will run the deploy and assert the production journal grep.
+- **Build artifact ready:** `dist/cli/index.js` (2.00 MB) — successful tsup ESM build. Daemon binary, when restarted on clawdy with no `~/.clawcode/policies.yaml`, will emit the new log line and dispatch synthetic scheduler events to configured agents.
+
+## Self-Check: PASSED
+
+Verified files exist:
+- `src/manager/daemon.ts` — FOUND (modified, lines 2025-2050)
+- `dist/cli/index.js` — FOUND (built, contains "default-allow evaluator" string)
+
+Verified commits:
+- `a7a3564` daemon.ts ENOENT branch — present in `git log --oneline -5`
+
+Verified test states:
+- engine.test.ts 19/19 pass (POLICY-01 + POLICY-02 regression locks intact)
+- triggers full suite 213/213 pass
+- npm run build succeeds, artifact contains new log string
+
+Verified plan asserts:
+- Three plan verification greps all pass (`default-allow evaluator` present, type widened, empty-rules construction removed)
+
+---
+*Phase: 105-trigger-policy-default-allow-and-coalescer-storm-fix*
+*Completed: 2026-04-30*

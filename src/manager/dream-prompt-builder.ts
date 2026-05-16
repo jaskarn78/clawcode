@@ -25,6 +25,8 @@
 /** Hard cap on the assembled user-prompt input tokens (D-02). */
 export const DREAM_PROMPT_INPUT_TOKEN_BUDGET = 32_000;
 
+import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
+
 /** chars/4 heuristic — matches v1.7 token-budget tuning. */
 const CHARS_PER_TOKEN = 4;
 
@@ -61,6 +63,15 @@ export interface DreamPromptInput {
   readonly recentSummaries: readonly ConversationSummary[];
   readonly graphEdges: string;
   readonly agentName: string;
+  /**
+   * Phase 999.13 TZ-04 (Q2=YES) — operator-local IANA TZ used for the
+   * `lastModified=…` (chunk header) and `ended …` (summary header)
+   * timestamps. The dream-pass agent reads these prompts as agent-visible
+   * context. When omitted, falls back to host TZ via the helper. Internal
+   * `MemoryChunk.lastModified` and `ConversationSummary.endedAt` Date
+   * objects stay UTC; only the rendered prompt uses operator-local time.
+   */
+  readonly agentTz?: string;
 }
 
 export interface BuildDreamPromptResult {
@@ -85,29 +96,50 @@ function estimateTokens(text: string): number {
 function buildSystemPrompt(agentName: string): string {
   return `You are ${agentName}'s reflection daemon. Your job is to read recent memory chunks, the core MEMORY.md, recent conversation summaries, and the existing wikilink graph, then emit a structured reflection.
 
-Output JSON ONLY (no prose). Schema:
-{newWikilinks, promotionCandidates, themedReflection, suggestedConsolidations}
+CRITICAL OUTPUT RULES:
+1. Your response MUST be valid JSON, parseable by JSON.parse() with no preprocessing.
+2. The FIRST character MUST be '{' (no narrative preamble like "Picking up...", "Here's the reflection...", or "Sure!").
+3. The LAST character MUST be '}' (no trailing commentary, no closing remarks).
+4. NO markdown code fences (no \`\`\`json wrapper).
+5. NO explanation text before or after the JSON object.
+6. If you cannot produce valid JSON for any reason (input unclear, no patterns found, internal error), output this EXACT fallback envelope and NOTHING else:
+{"newWikilinks":[],"promotionCandidates":[],"themedReflection":"","suggestedConsolidations":[]}
+NEVER output prose like "Noted —", "I'll do my best", "Picking up where we left off", or any other chat-style preamble.
+
+Required JSON schema (all 4 fields mandatory; use empty arrays/strings if no content):
+{
+  "newWikilinks": [{"from": "memory/path.md", "to": "memory/other.md", "rationale": "..."}],
+  "promotionCandidates": [{"chunkId": "...", "currentPath": "memory/...", "rationale": "...", "priorityScore": 0-100}],
+  "themedReflection": "1-3 paragraph narrative summary of recent activity",
+  "suggestedConsolidations": [{"sources": ["memory/A.md", "memory/B.md"], "newPath": "memory/consolidations/X.md", "rationale": "..."}]
+}
 
 Focus on:
 - Connections that are NEW (not already in graph-edges.json)
 - Chunks referenced 3+ times in recent memory but NOT in MEMORY.md (promotion candidates)
 - Themes spanning multiple recent chunks (consolidation candidates)
-- 1-3 paragraph narrative on what happened recently`;
+- 1-3 paragraph narrative on what happened recently (placed inside the themedReflection JSON string)`;
 }
 
 /**
  * Render one memory chunk as a fenced markdown block. Path + lastModified
  * appear so the LLM can cite specific chunks in its output.
+ *
+ * Phase 999.13 TZ-04 (Q2=YES) — `agentTz` (optional) controls operator-
+ * local rendering of `lastModified`. Falls back to host TZ when omitted.
  */
-function renderChunk(c: MemoryChunk): string {
-  return `### ${c.path} (id=${c.id}, lastModified=${c.lastModified.toISOString()})\n\n${c.body}`;
+function renderChunk(c: MemoryChunk, agentTz?: string): string {
+  return `### ${c.path} (id=${c.id}, lastModified=${renderAgentVisibleTimestamp(c.lastModified, agentTz)})\n\n${c.body}`;
 }
 
 /**
  * Render one conversation summary as a fenced markdown block.
+ *
+ * Phase 999.13 TZ-04 (Q2=YES) — `agentTz` (optional) controls operator-
+ * local rendering of `endedAt`. Falls back to host TZ when omitted.
  */
-function renderSummary(s: ConversationSummary): string {
-  return `### Session ${s.sessionId} (ended ${s.endedAt.toISOString()})\n\n${s.summary}`;
+function renderSummary(s: ConversationSummary, agentTz?: string): string {
+  return `### Session ${s.sessionId} (ended ${renderAgentVisibleTimestamp(s.endedAt, agentTz)})\n\n${s.summary}`;
 }
 
 /**
@@ -120,12 +152,17 @@ function buildUserPrompt(
   memoryMd: string,
   summaries: readonly ConversationSummary[],
   graphEdges: string,
+  agentTz?: string,
 ): string {
   const chunkSection =
-    chunks.length === 0 ? "(none)" : chunks.map(renderChunk).join("\n\n");
+    chunks.length === 0
+      ? "(none)"
+      : chunks.map((c) => renderChunk(c, agentTz)).join("\n\n");
   const memorySection = memoryMd.trim().length === 0 ? "(none)" : memoryMd;
   const summarySection =
-    summaries.length === 0 ? "(none)" : summaries.map(renderSummary).join("\n\n");
+    summaries.length === 0
+      ? "(none)"
+      : summaries.map((s) => renderSummary(s, agentTz)).join("\n\n");
   const wikiSection = graphEdges.trim().length === 0 ? "(none)" : graphEdges;
 
   return `## Recent memory chunks
@@ -175,6 +212,7 @@ export function buildDreamPrompt(
     input.memoryMd,
     input.recentSummaries,
     input.graphEdges,
+    input.agentTz,
   );
 
   // Tighten until under budget. The non-chunk sections (MEMORY.md +
@@ -192,6 +230,7 @@ export function buildDreamPrompt(
       input.memoryMd,
       input.recentSummaries,
       input.graphEdges,
+      input.agentTz,
     );
   }
 

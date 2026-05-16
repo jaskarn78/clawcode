@@ -25,8 +25,18 @@ import {
   formatAttachmentMetadata,
   isImageAttachment,
 } from "./attachments.js";
-import { formatReactionEvent } from "./reactions.js";
+import { formatReactionEvent, addReaction } from "./reactions.js";
+import {
+  transitionQueueState,
+  type DiscordChannelHandle,
+  type QueueState,
+} from "./queue-state-icon.js";
+import type {
+  AdvisorInvokedEvent,
+  AdvisorResultedEvent,
+} from "../advisor/types.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
+import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { WebhookManager } from "./webhook-manager.js";
 import type { DeliveryQueue } from "./delivery-queue.js";
 import { checkChannelAccess } from "../security/acl-parser.js";
@@ -37,12 +47,23 @@ import {
   DISCORD_SNOWFLAKE_PREFIX,
 } from "../manager/turn-origin.js";
 import { captureDiscordExchange } from "./capture.js";
+import { MessageCoalescer } from "./message-coalescer.js";
+import { QUEUE_FULL_ERROR_MESSAGE } from "../manager/persistent-session-queue.js";
+import { renderAgentVisibleTimestamp } from "../shared/agent-visible-time.js";
+import { runVisionPrePass } from "./vision-pre-pass.js";
+import type { VerboseState } from "../usage/verbose-state.js";
+// Phase 999.43 Plan 02 T02 — fire-and-forget IPC dispatch into daemon's
+// `auto-ingest-attachment` case after Phase 113 attachment download +
+// vision pre-pass complete. Single auto-ingest entry point per
+// feedback_silent_path_bifurcation.md.
+import { sendIpcRequest } from "../ipc/client.js";
+import { SOCKET_PATH } from "../manager/daemon.js";
 
 /**
  * Configuration for the Discord bridge.
  */
 export type BridgeConfig = {
-  readonly routingTable: RoutingTable;
+  readonly routingTableRef: { readonly current: RoutingTable };
   readonly sessionManager: SessionManager;
   /**
    * Phase 57 Plan 03: optional TurnDispatcher injection.
@@ -65,6 +86,35 @@ export type BridgeConfig = {
   readonly securityPolicies?: ReadonlyMap<string, SecurityPolicy>;
   readonly botToken?: string;
   readonly log?: Logger;
+  /**
+   * Phase 116-03 F27 — optional hook fired after each conversation turn
+   * write (user + assistant). The daemon sets this to a closure that
+   * broadcasts a `conversation-turn` SSE event via the dashboard's
+   * SseManager. Metadata only — `{agentName, turnId, role, createdAt}`.
+   * Optional because standalone runners (src/cli/commands/run.ts) construct
+   * the bridge without a dashboard.
+   */
+  readonly onConversationTurn?: (info: {
+    readonly agent: string;
+    readonly turnId: string;
+    readonly role: "user" | "assistant";
+    readonly ts: string;
+  }) => void;
+  /**
+   * Phase 117 Plan 117-11 — per-channel verbose-level state for the
+   * advisor visibility mutation point at `streamAndPostResponse:~810`.
+   *
+   * Optional: daemon boot ALWAYS injects (construction at daemon.ts:~2706
+   * alongside AdvisorBudget). Standalone runner (`src/cli/commands/run.ts`)
+   * and direct-bridge tests omit it — the mutation falls through to the
+   * `"normal"` branch (reaction + plain footer), identical to today.
+   *
+   * Existing tests in `bridge-advisor-footer.test.ts` Case F/F' inject a
+   * stub via `(bridge as any).verboseState = { getLevel: () => "verbose" }`
+   * — `as any` bypasses TS, so the structural-match stub continues to
+   * work even after the field type is tightened to `VerboseState`.
+   */
+  readonly verboseState?: VerboseState;
 };
 
 /**
@@ -106,8 +156,24 @@ export function loadBotToken(): string {
  * routes them to the correct agent session, and sends responses back.
  */
 export class DiscordBridge {
+  /**
+   * Phase 999.11 — coalescer storm fix.
+   *
+   * COMBINED_PREFIX: idempotent guard for formatCoalescedPayload — a single
+   * pending entry that already starts with this prefix is returned unchanged
+   * (no nested wrappers). Defends against the QUEUE_FULL spin-loop case where
+   * a previously-coalesced payload was re-queued and would otherwise gain a
+   * second [Combined: …] header per iteration.
+   *
+   * MAX_DRAIN_DEPTH: hard cap on recursive drain depth in streamAndPostResponse.
+   * On cap-hit: emit one warn, push pending back via messageCoalescer.requeue,
+   * and return — the next message-arrival drain will pick them up.
+   */
+  private static readonly COMBINED_PREFIX = "[Combined:";
+  private static readonly MAX_DRAIN_DEPTH = 3;
+
   private readonly client: Client;
-  private readonly routingTable: RoutingTable;
+  private readonly routingTableRef: { readonly current: RoutingTable };
   private readonly sessionManager: SessionManager;
   /**
    * Phase 57 Plan 03: optional TurnDispatcher injected by the daemon path.
@@ -121,8 +187,61 @@ export class DiscordBridge {
   private readonly securityPolicies: ReadonlyMap<string, SecurityPolicy> | undefined;
   private readonly botToken: string;
   private readonly log: Logger;
+  /** Phase 116-03 F27 — SSE-broadcast hook for conversation turn writes. */
+  private readonly onConversationTurn:
+    | ((info: {
+        readonly agent: string;
+        readonly turnId: string;
+        readonly role: "user" | "assistant";
+        readonly ts: string;
+      }) => void)
+    | undefined;
   private running = false;
   private readonly recentlySent: Set<string> = new Set();
+  /**
+   * Phase 119 A2A-03 hotfix 2026-05-14 — tracks message IDs that have been
+   * QUEUED (backoff retry or QUEUE_FULL coalesce). IN_FLIGHT (👍) and
+   * DELIVERED (✅) transitions only fire for messages in this set — i.e.,
+   * messages that took the queue path. Fast-path messages (direct dispatch,
+   * no queue) get no icons. Operator-visible result: ⏳→👍→✅ progression
+   * for queued messages only; nothing on every-message responses.
+   * Cleaned up on DELIVERED/FAILED to bound memory.
+   */
+  private readonly queuedMessageIds: Set<string> = new Set();
+  /**
+   * Phase 100 follow-up — per-agent pending-message coalescer.
+   *
+   * Operator-reported bug 2026-04-28: rapid-fire messages while the agent is
+   * busy hit `SerialTurnQueue.QUEUE_FULL` (depth-1) and used to get ❌-reacted
+   * (forcing the operator to track + manually resend). Coalescer buffers them
+   * upstream of the turn queue so they ride along on the next dispatched turn.
+   *
+   * Mutated only inside `streamAndPostResponse` — not exposed publicly. Tests
+   * inject a fake by direct assignment to `(bridge as any).messageCoalescer`.
+   */
+  private messageCoalescer: MessageCoalescer = new MessageCoalescer();
+
+  /**
+   * Plan 117-09 seam, Plan 117-11 wiring — per-channel verbose-level state.
+   *
+   * In production, the daemon constructs a `VerboseState` instance backed
+   * by `~/.clawcode/manager/verbose-state.db` (separate file from the
+   * advisor budget — RESEARCH §6 Pitfall 4) and passes it via
+   * `BridgeConfig.verboseState`. The single mutation point in
+   * `streamAndPostResponse` (~:809) reads `getLevel(message.channelId)`
+   * once per turn — at the same call site for both `"normal"` (plain
+   * footer) and `"verbose"` (fenced advice block) branches.
+   *
+   * Standalone runner / tests may omit it; the seam falls through to
+   * `"normal"` (no behavior change). `bridge-advisor-footer.test.ts`
+   * Case F/F' still inject a structural stub via
+   * `(bridge as any).verboseState = { getLevel: () => "verbose" }` —
+   * `as any` bypasses the type so the stub keeps working.
+   */
+  private verboseState:
+    | VerboseState
+    | { getLevel(channelId: string): "normal" | "verbose" }
+    | undefined;
 
   /**
    * Expose the Discord client for use by SubagentThreadSpawner.
@@ -140,7 +259,7 @@ export class DiscordBridge {
   }
 
   constructor(config: BridgeConfig) {
-    this.routingTable = config.routingTable;
+    this.routingTableRef = config.routingTableRef;
     this.sessionManager = config.sessionManager;
     this.turnDispatcher = config.turnDispatcher;
     this.threadManager = config.threadManager;
@@ -149,6 +268,11 @@ export class DiscordBridge {
     this.securityPolicies = config.securityPolicies;
     this.botToken = config.botToken ?? loadBotToken();
     this.log = config.log ?? logger;
+    this.onConversationTurn = config.onConversationTurn;
+    // Phase 117 Plan 117-11 — daemon injects the real VerboseState here;
+    // standalone runner / direct tests leave it undefined (mutation falls
+    // through to "normal" branch — identical to Plan 117-09 pre-wiring).
+    this.verboseState = config.verboseState;
 
     this.client = new Client({
       intents: [
@@ -227,7 +351,7 @@ export class DiscordBridge {
     this.client.on("ready", () => {
       const guilds = this.client.guilds.cache.map(g => ({ id: g.id, name: g.name }));
       this.log.info(
-        { user: this.client.user?.tag, channels: this.routingTable.channelToAgent.size, guilds },
+        { user: this.client.user?.tag, channels: this.routingTableRef.current.channelToAgent.size, guilds },
         "Discord bridge connected",
       );
     });
@@ -236,9 +360,46 @@ export class DiscordBridge {
       this.log.error({ error: error.message }, "Discord client error");
     });
 
-    await this.client.login(this.botToken);
-    this.deliveryQueue?.start();
-    this.running = true;
+    // 2026-05-08 hotfix — Discord-side outages (Service Unavailable / Internal
+    // Server Error during gateway shard recovery) used to leave the bridge
+    // permanently dead because there was no startup retry. The bot would come
+    // up healthy but blind to Discord; only a manual daemon restart could
+    // recover. Now: 5 attempts with exponential backoff (0s, 5s, 15s, 30s, 60s
+    // — total ~110s window) so a transient Discord outage at deploy time
+    // doesn't require operator intervention. Final failure still logs at
+    // error and lets the daemon continue (existing fallback path); operator
+    // can run `clawcode discord-reconnect` (TODO) or restart manually if all
+    // 5 attempts fail.
+    const RETRY_DELAYS_MS = [0, 5_000, 15_000, 30_000, 60_000];
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+      const delay = RETRY_DELAYS_MS[attempt] ?? 0;
+      if (delay > 0) {
+        this.log.warn(
+          { attempt: attempt + 1, totalAttempts: RETRY_DELAYS_MS.length, delayMs: delay, lastError: lastError instanceof Error ? lastError.message : String(lastError) },
+          "Discord bridge login retrying after backoff",
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      try {
+        await this.client.login(this.botToken);
+        this.deliveryQueue?.start();
+        this.running = true;
+        if (attempt > 0) {
+          this.log.info({ attemptsUsed: attempt + 1 }, "Discord bridge connected after retry");
+        }
+        return;
+      } catch (err) {
+        lastError = err;
+        this.log.error(
+          { attempt: attempt + 1, totalAttempts: RETRY_DELAYS_MS.length, error: err instanceof Error ? err.message : String(err) },
+          "Discord bridge login attempt failed",
+        );
+      }
+    }
+    // All retries exhausted — re-throw to preserve the existing "bridge failed
+    // to start" log line + fallback in daemon.ts (manual webhook mode).
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   /**
@@ -312,6 +473,100 @@ export class DiscordBridge {
   }
 
   /**
+   * Phase 119 A2A-03 — single mutation point for the queue-state icon.
+   *
+   * Wraps `transitionQueueState` with a per-message DiscordChannelHandle
+   * adapter built from the live discord.js Message object. The state
+   * machine module owns the mutex, debounce, retry, and prior-emoji
+   * tracking — bridge.ts no longer remembers which emoji it last added.
+   *
+   * Reaction failures NEVER abort delivery. The state machine swallows
+   * non-rate-limit errors internally; this outer try/catch is a belt-and-
+   * suspenders guard in case a future refactor changes that contract.
+   */
+  private async transitionIcon(message: Message, target: QueueState): Promise<void> {
+    const handle: DiscordChannelHandle = {
+      addReaction: async (_channelId, _messageId, emoji) => {
+        await message.react(emoji);
+      },
+      removeReaction: async (_channelId, _messageId, emoji) => {
+        // discord.js v14 — Message.reactions.cache.get(emoji)?.users.remove(botUserId).
+        // Fallback to messageReactions.removeAll(emoji) shape via cache lookup.
+        const reaction = message.reactions.cache.get(emoji);
+        if (!reaction) return;
+        const botUserId = message.client.user?.id;
+        if (botUserId) {
+          await reaction.users.remove(botUserId);
+        }
+      },
+    };
+    try {
+      await transitionQueueState(message.channelId, message.id, target, handle);
+    } catch (err) {
+      this.log.warn(
+        { error: (err as Error).message, target, messageId: message.id },
+        "queue-state icon transition failed (non-fatal, delivery unaffected)",
+      );
+    }
+  }
+
+  /**
+   * Phase 119 A2A-03 hotfix 2026-05-14 #3 — transition the queue-state icon
+   * on a message identified by ID only (rather than a live Message ref).
+   *
+   * Used by the coalescer-drain path: when QUEUE_FULL stacks M2/M3 while M1
+   * processes, the eventual drain dispatches a synthesized combined payload
+   * via streamAndPostResponse(M1, ..., combinedPayload). Without this
+   * helper, the IN_FLIGHT/DELIVERED transitions in streamAndPostResponse
+   * check `queuedMessageIds.has(message.id)` — but `message.id` is M1's,
+   * not M2's or M3's, so the check fails and M2/M3's ⏳ icons stay stuck
+   * forever. Caller fetches the pending messages by ID and routes through
+   * here so the transitions land on the actual queued messages.
+   *
+   * Lookup is cache-first (channel.messages.cache.get), falling back to
+   * an API fetch. On 404 (message deleted) or other fetch errors, logs a
+   * warn and returns — reaction failures NEVER abort delivery.
+   */
+  private async transitionIconByMessageId(
+    channel: Message["channel"],
+    channelId: string,
+    messageId: string,
+    target: QueueState,
+  ): Promise<void> {
+    let resolved: Message | undefined;
+    // Cast through unknown — discord.js v14 typings; cache + fetch live on
+    // TextChannel / DMChannel / ThreadChannel, all of which carry them.
+    const ch = channel as unknown as {
+      messages?: {
+        cache?: Map<string, Message>;
+        fetch?: (id: string) => Promise<Message>;
+      };
+    };
+    const cached = ch.messages?.cache?.get(messageId);
+    if (cached) {
+      resolved = cached;
+    } else if (ch.messages?.fetch) {
+      try {
+        resolved = await ch.messages.fetch(messageId);
+      } catch (err) {
+        this.log.warn(
+          { error: (err as Error).message, target, messageId, channelId },
+          "queue-state icon transition skipped — message fetch failed (deleted? expired? non-fatal)",
+        );
+        return;
+      }
+    }
+    if (!resolved) {
+      this.log.warn(
+        { target, messageId, channelId },
+        "queue-state icon transition skipped — message not found in cache and no fetch available (non-fatal)",
+      );
+      return;
+    }
+    await this.transitionIcon(resolved, target);
+  }
+
+  /**
    * Phase 54 Plan 02 — fire the Discord typing indicator AND record a
    * `typing_indicator` span on the caller-owned Turn. The span opens on
    * entry and ends synchronously right after the sendTyping() call, so
@@ -340,6 +595,55 @@ export class DiscordBridge {
       );
     } finally {
       try { span?.end(); } catch { /* non-fatal */ }
+    }
+  }
+
+  /**
+   * Phase 999.43 Plan 02 T02 — fire-and-forget auto-ingest dispatch.
+   *
+   * Dispatches every downloaded attachment to the daemon's
+   * `auto-ingest-attachment` IPC handler (Plan 02 T01). The agent's turn
+   * does NOT wait on this call — it runs in parallel with the SDK request
+   * and may complete after the assistant has already replied. This matches
+   * the Phase 101 daemon-tick reindex precedent (best-effort enrichment).
+   *
+   * Single auto-ingest dispatch site per feedback_silent_path_bifurcation.md.
+   * Daemon-side handler decides eligibility (agent flag, classifier reject)
+   * and writes the D-04 provenance row.
+   */
+  private dispatchAutoIngestAttachments(
+    agentName: string,
+    downloadResults: readonly DownloadResult[],
+    visionAnalyses: Map<string, string>,
+    message: Message,
+  ): void {
+    for (const result of downloadResults) {
+      if (!result.success || !result.path) continue;
+      const info = result.attachmentInfo;
+      const visionAnalysis = visionAnalyses.get(info.name) ?? null;
+      sendIpcRequest(SOCKET_PATH, "auto-ingest-attachment", {
+        agent: agentName,
+        file_path: result.path,
+        filename: info.name,
+        mime_type: info.contentType,
+        size: info.size,
+        vision_analysis: visionAnalysis,
+        channel_id: message.channelId,
+        message_id: message.id,
+        user_id: message.author.id,
+        user_name: message.author.username,
+      }).catch((err: unknown) => {
+        this.log.warn(
+          {
+            tag: "phase999.43-autoingest",
+            err: err instanceof Error ? err.message : String(err),
+            agent: agentName,
+            messageId: message.id,
+            filename: info.name,
+          },
+          "phase999.43-autoingest dispatch failed",
+        );
+      });
     }
   }
 
@@ -408,6 +712,31 @@ export class DiscordBridge {
           downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
         }
 
+        // Phase 113 — vision pre-pass: resize + Haiku analysis for images
+        let visionAnalyses = new Map<string, string>();
+        if (downloadResults) {
+          const visionCfg = this.sessionManager.getAgentConfig(sessionName);
+          if (visionCfg?.vision?.enabled === true) {
+            visionAnalyses = await runVisionPrePass(
+              downloadResults,
+              { timeoutMs: 30_000 },
+              this.log,
+            );
+          }
+        }
+
+        // Phase 999.43 Plan 02 T02 — fire-and-forget auto-ingest dispatch.
+        // Runs in parallel with the SDK request below; daemon decides
+        // eligibility based on agent flag + classifier.
+        if (downloadResults) {
+          this.dispatchAutoIngestAttachments(
+            sessionName,
+            downloadResults,
+            visionAnalyses,
+            message,
+          );
+        }
+
         // Fetch the referenced message if this is a reply, so the agent sees
         // the quoted content (not just an opaque message_id).
         let referencedMessage: Message | undefined;
@@ -419,7 +748,7 @@ export class DiscordBridge {
           }
         }
 
-        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
+        const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage, undefined, visionAnalyses);
         // End the receive span right before dispatching to the session (end_to_end still open)
         try { receiveSpan?.end(); } catch { /* non-fatal */ }
         await this.streamAndPostResponse(message, sessionName, formattedMessage, turn);
@@ -429,7 +758,7 @@ export class DiscordBridge {
     }
 
     const channelId = message.channelId;
-    const agentName = this.routingTable.channelToAgent.get(channelId);
+    const agentName = this.routingTableRef.current.channelToAgent.get(channelId);
 
     if (!agentName) {
       // Channel not bound to any agent — ignore
@@ -503,6 +832,31 @@ export class DiscordBridge {
       downloadResults = await downloadAllAttachments(attachments, attachDir, this.log);
     }
 
+    // Phase 113 — vision pre-pass: resize + Haiku analysis for images
+    let visionAnalyses = new Map<string, string>();
+    if (downloadResults) {
+      const visionCfg = this.sessionManager.getAgentConfig(agentName);
+      if (visionCfg?.vision?.enabled === true) {
+        visionAnalyses = await runVisionPrePass(
+          downloadResults,
+          { timeoutMs: 30_000 },
+          this.log,
+        );
+      }
+    }
+
+    // Phase 999.43 Plan 02 T02 — fire-and-forget auto-ingest dispatch.
+    // Runs in parallel with the SDK request below; daemon decides
+    // eligibility based on agent flag + classifier.
+    if (downloadResults) {
+      this.dispatchAutoIngestAttachments(
+        agentName,
+        downloadResults,
+        visionAnalyses,
+        message,
+      );
+    }
+
     // Fetch the referenced message if this is a reply, so the agent sees
     // the quoted content (not just an opaque message_id).
     let referencedMessage: Message | undefined;
@@ -514,7 +868,7 @@ export class DiscordBridge {
       }
     }
 
-    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage);
+    const formattedMessage = formatDiscordMessage(message, downloadResults, referencedMessage, undefined, visionAnalyses);
     // End the receive span right before session dispatch; end_to_end remains open
     try { receiveSpan?.end(); } catch { /* non-fatal */ }
     await this.streamAndPostResponse(message, agentName, formattedMessage, turn);
@@ -531,6 +885,8 @@ export class DiscordBridge {
     sessionName: string,
     formattedMessage: string,
     turn?: Turn,
+    drainDepth = 0,
+    retryCount = 0,
   ): Promise<void> {
     const channelId = message.channelId;
 
@@ -561,12 +917,17 @@ export class DiscordBridge {
       const streamingCfg = agentConfig?.perf?.streaming;
       editor = new ProgressiveMessageEditor({
         editFn: async (content: string) => {
+          // Phase 100 follow-up — wrap raw markdown tables in ```text``` fences
+          // so Discord renders them as monospace (columns visibly align).
+          // Pass-through for content without tables; idempotent for content
+          // already in code fences.
+          const wrapped = wrapMarkdownTablesInCodeFence(content);
           if (!messageRef.current) {
             if ("send" in channel && typeof channel.send === "function") {
-              messageRef.current = await channel.send(content);
+              messageRef.current = await channel.send(wrapped);
             }
           } else {
-            await messageRef.current.edit(content);
+            await messageRef.current.edit(wrapped);
           }
         },
         editIntervalMs: streamingCfg?.editIntervalMs,
@@ -585,30 +946,153 @@ export class DiscordBridge {
       // of turn.end() so it can fire on success/error in the try/catch
       // below. TurnDispatcher on the caller-owned-Turn path calls
       // turn.recordOrigin(origin) but NOT turn.end().
+      //
+      // Plan 117-09 (RESEARCH §2 Gate 3, §4.5, §6 Pitfall 1, §13.12 A13) —
+      // register `advisor:invoked` / `advisor:resulted` listeners on
+      // `sessionManager.advisorEvents` ONLY for the duration of this turn's
+      // dispatch. The closure (`didConsultAdvisor`, `lastAdvisorResult`)
+      // IS the per-turn scope; the register-around-dispatch pattern means
+      // listeners are GC'd naturally at turn end and cannot leak across
+      // turns. The agent-name guard (`ev.agent !== sessionName`) filters
+      // events that belong to a different agent's concurrent turn.
+      //
+      // RESEARCH §13.9 / §13.13 Pitfall 8: the standalone-runner branch
+      // (`this.turnDispatcher === undefined`) goes through
+      // `sessionManager.streamFromAgent`, which does NOT thread the
+      // advisor observer that emits these events. That bypass is
+      // accepted (production daemon always injects `turnDispatcher`).
       let response: string;
-      if (this.turnDispatcher) {
-        const turnId = `${DISCORD_SNOWFLAKE_PREFIX}${message.id}`;
-        const origin = makeRootOriginWithTurnId("discord", message.id, turnId);
-        response = await this.turnDispatcher.dispatchStream(
-          origin,
-          sessionName,
-          formattedMessage,
-          (accumulated) => editor!.update(accumulated),
-          { turn, channelId },
+      let didConsultAdvisor = false;
+      let lastAdvisorResult:
+        | { kind: AdvisorResultedEvent["kind"]; text?: string; errorCode?: string }
+        | null = null;
+      const onInvoked = (ev: AdvisorInvokedEvent): void => {
+        if (ev.agent !== sessionName) return;
+        didConsultAdvisor = true;
+        // Plan 117.1-01 — production telemetry. INFO so it surfaces in
+        // daemon logs without DEBUG noise; matches existing pino convention
+        // ({ ...fields }, "message"). Closes the silent-path gap that
+        // masked Issue 2 in the 117 operator smoke (see 117.1-CONTEXT.md).
+        this.log.info(
+          {
+            agent: sessionName,
+            channel: channelId,
+            userMessageId: message.id,
+          },
+          "advisor invoked (native server tool fired)",
         );
-      } else {
-        // v1.7 fallback — preserves standalone runner (src/cli/commands/run.ts)
-        response = await this.sessionManager.streamFromAgent(
-          sessionName,
-          formattedMessage,
-          (accumulated) => editor!.update(accumulated),
-          turn,
+        // Fire-and-forget — addReaction swallows errors itself.
+        void addReaction(message, "💭");
+      };
+      const onResulted = (ev: AdvisorResultedEvent): void => {
+        if (ev.agent !== sessionName) return;
+        lastAdvisorResult = { kind: ev.kind, text: ev.text, errorCode: ev.errorCode };
+        // Plan 117.1-01 — production telemetry. `variant` discriminates
+        // advisor_result / advisor_redacted_result / advisor_tool_result_error
+        // (RESEARCH §13.4). errorCode only logged on the error variant.
+        this.log.info(
+          {
+            agent: sessionName,
+            channel: channelId,
+            variant: ev.kind,
+            ...(ev.kind === "advisor_tool_result_error"
+              ? { errorCode: ev.errorCode }
+              : {}),
+          },
+          "advisor resulted",
         );
+      };
+      this.sessionManager.advisorEvents.on("advisor:invoked", onInvoked);
+      this.sessionManager.advisorEvents.on("advisor:resulted", onResulted);
+
+      // Phase 119 A2A-03 — IN_FLIGHT (👍) transition. Only fires if this
+      // message was previously QUEUED (rode the queue path); fast-path
+      // messages get no icons. See queuedMessageIds field comment.
+      if (this.queuedMessageIds.has(message.id)) {
+        void this.transitionIcon(message, "IN_FLIGHT");
+      }
+
+      try {
+        if (this.turnDispatcher) {
+          const turnId = `${DISCORD_SNOWFLAKE_PREFIX}${message.id}`;
+          const origin = makeRootOriginWithTurnId("discord", message.id, turnId);
+          response = await this.turnDispatcher.dispatchStream(
+            origin,
+            sessionName,
+            formattedMessage,
+            (accumulated) => editor!.update(accumulated),
+            { turn, channelId },
+          );
+        } else {
+          // v1.7 fallback — preserves standalone runner (src/cli/commands/run.ts)
+          response = await this.sessionManager.streamFromAgent(
+            sessionName,
+            formattedMessage,
+            (accumulated) => editor!.update(accumulated),
+            turn,
+          );
+        }
+      } finally {
+        this.sessionManager.advisorEvents.off("advisor:invoked", onInvoked);
+        this.sessionManager.advisorEvents.off("advisor:resulted", onResulted);
       }
 
       clearInterval(typingInterval);
       typingInterval = undefined;
       await editor.flush();
+
+      // Plan 117-09 — advisor visibility mutation (RESEARCH §4.5, §6 Pitfall 1,
+      // §13.2, §13.4). SINGLE injection point — all three delivery exits below
+      // (sendResponse-large, edit-small, sendResponse-no-typing-indicator) read
+      // the same `response` local. Do NOT add a fallback mutation inside
+      // sendResponse() or messageRef.current.edit(): that's the silent-path-
+      // bifurcation anti-pattern flagged by `feedback_silent_path_bifurcation`
+      // memory and §6 Pitfall 1. Mutate ONCE here.
+      //
+      // Standalone-runner branch (bridge.ts:turnDispatcher=undefined ->
+      // streamFromAgent path) does NOT fire advisor events today (RESEARCH
+      // §13.9 / §13.13 Pitfall 8); didConsultAdvisor stays false and no
+      // footer is appended. Documented acceptable absence.
+      if (didConsultAdvisor && response && response.trim().length > 0) {
+        // Plan 117-11 attaches verboseState; for now default to "normal".
+        const level: "normal" | "verbose" =
+          this.verboseState?.getLevel(message.channelId) ?? "normal";
+        // Snapshot `lastAdvisorResult` into a local — closure mutation from
+        // `onResulted` isn't visible to TS control-flow narrowing (TS would
+        // otherwise narrow to `null` here), so we read once through an
+        // explicit cast to the declared union type.
+        const result = lastAdvisorResult as
+          | { kind: AdvisorResultedEvent["kind"]; text?: string; errorCode?: string }
+          | null;
+        const variant = result?.kind;
+        if (variant === "advisor_tool_result_error") {
+          const code = result?.errorCode ?? "unknown";
+          response = response + "\n\n*— advisor unavailable (" + code + ")*";
+        } else if (
+          level === "verbose" &&
+          variant === "advisor_result" &&
+          result?.text
+        ) {
+          // Plan 117-11 seam — verbose mode shows the (truncated) advisor
+          // reply inline. advisor_redacted_result intentionally falls through
+          // to the plain footer (no plaintext leak — RESEARCH §13.4).
+          const adviceRaw = result.text;
+          const advice =
+            adviceRaw.length > 500 ? adviceRaw.slice(0, 500) + "…" : adviceRaw;
+          response =
+            response +
+            "\n\n```\n💭 advisor consulted (Opus)\n" +
+            advice +
+            "\n```";
+        } else {
+          // includes: level === "normal" (any kind), level === "verbose" with
+          // advisor_redacted_result (no plaintext), or kind === undefined
+          // (invoked but never resulted — partial-failure: still show footer
+          // because the 💭 reaction already landed).
+          response =
+            response + "\n\n*— consulted advisor (Opus) before responding*";
+        }
+      }
 
       if (response && response.trim().length > 0) {
         if (response.length > 2000) {
@@ -622,6 +1106,13 @@ export class DiscordBridge {
           await this.sendResponse(message, response, sessionName);
         }
         this.log.info({ agent: sessionName, channel: channelId, responseLength: response.length }, "agent response sent to Discord");
+        // Phase 119 A2A-03 — DELIVERED (✅) transition. Only fires if this
+        // message rode the queue path (was previously QUEUED → IN_FLIGHT).
+        // Cleans up the set membership to bound memory.
+        if (this.queuedMessageIds.has(message.id)) {
+          void this.transitionIcon(message, "DELIVERED");
+          this.queuedMessageIds.delete(message.id);
+        }
       } else if (!messageRef.current) {
         this.log.warn({ agent: sessionName, channel: channelId }, "agent returned empty response");
       }
@@ -649,6 +1140,10 @@ export class DiscordBridge {
             // exchange here originates from an ACL-allowed (trusted) channel.
             isTrustedChannel: true,
             log: this.log,
+            // Phase 116-03 F27 — fire the dashboard SSE hook with the
+            // resolved agent (sessionName), metadata only.
+            agentName: sessionName,
+            onTurnRecorded: this.onConversationTurn,
           });
         }
       } catch (err) {
@@ -671,12 +1166,210 @@ export class DiscordBridge {
         "failed to route message",
       );
 
-      try {
-        await message.react("\u274C");
-      } catch (err) {
-        this.log.debug({ error: (err as Error).message }, "failed to add error reaction");
+      // Crash-recovery retry: the SDK kills idle sessions (exit 143) after
+      // ~38min, and a message arriving during the restart window throws
+      // "Agent 'X' is not running". Both should retry — losing user messages
+      // because the session was rebooting is bad UX.
+      //
+      // Recovery delay scales with consecutiveFailures: failure 1 → ~2s,
+      // 2 → ~4s, 3 → ~8s, plus warmup (~7-12s for MCP init). So worst case
+      // for 1-2 consecutive failures is ~17s; 3 consecutive is ~20s.
+      //
+      // First retry: 20s (covers failure 1-2 cleanly).
+      // Second retry: +15s (catches failure 3 if first retry was still early).
+      // Retries cap at 2 so we never loop infinitely on a permanently-broken agent.
+      const isCrashRecovery = errorMsg.includes("code 143") || errorMsg.includes("is not running");
+      if (isCrashRecovery && retryCount < 2) {
+        const delayMs = retryCount === 0 ? 20_000 : 15_000;
+        setTimeout(() => {
+          void this.streamAndPostResponse(message, sessionName, formattedMessage, undefined, 0, retryCount + 1);
+        }, delayMs);
+        // Phase 119 A2A-03 — QUEUED while agent comes back online. Kept
+        // (operator-useful signal: fires only on backoff retry, NOT every msg).
+        // Hotfix 2026-05-14 — record in queuedMessageIds so the eventual
+        // IN_FLIGHT/DELIVERED transitions fire (gated on prior-QUEUED).
+        this.queuedMessageIds.add(message.id);
+        void this.transitionIcon(message, "QUEUED");
+        return;
+      }
+
+      // Phase 100-fu — QUEUE_FULL coalescing.
+      //
+      // SerialTurnQueue is depth-1 (one in-flight + one queued); a 3rd rapid
+      // message throws QUEUE_FULL. Operator-reported bug 2026-04-28: bridge
+      // used to react U+274C, forcing the operator to track + manually resend.
+      // Now: append to per-agent coalescer + react U+23F3 hourglass instead.
+      // perAgentCap fall-through still reacts U+274C as last resort.
+      const isQueueFull = errorMsg === QUEUE_FULL_ERROR_MESSAGE;
+      let coalesced = false;
+      if (isQueueFull) {
+        coalesced = this.messageCoalescer.addMessage(
+          sessionName,
+          formattedMessage,
+          message.id,
+        );
+      }
+
+      if (coalesced) {
+        // Phase 119 A2A-03 \u2014 coalesced into per-agent queue; \u23f3 kept
+        // (operator-useful: only fires on QUEUE_FULL, NOT every msg).
+        // Hotfix 2026-05-14 \u2014 record so eventual IN_FLIGHT/DELIVERED fire.
+        this.queuedMessageIds.add(message.id);
+        void this.transitionIcon(message, "QUEUED");
+      } else {
+        // Phase 119 A2A-03 \u2014 terminal failure; \u274c kept (operator-useful).
+        // Hotfix 2026-05-14 \u2014 clean up any queued-tracking for this msg.
+        this.queuedMessageIds.delete(message.id);
+        void this.transitionIcon(message, "FAILED");
       }
     }
+
+    // Phase 100-fu — drain the per-agent coalescer.
+    //
+    // The in-flight turn (success OR failure above) has now released the
+    // SerialTurnQueue depth-1 slot. Any messages buffered while this turn
+    // was running get joined into ONE follow-up dispatch. SerialTurnQueue
+    // is once again depth-1 (one in-flight + one queued) so this stays
+    // well-behaved.
+    //
+    // Phase 999.11 — layered defense against the QUEUE_FULL coalescer storm
+    // (clawdy 2026-04-30 09:47–09:58 PT trace: ~10 spin-loop iterations adding
+    // +54 chars per cycle from nested [Combined:] wrappers). Three guards:
+    //   (a) depth cap   — prevent unbounded recursion regardless of root cause
+    //   (b) in-flight   — defer drain when sessionManager.hasActiveTurn=true
+    //   (c) idempotent  — formatCoalescedPayload skips re-wrap on single-pending
+    //                     pre-wrapped content (see formatCoalescedPayload below)
+    const pending = this.messageCoalescer.takePending(sessionName);
+    if (pending.length === 0) return;
+
+    // (a) Depth cap — cheapest check first. On cap-hit: requeue + warn + return.
+    //     The next message-arrival drain (or a real queue-free event) will
+    //     pick the pending messages up at depth=0 again.
+    if (drainDepth >= DiscordBridge.MAX_DRAIN_DEPTH) {
+      this.log.warn(
+        { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+        "coalescer drain depth cap reached — leaving messages buffered for next arrival",
+      );
+      this.messageCoalescer.requeue(sessionName, pending);
+      return;
+    }
+
+    // (b) hasActiveTurn gate — defer drain if a turn is still occupying the
+    //     per-agent queue. The next message-arrival or in-flight settle path
+    //     will re-trigger this block.
+    if (this.sessionManager.hasActiveTurn(sessionName)) {
+      this.log.debug(
+        { agent: sessionName, channel: channelId, count: pending.length },
+        "coalescer drain deferred — turn still in-flight",
+      );
+      this.messageCoalescer.requeue(sessionName, pending);
+      return;
+    }
+
+    // (c) Drain — proceed with combined dispatch.
+    const combinedPayload = this.formatCoalescedPayload(pending);
+    this.log.info(
+      { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+      "draining coalesced messages as combined dispatch",
+    );
+    // Phase 119 A2A-03 hotfix 2026-05-14 #3 — transition each previously-
+    // QUEUED pending message to IN_FLIGHT (👍) BEFORE the recursive
+    // dispatch starts. Without this, the IN_FLIGHT site inside
+    // streamAndPostResponse checks queuedMessageIds.has(message.id) — but
+    // message.id is the trigger's, not the pending messages'. Result was
+    // that M2/M3 stayed stuck at ⏳ forever even though their content was
+    // delivered (operator pain reported in fin-acquisition channel:
+    // "messages received the hourglass icon, but its never updated when
+    // the message moves out of the queue").
+    const pendingIds = pending
+      .map((p) => p.messageId)
+      .filter((id) => this.queuedMessageIds.has(id));
+    for (const id of pendingIds) {
+      void this.transitionIconByMessageId(message.channel, channelId, id, "IN_FLIGHT");
+    }
+    // No new Turn — the original Turn already ended. The drain dispatch
+    // runs untraced (acceptable: this is the rare-path resend friction
+    // fix, and the original turn already captured a failure trace).
+    //
+    // streamAndPostResponse internally swallows non-fatal errors (reacts
+    // ❌ on the trigger for terminal failures, re-coalesces for
+    // QUEUE_FULL, retries on crash). It does not throw on the typical
+    // failure paths. We still wrap in try/catch for the rare unhandled
+    // case (e.g., a future refactor introducing a throw, or the recursive
+    // call escaping its own error handler).
+    try {
+      await this.streamAndPostResponse(
+        message,
+        sessionName,
+        combinedPayload,
+        undefined,
+        drainDepth + 1,
+      );
+      // Success path: transition each pending to DELIVERED (✅) and clean
+      // up the queuedMessageIds tracking to bound memory.
+      //
+      // Caveat: if the recursive call internally reacted ❌ on the trigger
+      // (non-QUEUE_FULL terminal failure), the pending messages are also
+      // affected — but we don't have a fine-grained outcome signal from
+      // streamAndPostResponse to distinguish. The operator can still tell
+      // from the trigger's ❌. Future refactor: have
+      // streamAndPostResponse return a success boolean (or thread the
+      // pending IDs through so the inner failure path can react on them
+      // directly). For now, ✅ on pending after recursive call is the
+      // right default — the alternative (leaving ⏳ stuck) is worse.
+      for (const id of pendingIds) {
+        if (this.queuedMessageIds.has(id)) {
+          void this.transitionIconByMessageId(message.channel, channelId, id, "DELIVERED");
+          this.queuedMessageIds.delete(id);
+        }
+      }
+    } catch (err) {
+      // Unhandled error path — transition each pending to FAILED so the
+      // operator sees an actionable terminal-failure signal instead of
+      // stuck-⏳, then rethrow to preserve caller's error handling.
+      for (const id of pendingIds) {
+        if (this.queuedMessageIds.has(id)) {
+          void this.transitionIconByMessageId(message.channel, channelId, id, "FAILED");
+          this.queuedMessageIds.delete(id);
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Phase 100-fu — format coalesced messages into a single combined payload.
+   *
+   * Joins each pending entry with `\n\n---\n\n` and prefixes a header so the
+   * agent sees the operator sent multiple thoughts in rapid succession (not
+   * one giant blob). Order is FIFO (insertion order from MessageCoalescer).
+   *
+   * Phase 999.11 — idempotent guard: a single pending entry whose content
+   * already starts with COMBINED_PREFIX is returned unchanged. The storm
+   * trace from clawdy 2026-04-30 09:47–09:58 PT showed +54 chars per spin-
+   * loop iteration from exactly this nesting bug — re-queued coalesced
+   * payloads gaining a second [Combined: …] header per cycle.
+   *
+   * Why `pending.length === 1` specifically: the storm always involves a
+   * single re-queued payload sitting alone in the buffer. Multi-pending
+   * coalesce of (wrapped + new) correctly preserves the inner [Combined:]
+   * as `(1)` body content under a fresh outer header — that's the legitimate
+   * "user sent N messages while agent worked" feature and must keep working.
+   */
+  private formatCoalescedPayload(
+    pending: ReadonlyArray<{ readonly content: string; readonly messageId: string }>,
+  ): string {
+    if (
+      pending.length === 1 &&
+      pending[0].content.startsWith(DiscordBridge.COMBINED_PREFIX)
+    ) {
+      return pending[0].content;
+    }
+    const header = `[Combined: ${pending.length} message${pending.length === 1 ? "" : "s"} received during prior turn]`;
+    const body = pending
+      .map((m, i) => `(${i + 1}) ${m.content}`)
+      .join("\n\n---\n\n");
+    return `${header}\n\n${body}`;
   }
 
   /**
@@ -698,7 +1391,7 @@ export class DiscordBridge {
    */
   private async handleAgentMessage(message: Message, senderAgent: string): Promise<void> {
     const channelId = message.channelId;
-    const agentName = this.routingTable.channelToAgent.get(channelId);
+    const agentName = this.routingTableRef.current.channelToAgent.get(channelId);
     if (!agentName) {
       this.log.debug({ channelId, senderAgent }, "agent webhook message in unbound channel -- ignoring");
       return;
@@ -742,7 +1435,7 @@ export class DiscordBridge {
     }
 
     const channelId = reaction.message.channelId;
-    const agentName = this.routingTable.channelToAgent.get(channelId);
+    const agentName = this.routingTableRef.current.channelToAgent.get(channelId);
 
     if (!agentName) {
       return;
@@ -755,6 +1448,63 @@ export class DiscordBridge {
       } catch {
         this.log.warn({ channelId, type }, "failed to fetch partial reaction");
         return;
+      }
+    }
+
+    // Phase 999.43 SC-E Plan 04 T02 — operator priority override via
+    // 🔴/🟡/🟢 reactions on a Discord attachment message. The branch is
+    // ADDITIVE: after firing the set-doc-priority-by-message IPC we
+    // FALL THROUGH to the regular reaction-forwarding pipeline below so
+    // the agent still sees "🔴 added" too (operator may still want the
+    // agent to react to the same emoji semantically).
+    //
+    // Emoji codepoints (D-03 LOCKED): 🔴 U+1F534 → high,
+    //   🟡 U+1F7E1 → medium, 🟢 U+1F7E2 → low.
+    if (type === "add") {
+      const PRIORITY_EMOJIS: Record<string, "high" | "medium" | "low"> = {
+        "🔴": "high",
+        "🟡": "medium",
+        "🟢": "low",
+      };
+      const emojiName = reaction.emoji.name ?? "";
+      const newLevel = PRIORITY_EMOJIS[emojiName];
+      if (newLevel) {
+        try {
+          const result = await sendIpcRequest(
+            SOCKET_PATH,
+            "set-doc-priority-by-message",
+            {
+              agent: agentName,
+              message_id: reaction.message.id,
+              level: newLevel,
+              who: "operator",
+              reason: `Discord ${emojiName} reaction by ${user.username ?? user.id}`,
+            },
+          );
+          this.log.info(
+            {
+              tag: "phase999.43-priority-emoji",
+              agent: agentName,
+              messageId: reaction.message.id,
+              newLevel,
+              user: user.username ?? user.id,
+              result,
+            },
+            "phase999.43 emoji-override processed",
+          );
+        } catch (err) {
+          this.log.warn(
+            {
+              tag: "phase999.43-priority-emoji",
+              err: err instanceof Error ? err.message : String(err),
+              messageId: reaction.message.id,
+              agent: agentName,
+            },
+            "phase999.43 emoji-override failed",
+          );
+        }
+        // Intentional fall-through to the existing reaction-forwarding
+        // pipeline below — both surfaces are additive.
       }
     }
 
@@ -793,7 +1543,7 @@ export class DiscordBridge {
    * Resolve the agent name for a channel, checking thread bindings first.
    */
   private resolveAgentForChannel(channelId: string): string | undefined {
-    return this.routingTable.channelToAgent.get(channelId);
+    return this.routingTableRef.current.channelToAgent.get(channelId);
   }
 
   private async sendResponse(
@@ -830,11 +1580,17 @@ export class DiscordBridge {
     response: string,
     resolvedAgent?: string,
   ): Promise<void> {
-    // Try webhook delivery if agent has a webhook configured
+    // Try webhook delivery if agent has a webhook configured. WebhookManager.send
+    // wraps internally — caller does not pre-wrap. Pass raw response through.
     if (resolvedAgent && this.webhookManager?.hasWebhook(resolvedAgent)) {
       await this.webhookManager.send(resolvedAgent, response);
       return;
     }
+
+    // Phase 122 — channel.send fallback (no webhook). Wrap once at the
+    // chokepoint so both the single-message and chunked branches inherit
+    // the wrap. Idempotent under repeat application.
+    const wrapped = wrapMarkdownTablesInCodeFence(response);
 
     const MAX_LENGTH = 2000;
     const channel = originalMessage.channel;
@@ -843,13 +1599,12 @@ export class DiscordBridge {
       return;
     }
 
-    if (response.length <= MAX_LENGTH) {
-      await channel.send(response);
+    if (wrapped.length <= MAX_LENGTH) {
+      await channel.send(wrapped);
       return;
     }
 
-    // Split long responses
-    const chunks = splitMessage(response, MAX_LENGTH);
+    const chunks = splitMessage(wrapped, MAX_LENGTH);
     for (const chunk of chunks) {
       await channel.send(chunk);
     }
@@ -862,15 +1617,23 @@ export class DiscordBridge {
  * with structured metadata from formatAttachmentMetadata, plus multimodal
  * hints for image attachments.
  *
+ * Phase 999.13 TZ-04 — `agentTz` (optional) controls the operator-local
+ * TZ used in `<channel>` and `<replying-to>` `ts` attributes. When omitted,
+ * the renderAgentVisibleTimestamp helper falls back to host TZ (process.env.TZ
+ * → Intl.DateTimeFormat().resolvedOptions().timeZone) which is correct on
+ * the single-host single-TZ clawdy deployment per RESEARCH.md Pitfall 3.
+ *
  * Exported for testing.
  */
 export function formatDiscordMessage(
   message: Message,
   downloadResults?: readonly DownloadResult[],
   referencedMessage?: Message,
+  agentTz?: string,
+  visionAnalyses?: ReadonlyMap<string, string>,
 ): string {
   const parts = [
-    `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${message.createdAt.toISOString()}">`,
+    `<channel source="discord" chat_id="${message.channelId}" message_id="${message.id}" user="${message.author.username}" ts="${renderAgentVisibleTimestamp(message.createdAt, agentTz)}">`,
     message.content,
     `</channel>`,
   ];
@@ -882,16 +1645,21 @@ export function formatDiscordMessage(
       parts.push(`\n${metadata}`);
     }
 
-    // Add multimodal reading hints for successfully downloaded images
+    // Add vision analysis or fallback file-path hint for each downloaded image
     for (const result of downloadResults) {
       if (
         result.success &&
         result.path !== null &&
         isImageAttachment(result.attachmentInfo.contentType)
       ) {
-        parts.push(
-          `(Image downloaded -- read the file at ${result.path} to see its contents)`,
-        );
+        const analysis = visionAnalyses?.get(result.path);
+        if (analysis) {
+          parts.push(`<screenshot-analysis>\n${analysis}\n</screenshot-analysis>`);
+        } else {
+          parts.push(
+            `(Image downloaded -- read the file at ${result.path} to see its contents)`,
+          );
+        }
       }
     }
   } else if (message.attachments.size > 0) {
@@ -907,7 +1675,10 @@ export function formatDiscordMessage(
     if (referencedMessage) {
       const refUser = referencedMessage.author.username;
       const refContent = referencedMessage.content || "(no text content)";
-      const refTs = referencedMessage.createdAt.toISOString();
+      const refTs = renderAgentVisibleTimestamp(
+        referencedMessage.createdAt,
+        agentTz,
+      );
       parts.unshift(
         `<replying-to message_id="${message.reference.messageId}" user="${refUser}" ts="${refTs}">\n${refContent}\n</replying-to>`,
       );

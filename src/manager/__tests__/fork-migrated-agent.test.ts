@@ -73,11 +73,16 @@ function makeMigratedAgentConfig(
     allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
+    autoCompactAt: 0.7, // Phase 124 D-06
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: "I am a migrated test agent.",
     identity: "migrated-test",
@@ -218,7 +223,7 @@ describe("Phase 81 FORK-01 — EscalationMonitor.escalate propagates opus overri
           parentAgent: parentName,
           sessionId: `sess-${label}-fork`,
         } as ForkResult),
-        sendToAgent: vi.fn().mockResolvedValue("opus fork response"),
+        dispatchTurn: vi.fn().mockResolvedValue("opus fork response"),
         stopAgent: vi.fn().mockResolvedValue(undefined),
       } as unknown as SessionManager;
 
@@ -246,7 +251,7 @@ describe("Phase 81 FORK-01 — EscalationMonitor.escalate propagates opus overri
         parentAgent: "agent",
         sessionId: "s1",
       } as ForkResult),
-      sendToAgent: vi.fn().mockResolvedValue("ok"),
+      dispatchTurn: vi.fn().mockResolvedValue("ok"),
       stopAgent: vi.fn().mockResolvedValue(undefined),
     } as unknown as SessionManager;
 

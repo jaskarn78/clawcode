@@ -115,7 +115,10 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
     const payload = putArgs[1];
     const effortCmd = payload.body.find((c) => c.name === "clawcode-effort");
     expect(effortCmd).toBeDefined();
-    expect(effortCmd!.options).toHaveLength(1);
+    // Phase 100 follow-up — clawcode-effort now carries 2 options:
+    //   [0] level   (required, dropdown of 7 EFFORT_CHOICES)
+    //   [1] agent   (optional, free-text — target agent for #admin-clawdy ops)
+    expect(effortCmd!.options).toHaveLength(2);
     const levelOpt = effortCmd!.options[0];
     expect(levelOpt.name).toBe("level");
     expect(levelOpt.choices).toBeDefined();
@@ -131,6 +134,58 @@ describe("Phase 83 UI-01 — registration body forwards choices", () => {
       "auto",
       "off",
     ]);
+    const agentOpt = effortCmd!.options[1] as { name: string; required?: boolean; choices?: unknown };
+    expect(agentOpt.name).toBe("agent");
+    expect(agentOpt.required).toBe(false);
+    expect(agentOpt.choices).toBeUndefined();
+    // Phase 100 follow-up — clawcode-effort ships with default_member_permissions
+    // "0" so non-admin users don't see it in the slash menu. Operators apply
+    // per-channel hiding manually post-deploy (Discord limitation: bots can't
+    // set channel-level command permissions).
+    const effortCmdWithPerms = effortCmd as unknown as {
+      default_member_permissions?: string;
+    };
+    expect(effortCmdWithPerms.default_member_permissions).toBe("0");
+  });
+
+  it("only clawcode-effort gets default_member_permissions (back-compat for other commands)", async () => {
+    const agent = makeAgent("clawdy");
+    const routingTable: RoutingTable = {
+      channelToAgent: new Map([["chan-1", "clawdy"]]),
+      agentToChannels: new Map([["clawdy", ["chan-1"]]]),
+    };
+    const fakeClient = {
+      user: { id: "app-id-1" },
+      guilds: { cache: new Map([["guild-1", { id: "guild-1" }]]) },
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const handler = new SlashCommandHandler({
+      routingTable,
+      sessionManager: {} as unknown as SessionManager,
+      resolvedAgents: [agent],
+      botToken: "fake-token",
+      client: fakeClient as never,
+      log: makeStubLogger(),
+    } as never);
+
+    await handler.register();
+
+    const putArgs = putSpy.mock.calls[0] as unknown as [
+      unknown,
+      { body: Array<{ name: string; default_member_permissions?: string }> },
+    ];
+    const body = putArgs[1].body;
+    let effortSeen = false;
+    for (const cmd of body) {
+      if (cmd.name === "clawcode-effort") {
+        expect(cmd.default_member_permissions).toBe("0");
+        effortSeen = true;
+      } else {
+        expect(cmd.default_member_permissions).toBeUndefined();
+      }
+    }
+    expect(effortSeen).toBe(true);
   });
 
   it("does NOT add a `choices` field to options that don't have one (back-compat)", async () => {

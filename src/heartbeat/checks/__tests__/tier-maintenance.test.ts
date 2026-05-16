@@ -13,7 +13,7 @@ function buildContext(overrides: {
     getTierManager: vi.fn().mockReturnValue(overrides.tierManager ?? null),
     getRunningAgents: vi.fn().mockReturnValue([agentName]),
     startAgent: vi.fn(),
-    sendToAgent: vi.fn(),
+    dispatchTurn: vi.fn(),
     streamFromAgent: vi.fn(),
     forwardToAgent: vi.fn(),
     forkSession: vi.fn(),

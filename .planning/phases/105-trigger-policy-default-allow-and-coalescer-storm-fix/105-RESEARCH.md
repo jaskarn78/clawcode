@@ -1,0 +1,582 @@
+# Phase 105: Trigger-policy default-allow + QUEUE_FULL coalescer storm fix — Research
+
+**Researched:** 2026-04-30
+**Domain:** Daemon hot-path infrastructure — trigger policy boot fallback + Discord bridge coalescer recursion
+**Confidence:** HIGH
+
+<user_constraints>
+## User Constraints (from CONTEXT.md)
+
+### Locked Decisions
+*(None — Claude's discretion across the board for this infrastructure phase. All implementation choices are at Claude's discretion — pure infrastructure / performance phase.)*
+
+### Claude's Discretion
+- Use codebase conventions established in **Phase 62** (`src/triggers/policy-loader.ts`, `policy-evaluator.ts`, `policy-watcher.ts`) for the policy layer.
+- Use the **Phase 100 follow-up** `triggerDeliveryFn` channel-delivery pattern (referenced for context — not modified here).
+- Use **Phase 100-fu coalescer + Quick task 260419-nic** (`SerialTurnQueue.hasInFlight()` accessor) for the queue/coalescer layer.
+
+### Determinism Requirements (must hold)
+- **POLICY**: default-allow fallback must remain back-compat with `PolicyWatcher.onReload` — when a `policies.yaml` lands later, the watcher must replace the default-allow evaluator with the real one.
+- **POLICY**: log line must make it obvious that no policies.yaml was found AND that all events are being allowed because of that. `"using default policy"` is misleading and must change.
+- **COAL**: idempotent coalesce — a payload already wrapped in `[Combined: …]` must not gain a second wrapper when re-queued. Detect via prefix match.
+- **COAL**: drain must wait for in-flight slot OR cap retries. Picking ONE of these two approaches is the planner's call; if both are easy, do both.
+- **COAL**: do not regress the legitimate "user sent 3 messages while agent was working" coalesce behavior — that combine-into-one-payload is the original feature and must still work.
+- **Both**: ship with vitest tests that pin the failure modes documented in `<specifics>`.
+
+### Deferred Ideas (OUT OF SCOPE)
+- Cross-agent IPC channel delivery (`dispatchTurn` → target's bound channel) → **Phase 999.12**
+- Heartbeat inbox 10s timeout → **Phase 999.12**
+- Per-turn API latency telemetry → backlog
+- Async correlation-ID-based reply path → Phase 999.2 longer-term
+- 1Password rate limiting → fixed in Phase 104
+- Reminder-poller MySQL "too many connections" → separate openclaw cron, not clawcode
+- `policies.yaml` template auto-install → superseded by default-allow fallback
+- Policy DSL changes — schema unchanged
+</user_constraints>
+
+<phase_requirements>
+## Phase Requirements
+
+| ID | Description | Research Support |
+|----|-------------|------------------|
+| POLICY-01 | Daemon boot must fall back to default-allow semantics when `~/.clawcode/policies.yaml` is missing (instead of fail-closed empty-rules). | `evaluatePolicy()` default-allow already exists at `src/triggers/policy-evaluator.ts:169-188`; engine ternary at `src/triggers/engine.ts:130-132` selects it when `this.evaluator` is undefined. Path-B fix (null evaluator) is the one-line touch. |
+| POLICY-02 | Hot-reload back-compat: when an operator drops a `policies.yaml` and `PolicyWatcher` fires `onReload(newEvaluator)`, the engine must swap the default-allow fallback for the rule-based evaluator. | `TriggerEngine.reloadEvaluator(evaluator)` at `engine.ts:281-283` already accepts a non-null `PolicyEvaluator`. The swap mechanism is preserved by path B because reloadEvaluator simply assigns to `this.evaluator`. |
+| POLICY-03 | Replace the misleading boot log line `"no policies.yaml found, using default policy"` with explicit text identifying the default-allow semantic and pointing to the file path operators can create. | Log site is `src/manager/daemon.ts:2035`. Single replacement. |
+| COAL-01 | Idempotent coalesce: a payload already prefixed with `[Combined:` must not be re-wrapped when re-queued. Detection via prefix match. | `MessageCoalescer.addMessage()` at `src/discord/message-coalescer.ts:45-55` is the natural detection point; alternatively guard inside `formatCoalescedPayload()` at `src/discord/bridge.ts:754-762`. Either works — bridge-side keeps coalescer policy-free. |
+| COAL-02 | Drain wait: before recursively re-entering `streamAndPostResponse` from the drain block, gate on `SerialTurnQueue.hasInFlight() === false` (or apply backoff with jitter and a max-retries cap). | `hasInFlight()` accessor at `src/manager/persistent-session-queue.ts:99-101`. The drain block is `src/discord/bridge.ts:733-744`. Need a session-handle hop to read the per-agent queue (handle owns the queue). |
+| COAL-03 | Drain depth cap: bound recursive drains to N (e.g. 3) so a stuck queue cannot spin forever. Above the cap, log a warn line and stop draining (messages remain in coalescer for the next message-arrival drain). | Recursion site is `src/discord/bridge.ts:743`. Add a depth parameter to `streamAndPostResponse` (default 0); bail when `depth >= MAX_DRAIN_DEPTH`. |
+| COAL-04 | No log spam: at most one `"draining coalesced messages"` line per actual drain; storm conditions must emit a single `level=40 warn` (not info-spam). | Current log line at `src/discord/bridge.ts:738` fires once per drain — fine in steady state. The spin loop is what creates spam today; fixing COAL-02/03 also fixes COAL-04 by construction. Add a single warn on cap-hit. |
+</phase_requirements>
+
+## Project Constraints (from CLAUDE.md)
+
+- **Runtime**: Node.js 22 LTS (no Bun-specific code paths).
+- **Language**: TypeScript strict — immutability discipline ("ALWAYS create new objects, NEVER mutate"). Coalescer's existing `addMessage` already follows immutable-append; preserve.
+- **GSD Workflow**: this research is part of `/gsd:plan-phase` flow — implementation must come through `/gsd:execute-phase`.
+- **Skills referenced**: `search-first` — verify existing helpers before adding new ones. (Already done: `hasInFlight`, `evaluatePolicy`, `MessageCoalescer` all exist.)
+- **File org**: 200-400 lines typical, 800 max. `src/discord/bridge.ts` is 1034 lines — already over budget but pre-existing; this phase adds small surgical changes and should not restructure.
+- **Error handling**: explicit, no silent swallow. The coalescer drain's existing logging discipline (info per drain attempt, debug for reaction failures) is the established pattern; keep.
+- **Security**: not material here (no secrets, no auth, no SQL, no external input — internal recursion control + boot fallback). Skipping security-reviewer.
+
+## Summary
+
+Two production bugs in the clawcode daemon's hot-path, observed on clawdy 2026-04-30. Both ship together as one infrastructure patch.
+
+**Bug 1 — POLICY default-deny on missing file (POLICY-01..03).** The daemon's boot path at `src/manager/daemon.ts:2034` constructs `new PolicyEvaluator([], configuredAgentNames)` when `~/.clawcode/policies.yaml` is absent. With zero rules, `PolicyEvaluator.evaluate()` (`policy-evaluator.ts:108-151`) iterates an empty rules list and falls through to the final `{ allow: false, reason: "no matching rule" }` return. Every scheduler/reminder/calendar/inbox event has been silently dropped since the file went missing. The codebase **already ships the correct default-allow semantic** as a pure function: `evaluatePolicy(event, configuredAgents)` at `policy-evaluator.ts:169-188`. `TriggerEngine.ingest()` at `engine.ts:130-132` selects this function when `this.evaluator` is undefined. The minimal correct fix is path B: leave `bootEvaluator` undefined when the file is missing, pass undefined to `TriggerEngine`, and the engine's existing ternary picks the default-allow path automatically. `PolicyWatcher.onReload → triggerEngine.reloadEvaluator(newEvaluator)` continues to swap a real evaluator in when the operator later drops a `policies.yaml` (chokidar `change` event).
+
+**Bug 2 — QUEUE_FULL coalescer recursive storm (COAL-01..04).** `src/discord/bridge.ts:680-744` catches QUEUE_FULL from `SerialTurnQueue.run()` (`persistent-session-queue.ts:104-105`), appends the failed message to `MessageCoalescer`, then unconditionally drains via `streamAndPostResponse(msg, name, formatCoalescedPayload(pending), undefined)` — recursively. Three independent defects compound: (a) no idempotency in `formatCoalescedPayload` so a payload already prefixed `[Combined: 1 message …]` gets a second wrapper on the next failed retry, (b) no `hasInFlight()` check before re-entering streamFromAgent, and (c) no recursion depth cap. Today's journal shows the resulting ~150ms spin loop with payload growing 50–100 chars per cycle from the nested wrappers. `SerialTurnQueue.hasInFlight()` was specifically added by quick task 260419-nic for this kind of caller-side gating.
+
+**Primary recommendation:**
+- POLICY: Path B (null evaluator → existing default-allow function-form). Single edit at `daemon.ts:2032-2035`. Replace the log line.
+- COAL: Layered defense — (i) idempotent prefix detection in `formatCoalescedPayload` so nested wrappers can't accumulate, (ii) `hasInFlight()` gate before drain recursion (skip drain if still in-flight; the next message-arrival path or success-path will re-drain), (iii) depth cap = 3 with single warn log on cap-hit.
+
+## Standard Stack
+
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| TypeScript | 6.0.2 (project) | Language | Project standard per `.planning/research/STACK.md`. |
+| vitest | (already in project) | Tests | Established test framework (`src/discord/__tests__/*`, `src/triggers/__tests__/*`, `src/manager/__tests__/*`). |
+| pino | 9.x (project) | Logger | Existing log surface (`this.log` on engine, bridge, watcher). Use child loggers / structured fields per existing convention. |
+| nanoid | (project) | IDs | Causation IDs in `engine.ts` — not directly touched here, mentioned for context. |
+
+**No new dependencies required.** Every primitive needed already exists in the codebase:
+- `evaluatePolicy()` — default-allow function (`src/triggers/policy-evaluator.ts:169-188`)
+- `SerialTurnQueue.hasInFlight()` — in-flight slot accessor (`src/manager/persistent-session-queue.ts:99-101`)
+- `MessageCoalescer` — per-agent buffer (`src/discord/message-coalescer.ts`)
+- `formatCoalescedPayload()` — wrapper formatter (`src/discord/bridge.ts:754-762`)
+
+**Version verification:** `npm view` not run for this phase — phase is purely internal refactor of existing surfaces, zero new deps.
+
+### Supporting
+*(N/A — no library additions.)*
+
+### Alternatives Considered
+| Instead of | Could Use | Tradeoff |
+|------------|-----------|----------|
+| Path B (null evaluator → existing `evaluatePolicy()`) | Path A: synthesize a permissive `PolicyEvaluator` rule with `source: { kind: '*' }` and one rule per configured agent | Path A blocked by schema: `PolicyRule.target` is `z.string().min(1)` — must be a single concrete agent name (`policy-schema.ts:42`). To "match any configured agent", path A would require generating one rule per agent, with synthetic `id`s and Handlebars templates. That's strictly more code, more synthetic surface area in audit logs, and re-implements what `evaluatePolicy()` already does as a pure function. Path B is one line. |
+| `hasInFlight()` gate | Backoff loop with jitter + max retries | A backoff loop still spins (just slower). The `hasInFlight()` gate is a deterministic "wait until queue actually has room" — no polling. The drain block already runs after the in-flight turn settled (`bridge.ts:629` clears typingInterval, the catch fires, drain runs *after* the catch), so in practice `hasInFlight()` should be false at drain time. The gate becomes belt-and-suspenders against any future code path that calls `streamAndPostResponse` while another turn is mid-flight. |
+| Depth cap | Time-window cap (drain at most 1x per N ms) | Time-window cap requires mutable per-agent timestamp state on the bridge. Depth cap is a single integer parameter on the recursive function — far cleaner. |
+| Bridge-side prefix detection (in `formatCoalescedPayload`) | Coalescer-side detection (in `addMessage`) | Bridge-side keeps the coalescer policy-free (it's a generic FIFO buffer that doesn't know about the `[Combined:` wrapper convention). Coalescer-side leaks bridge-specific knowledge into the buffer. **Recommendation: bridge-side**. |
+
+**Installation:** `npm install` already covers — no version bumps required.
+
+## Architecture Patterns
+
+### Codebase Layout (relevant files only)
+
+```
+src/
+├── manager/
+│   ├── daemon.ts                          # Boot wiring; line 2025-2044 = policy fallback site
+│   └── persistent-session-queue.ts        # SerialTurnQueue (depth-2: in-flight + queued)
+├── discord/
+│   ├── bridge.ts                          # streamAndPostResponse + drain block (lines 544-745)
+│   ├── message-coalescer.ts               # Per-agent FIFO buffer
+│   └── __tests__/
+│       ├── bridge.test.ts                 # CO-1..CO-6 existing coalescer tests
+│       └── message-coalescer.test.ts      # MC-1..MC-5 buffer tests
+└── triggers/
+    ├── engine.ts                          # TriggerEngine.ingest() — policy ternary at line 130-132
+    ├── policy-evaluator.ts                # PolicyEvaluator class + evaluatePolicy() function
+    ├── policy-watcher.ts                  # chokidar hot-reload — onReload swap
+    ├── policy-loader.ts                   # YAML + Zod + Handlebars compile
+    ├── policy-schema.ts                   # Zod schemas (kind/id/target shapes)
+    └── __tests__/
+        ├── policy-evaluator.test.ts       # Class + evaluatePolicy() function tests
+        └── policy-watcher.test.ts         # Hot-reload tests; ENOENT handling at line 124
+```
+
+### Pattern 1: Engine-Side Default-Allow Selection (Path B)
+**What:** When `TriggerEngine.evaluator` is undefined, `ingest()` calls the function-form `evaluatePolicy(event, configuredAgents)` which allows any event whose `targetAgent` ∈ `configuredAgents`. This is the existing semantic — we just need to preserve it through boot.
+
+**When to use:** Whenever a `PolicyEvaluator` cannot be constructed because there are zero rules. The engine code path is already in production; nothing to change in `engine.ts`.
+
+**Example (current code, unchanged):**
+```typescript
+// src/triggers/engine.ts:129-132
+// Policy check — use PolicyEvaluator class if available, fallback to legacy wrapper
+const decision = this.evaluator
+  ? this.evaluator.evaluate(debounced)
+  : evaluatePolicy(debounced, this.configuredAgents);
+```
+
+```typescript
+// src/triggers/policy-evaluator.ts:169-188
+export function evaluatePolicy(
+  event: TriggerEvent,
+  configuredAgents: ReadonlySet<string>,
+): PolicyResult {
+  if (!configuredAgents.has(event.targetAgent)) {
+    return Object.freeze({
+      allow: false as const,
+      reason: `target agent '${event.targetAgent}' not configured`,
+    });
+  }
+  return Object.freeze({
+    allow: true as const,
+    targetAgent: event.targetAgent,
+    payload:
+      typeof event.payload === "string"
+        ? event.payload
+        : JSON.stringify(event.payload),
+    ruleId: "__default__",
+  });
+}
+```
+
+**Required change at boot site (`src/manager/daemon.ts`):**
+```typescript
+// CURRENT (line 2025-2044, abbreviated)
+let bootEvaluator: PolicyEvaluator;
+try {
+  const policyContent = await readFile(policyPath, "utf-8");
+  const compiledRules = loadPolicies(policyContent);
+  bootEvaluator = new PolicyEvaluator(compiledRules, configuredAgentNames);
+} catch (err) {
+  if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+    bootEvaluator = new PolicyEvaluator([], configuredAgentNames);  // ← fail-closed
+    log.info("no policies.yaml found, using default policy");
+  } ...
+}
+new TriggerEngine({...}, configuredAgentNames, bootEvaluator);
+
+// PROPOSED (path B)
+let bootEvaluator: PolicyEvaluator | undefined;  // ← undefined allowed
+try {
+  const policyContent = await readFile(policyPath, "utf-8");
+  const compiledRules = loadPolicies(policyContent);
+  bootEvaluator = new PolicyEvaluator(compiledRules, configuredAgentNames);
+  log.info({ path: policyPath, ruleCount: compiledRules.length }, "policies.yaml loaded at boot");
+} catch (err) {
+  if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+    bootEvaluator = undefined;  // ← engine ternary selects evaluatePolicy() default-allow
+    log.info(
+      { policyPath },
+      "no policies.yaml found — using default-allow evaluator: any configured agent can receive events. Drop a policies.yaml at this path to enable rule-based filtering.",
+    );
+  } else if (err instanceof PolicyValidationError) {
+    throw new ManagerError(...);
+  } else {
+    throw err;
+  }
+}
+new TriggerEngine({...}, configuredAgentNames, bootEvaluator);
+```
+
+The `TriggerEngine` constructor at `engine.ts:48-66` already declares `evaluator?: PolicyEvaluator` (optional) — no signature change needed.
+
+### Pattern 2: Coalescer Wrapper Idempotency
+**What:** Detect a payload already prefixed with `[Combined:` and skip re-wrapping. The wrapper format is fixed in `formatCoalescedPayload` — there's exactly one place that emits it.
+
+**Where:** `src/discord/bridge.ts:754-762`.
+
+**Example (proposed):**
+```typescript
+private static readonly COMBINED_PREFIX = "[Combined:";
+
+private formatCoalescedPayload(
+  pending: ReadonlyArray<{ readonly content: string; readonly messageId: string }>,
+): string {
+  // If a single pending entry is already a wrapped payload, return it unchanged.
+  // Defends against the QUEUE_FULL spin-loop case where a coalesced batch
+  // failed and got re-queued — re-wrapping would nest [Combined: …] headers.
+  if (pending.length === 1 && pending[0].content.startsWith(DiscordBridge.COMBINED_PREFIX)) {
+    return pending[0].content;
+  }
+  const header = `[Combined: ${pending.length} message${pending.length === 1 ? "" : "s"} received during prior turn]`;
+  const body = pending.map((m, i) => `(${i + 1}) ${m.content}`).join("\n\n---\n\n");
+  return `${header}\n\n${body}`;
+}
+```
+
+**Why pending.length === 1 specifically:** the storm trace shows nested wrappers always happen on a single re-queued payload (the prior failed combined dispatch, sitting alone in the buffer). Multi-message coalesce of a wrapped + new messages is correctly handled by the existing path (each `(N) …` body entry can be a wrapped string; that's fine because we're only checking if the **single-pending re-queue path** double-wraps).
+
+### Pattern 3: hasInFlight Gate + Depth Cap on Drain Recursion
+**What:** Before recursing into `streamAndPostResponse` from the drain block, (a) check the per-agent queue's `hasInFlight()` and skip if true, (b) thread a depth parameter and bail at MAX_DRAIN_DEPTH=3.
+
+**Where:** `src/discord/bridge.ts:733-744` (drain block) and `:544` (function signature).
+
+**Plumbing concern:** The bridge does NOT directly own `SerialTurnQueue`. The queue lives inside `persistent-session-handle.ts` (per session handle). The bridge talks to `sessionManager.streamFromAgent()` / `turnDispatcher.dispatchStream()` and never sees the queue. **Implementation requires** exposing a per-agent `hasActiveTurn(agentName): boolean` method on `SessionManager` (or `TurnDispatcher`) that delegates to the session handle's `hasActiveTurn()` (already exposed per quick task 260419-nic).
+
+Verify the public accessor exists:
+```bash
+grep -n "hasActiveTurn" src/manager/persistent-session-handle.ts src/manager/session-manager.ts src/manager/turn-dispatcher.ts
+```
+
+If `hasActiveTurn` is exposed on the handle but NOT on the manager/dispatcher, the planner adds a thin pass-through method:
+```typescript
+// src/manager/session-manager.ts (proposed)
+hasActiveTurn(agentName: string): boolean {
+  const handle = this.handles.get(agentName);
+  return handle?.hasActiveTurn() ?? false;
+}
+```
+
+**Example drain block (proposed):**
+```typescript
+private static readonly MAX_DRAIN_DEPTH = 3;
+
+private async streamAndPostResponse(
+  message: Message,
+  sessionName: string,
+  formattedMessage: string,
+  turn?: Turn,
+  drainDepth = 0,    // ← new
+): Promise<void> {
+  // ... existing try/catch body unchanged ...
+
+  // Drain block (replacing lines 733-744)
+  const pending = this.messageCoalescer.takePending(sessionName);
+  if (pending.length === 0) return;
+
+  // Depth cap — defense-in-depth against any future spin loop.
+  if (drainDepth >= DiscordBridge.MAX_DRAIN_DEPTH) {
+    this.log.warn(
+      { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+      "coalescer drain depth cap reached — leaving messages buffered for next arrival",
+    );
+    // Push back into the buffer — let the next message-arrival drain pick them up.
+    for (const m of pending) {
+      this.messageCoalescer.addMessage(sessionName, m.content, m.messageId);
+    }
+    return;
+  }
+
+  // hasInFlight gate — skip drain if a turn is still occupying the queue.
+  // The next message-arrival will re-drain, or the in-flight turn's own
+  // success/error path will trigger this drain block again.
+  if (this.sessionManager.hasActiveTurn(sessionName)) {
+    this.log.debug(
+      { agent: sessionName, channel: channelId, count: pending.length },
+      "coalescer drain deferred — turn still in-flight",
+    );
+    // Push pending back so it's still buffered for the next attempt.
+    for (const m of pending) {
+      this.messageCoalescer.addMessage(sessionName, m.content, m.messageId);
+    }
+    return;
+  }
+
+  const combinedPayload = this.formatCoalescedPayload(pending);
+  this.log.info(
+    { agent: sessionName, channel: channelId, count: pending.length, drainDepth },
+    "draining coalesced messages as combined dispatch",
+  );
+  await this.streamAndPostResponse(message, sessionName, combinedPayload, undefined, drainDepth + 1);
+}
+```
+
+**Note on push-back:** `MessageCoalescer.addMessage` returns false at cap (50). If push-back hits the cap, the messages are dropped — operator-visible regression. In the deferred path this is unlikely (cap is 50 messages); log a warn at debug-time if push-back fails. Alternative: add a `MessageCoalescer.requeue(agentName, messages)` method that prepends without cap check (since they were already accepted once). **Recommendation: add `requeue` to keep semantics tight.**
+
+### Anti-Patterns to Avoid
+- **Don't synthesize wildcard rules in `PolicyEvaluator`.** The schema requires a concrete `target` per rule. Generating per-agent synthetic rules pollutes the rules list, audit logs, and hot-reload diff output. Use the existing function-form fallback.
+- **Don't add timing-based backoff to the drain.** `setTimeout`-driven retries are unobservable, hard to test, and re-introduce the "spin loop with extra steps" pathology. Use the existing event-driven path: drain runs after every turn settles (success or error), so messages buffered during a turn naturally drain when the in-flight slot frees.
+- **Don't put the wrapper-detect inside `MessageCoalescer.addMessage`.** The coalescer is a content-agnostic buffer (per its docstring). Bridge-layer policy belongs in the bridge.
+- **Don't `console.log` from anywhere.** Project uses `pino` child loggers — `this.log.info({...}, "msg")` shape is mandatory.
+- **Don't mutate `pending` arrays.** Coalescer already returns frozen-content-via-Readonly; the immutable-append discipline must extend to any new code (use spread, not push).
+
+## Don't Hand-Roll
+
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| Default-allow when no rules | New permissive evaluator class | Existing `evaluatePolicy()` function via null `evaluator` (path B) | Function already handles configured-agent check + payload stringify + freeze. Re-implementing creates two sources of truth. |
+| In-flight slot detection | `try/catch QUEUE_FULL` retry loop | `SerialTurnQueue.hasInFlight()` accessor (added by quick task 260419-nic) | The accessor is the public API; reading throw side-effects is the failure mode this phase is fixing. |
+| Wrapper detection | Regex matching `[Combined: \d+ message]` | `String.prototype.startsWith("[Combined:")` | The header text is fixed, prefix is unique, regex is overkill and slower. |
+| Recursion guard | Map of per-agent retry counters | Function parameter `drainDepth = 0` | Param is stateless, test-friendly, no leak risk. |
+| Per-agent queue access | New global queue registry | `SessionManager.hasActiveTurn(agentName)` pass-through | Bridge already takes `sessionManager` in constructor; thin delegation method keeps boundaries clean. |
+
+**Key insight:** Every primitive this phase needs already exists. The work is wiring + signature widening, not new infrastructure. If the planner finds themselves writing a new class, they're going down the wrong path.
+
+## Common Pitfalls
+
+### Pitfall 1: Watcher's start() doesn't fire onReload
+**What goes wrong:** If an operator creates `policies.yaml` *after* the daemon boots (no restart), the chokidar watcher only listens for `change` events (`src/triggers/policy-watcher.ts:151`). A file appearing fresh fires an `add` event, which is not subscribed.
+**Why it happens:** Phase 62 PolicyWatcher was designed under the assumption that `policies.yaml` either exists at boot or doesn't — not that it would be created mid-flight.
+**How to avoid:** Out of scope for THIS phase — but add a follow-up note (suggest backlog/Phase 999.13). Default-allow + restart-to-load-rules is the operator workflow this phase enables.
+**Warning signs:** Operator reports "I created policies.yaml but rules aren't enforcing" — answer is "restart daemon".
+
+### Pitfall 2: hasActiveTurn race with drain timing
+**What goes wrong:** `hasActiveTurn()` reads `inFlight !== null` (`persistent-session-queue.ts:99-101`). The bridge's drain block runs in the *catch handler's continuation* of the failed turn — by then `inFlight.finally()` has cleared the slot (`persistent-session-queue.ts:122-125`). So in the QUEUE_FULL recovery path, `hasInFlight()` returns false even though a queued waiter may exist. The gate works for the storm scenario but is informational, not blocking, in steady state.
+**Why it happens:** Promise microtask ordering. The `.finally()` clear runs synchronously after the awaited turn's outcome; the catch block in the bridge runs after that.
+**How to avoid:** Acceptable — the gate is belt-and-suspenders. The real defense is COAL-01 (idempotent wrapper) + COAL-03 (depth cap). Document this in the test rationale.
+**Warning signs:** Test that mocks `hasActiveTurn` to return true should still see depth-cap-hit behavior.
+
+### Pitfall 3: Coalescer cap (50) collides with push-back
+**What goes wrong:** When the depth cap or hasInFlight gate fires and we push pending messages back into the coalescer, `addMessage` may return false if the cap (50) is reached. Pushed-back messages get dropped silently.
+**Why it happens:** `MessageCoalescer.addMessage` enforces `perAgentCap` regardless of source.
+**How to avoid:** Add a `MessageCoalescer.requeue(agentName, messages)` method that bypasses the cap (since these messages were already accepted once and we're returning them for a future drain). Mark the method test-coverage as "MC-6: requeue ignores cap".
+**Warning signs:** Test asserting that a 50-msg buffer + push-back of 1 = 51 messages still buffered.
+
+### Pitfall 4: Test injection of hasActiveTurn must mock at SessionManager
+**What goes wrong:** Existing bridge tests inject a fake coalescer via `(bridge as any).messageCoalescer = …`. Adding a `hasActiveTurn` call means tests must also stub `sessionManager.hasActiveTurn`.
+**Why it happens:** Test fixtures in `src/discord/__tests__/bridge.test.ts:668-690` build the bridge with a mock manager; the new method must exist on that mock.
+**How to avoid:** Default the mock to `() => false` in `createBridge()` helper — preserves CO-1..CO-6 backward compatibility. New tests opt-in `() => true` to exercise the gate.
+
+### Pitfall 5: The single-pending wrapped-content edge case
+**What goes wrong:** A user sends a single message starting with the literal text `[Combined: hey watch this`. After QUEUE_FULL, it gets coalesced as a single pending entry. The idempotent check sees the prefix and skips wrapping — operator's user input is now an unwrapped payload that the agent will misparse as a system header.
+**Why it happens:** Prefix matching is content-naive.
+**How to avoid:** This is theoretically possible but operationally negligible (Discord users don't typically open with `[Combined:`). Acceptable risk. Alternative: use a more specific prefix like the full `[Combined: 1 message` substring — still not bulletproof. Document the trade-off; do not over-engineer.
+
+### Pitfall 6: Boot log line consumed by ops greps
+**What goes wrong:** SRE/ops scripts may grep `journalctl` for the literal string `"using default policy"`. Changing the text breaks alerts.
+**Why it happens:** Log lines are an undocumented operator API.
+**How to avoid:** This is a one-developer project with the operator (jjagpal) acknowledging the change. Confirmed in CONTEXT.md that the new text is desired. Not a real risk for this codebase.
+
+## Code Examples
+
+Verified in-tree patterns the implementation will mirror:
+
+### Existing default-allow function (already correct, do not modify)
+```typescript
+// src/triggers/policy-evaluator.ts:169-188 — Source: in-tree, verified
+export function evaluatePolicy(
+  event: TriggerEvent,
+  configuredAgents: ReadonlySet<string>,
+): PolicyResult {
+  if (!configuredAgents.has(event.targetAgent)) {
+    return Object.freeze({
+      allow: false as const,
+      reason: `target agent '${event.targetAgent}' not configured`,
+    });
+  }
+  return Object.freeze({
+    allow: true as const,
+    targetAgent: event.targetAgent,
+    payload:
+      typeof event.payload === "string"
+        ? event.payload
+        : JSON.stringify(event.payload),
+    ruleId: "__default__",
+  });
+}
+```
+
+### Existing engine ternary (already correct, do not modify)
+```typescript
+// src/triggers/engine.ts:129-132 — Source: in-tree, verified
+const decision = this.evaluator
+  ? this.evaluator.evaluate(debounced)
+  : evaluatePolicy(debounced, this.configuredAgents);
+```
+
+### Existing hot-reload swap (already correct, do not modify)
+```typescript
+// src/triggers/engine.ts:281-283 — Source: in-tree, verified
+reloadEvaluator(evaluator: PolicyEvaluator): void {
+  this.evaluator = evaluator;
+}
+```
+
+### Existing daemon onReload wiring (already correct, do not modify)
+```typescript
+// src/manager/daemon.ts:2241-2256 — Source: in-tree, verified
+const policyWatcher = new PolicyWatcher({
+  policyPath,
+  auditPath: policyAuditPath,
+  onReload: (newEvaluator, diff) => {
+    triggerEngine.reloadEvaluator(newEvaluator);
+    log.info(
+      { added: diff.added.length, removed: diff.removed.length, modified: diff.modified.length },
+      "policy hot-reloaded — TriggerEngine evaluator swapped",
+    );
+  },
+  ...
+});
+```
+
+### Existing immutable-append in coalescer (mirror this style)
+```typescript
+// src/discord/message-coalescer.ts:45-55 — Source: in-tree, verified
+addMessage(agentName: string, content: string, messageId: string): boolean {
+  const list = this.pending.get(agentName) ?? [];
+  if (list.length >= this.perAgentCap) return false;
+  // Immutable append — create a new list rather than mutating the existing array.
+  const next: CoalescedMessage[] = [
+    ...list,
+    { content, messageId, receivedAt: Date.now() },
+  ];
+  this.pending.set(agentName, next);
+  return true;
+}
+```
+
+### Existing bridge test fixture pattern (extend, don't replace)
+```typescript
+// src/discord/__tests__/bridge.test.ts:668-690 — Source: in-tree, verified
+function createBridge(opts: { coalescer?: unknown } = {}) {
+  const bridge = new DiscordBridge({ ... mock deps ... });
+  if (opts.coalescer) {
+    (bridge as any).messageCoalescer = opts.coalescer;
+  }
+  return bridge;
+}
+```
+
+## State of the Art
+
+*(N/A — this is a bug-fix phase against existing in-tree primitives. No external state-of-the-art shifts apply.)*
+
+| Old Approach | Current Approach | When Changed | Impact |
+|--------------|------------------|--------------|--------|
+| Phase 60 `evaluatePolicy()` function-only | Phase 62 `PolicyEvaluator` class + DSL | Phase 62 (2025-Q4) | Function preserved as back-compat wrapper — that's the asset path B exploits. |
+| Phase 100 ❌-react on QUEUE_FULL | Phase 100-fu coalescer + ⏳-react | Phase 100-fu (2026-04-28) | Coalescer introduced the recursive drain; this phase fixes the recursion. |
+| Quick task 260419-nic — exposed `hasInFlight()` | (current) | 2026-04-19 | The accessor was added precisely to support caller-side gating like COAL-02. |
+
+**Deprecated/outdated:** None.
+
+## Open Questions
+
+1. **Is `SessionManager.hasActiveTurn(agentName)` already exposed?**
+   - What we know: `SerialTurnQueue.hasInFlight()` exists; `PersistentSessionHandle.hasActiveTurn()` was the documented quick-task target.
+   - What's unclear: whether `SessionManager` already has a pass-through, or whether the planner needs to add one.
+   - Recommendation: planner runs `grep -n "hasActiveTurn" src/manager/` as the first plan task; adds a one-line pass-through if missing.
+
+2. **Should the cap-hit warn log throttle?**
+   - What we know: today the spin loop emits log spam at ~7Hz. Post-fix, cap-hit means an in-flight turn is genuinely stuck and operator visibility is wanted.
+   - What's unclear: does an operator want one warn per cap-hit, or one warn per agent per minute?
+   - Recommendation: emit one warn per cap-hit. Frequency will be low post-fix (cap is only reached if `hasInFlight()` returns true 3 drains in a row, which itself requires the in-flight turn to outlive 3 message arrivals). Add a throttle as a follow-up if it proves noisy.
+
+3. **What happens when push-back hits the per-agent cap of 50?**
+   - What we know: `addMessage` returns false at cap; messages currently get ❌-reacted in the bridge's QUEUE_FULL fallback.
+   - What's unclear: whether the push-back path should react to messages that get rejected (the user already saw ⏳).
+   - Recommendation: add `MessageCoalescer.requeue(agentName, msgs)` that bypasses cap (since they were already accepted once). Tested as MC-6.
+
+## Environment Availability
+
+| Dependency | Required By | Available | Version | Fallback |
+|------------|------------|-----------|---------|----------|
+| Node.js | runtime | ✓ | 22 LTS (project standard) | — |
+| TypeScript | language | ✓ | 6.0.2 (project pinned) | — |
+| vitest | tests | ✓ | (pinned in package.json) | — |
+| pino | logger | ✓ | 9.x | — |
+| chokidar | policy watcher (existing) | ✓ | 4.x | — |
+
+**Missing dependencies with no fallback:** None.
+**Missing dependencies with fallback:** None.
+
+This phase is purely internal refactor of existing code; no new tools, services, or runtimes required.
+
+## Validation Architecture
+
+> Phase requires `nyquist_validation`. `.planning/config.json:workflow.nyquist_validation = true`.
+
+### Test Framework
+| Property | Value |
+|----------|-------|
+| Framework | vitest (pinned in `package.json`) |
+| Config file | `vitest.config.ts` (or `package.json` test script — verify in plan) |
+| Quick run command | `npx vitest run src/triggers/__tests__/policy-evaluator.test.ts src/discord/__tests__/message-coalescer.test.ts src/discord/__tests__/bridge.test.ts src/manager/__tests__/persistent-session-queue.test.ts` |
+| Full suite command | `npm test` (or `npx vitest run`) |
+
+### Phase Requirements → Test Map
+| Req ID | Behavior | Test Type | Automated Command | File Exists? |
+|--------|----------|-----------|-------------------|-------------|
+| POLICY-01 | Daemon boot with no policies.yaml constructs `TriggerEngine` with undefined evaluator; ingest of event with target ∈ configuredAgents dispatches | unit (engine) | `npx vitest run src/triggers/__tests__/engine.test.ts -t "default-allow when evaluator undefined"` | ❌ Wave 0 (need new test file or extend existing) |
+| POLICY-01 | `evaluatePolicy()` allow path returns frozen result with `ruleId: "__default__"` for configured target | unit (existing) | `npx vitest run src/triggers/__tests__/policy-evaluator.test.ts -t "evaluatePolicy"` | ✅ existing (lines 318-345 in policy-evaluator.test.ts) |
+| POLICY-02 | `TriggerEngine.reloadEvaluator(realEvaluator)` swap from undefined → defined evaluator routes through new evaluator | unit (engine) | `npx vitest run src/triggers/__tests__/engine.test.ts -t "reloadEvaluator swap"` | ❌ Wave 0 |
+| POLICY-03 | Boot log line text contains `"default-allow"` and the policy path | unit (daemon log capture) OR e2e | manual journal grep in deploy verification | ❌ Wave 0 (low value as automated test; defer to deploy smoke test) |
+| COAL-01 | `formatCoalescedPayload` with single pending entry whose content starts with `[Combined:` returns content unchanged (no nested wrapper) | unit (bridge) | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-7: idempotent coalesce"` | ❌ Wave 0 |
+| COAL-01 | `formatCoalescedPayload` with multi-pending entries (one of which is wrapped) still produces ONE outer wrapper | unit (bridge) | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-8: multi-pending with one wrapped"` | ❌ Wave 0 |
+| COAL-02 | When `sessionManager.hasActiveTurn` returns true, drain block defers (does not call streamFromAgent) and re-buffers pending | unit (bridge) | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-9: drain deferred when in-flight"` | ❌ Wave 0 |
+| COAL-03 | Recursive drain hits depth cap → emits warn, does not recurse further, leaves messages buffered | unit (bridge) | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-10: drain depth cap"` | ❌ Wave 0 |
+| COAL-04 | Storm simulation: 5 forced QUEUE_FULL throws → at most MAX_DRAIN_DEPTH `"draining coalesced messages"` info logs + 1 warn | unit/integration (bridge) | `npx vitest run src/discord/__tests__/bridge.test.ts -t "CO-11: storm bounded log output"` | ❌ Wave 0 |
+| COAL-MC-6 | `MessageCoalescer.requeue` bypasses perAgentCap | unit (coalescer) | `npx vitest run src/discord/__tests__/message-coalescer.test.ts -t "MC-6: requeue ignores cap"` | ❌ Wave 0 (only if `requeue` method is added) |
+| Back-compat | All existing CO-1..CO-6 + MC-1..MC-5 + policy-evaluator existing tests still pass | unit (existing) | `npx vitest run src/discord/__tests__ src/triggers/__tests__ src/manager/__tests__/persistent-session-queue.test.ts` | ✅ existing |
+
+### Sampling Rate
+- **Per task commit:** `npx vitest run <touched test file>` — typically 1-2s per file.
+- **Per wave merge:** `npx vitest run src/discord src/triggers src/manager` — full impact area, <30s.
+- **Phase gate:** `npm test` — full suite green before `/gsd:verify-work`.
+- **Deploy smoke (post-merge):**
+  ```bash
+  ssh clawdy 'journalctl -u clawcode --since "5 min ago" -p info --no-pager | grep -E "default-allow|trigger-engine: event dispatched"'
+  # expect: "default-allow evaluator" and/or "trigger-engine: event dispatched", NOT "policy rejected event"
+  ssh clawdy 'journalctl -u clawcode --since "5 min ago" --no-pager | grep -cE "QUEUE_FULL"'
+  # expect: 0 under normal load
+  ```
+
+### Wave 0 Gaps
+- [ ] `src/triggers/__tests__/engine.test.ts` — does not yet exist; need new file for POLICY-01 + POLICY-02 unit tests. (Verify with `ls src/triggers/__tests__/`. If the file is absent, a Wave 0 task creates it with shared TriggerEngine fixture.)
+- [ ] Bridge test additions CO-7..CO-11 — extend existing `src/discord/__tests__/bridge.test.ts` describe block "QUEUE_FULL coalescing (Phase 100-fu)".
+- [ ] Coalescer test addition MC-6 — extend existing `src/discord/__tests__/message-coalescer.test.ts` (only if `requeue` method is added).
+- [ ] Verify `SessionManager.hasActiveTurn(agentName)` is exposed; if not, Wave 0 adds a one-line pass-through with a smoke test.
+
+*(Framework install: not needed — vitest already in package.json.)*
+
+## Sources
+
+### Primary (HIGH confidence)
+- **In-tree code reads (verified 2026-04-30):**
+  - `src/manager/daemon.ts:2010-2125, 2237-2260` — boot policy fallback site, watcher wiring
+  - `src/triggers/engine.ts` (full file, 284 lines) — `TriggerEngine` constructor + `ingest()` + `reloadEvaluator()`
+  - `src/triggers/policy-evaluator.ts` (full file, 188 lines) — `PolicyEvaluator` class + `evaluatePolicy()` function
+  - `src/triggers/policy-watcher.ts` (full file, 307 lines) — chokidar wiring, ENOENT handling
+  - `src/triggers/policy-loader.ts` (full file, 102 lines) — Zod compile pipeline
+  - `src/triggers/policy-schema.ts` (full file, 59 lines) — `PolicyRule.target` is `z.string().min(1)` (precludes path A wildcard)
+  - `src/discord/bridge.ts:540-762` — `streamAndPostResponse` + drain + `formatCoalescedPayload`
+  - `src/discord/message-coalescer.ts` (full file, 71 lines) — `MessageCoalescer` API
+  - `src/manager/persistent-session-queue.ts` (full file, 131 lines) — `SerialTurnQueue.hasInFlight()` and queue depth semantics
+  - `src/discord/__tests__/bridge.test.ts:625-868` — existing CO-1..CO-6 fixtures
+  - `src/discord/__tests__/message-coalescer.test.ts` — existing MC-1..MC-5 fixtures
+  - `src/triggers/__tests__/policy-evaluator.test.ts:240-345` — existing class + function tests
+  - `src/manager/__tests__/persistent-session-queue.test.ts:140-175` — existing QUEUE_FULL throw tests
+- `.planning/phases/105-trigger-policy-default-allow-and-coalescer-storm-fix/105-CONTEXT.md` — phase scope, decisions, repro traces (2026-04-30)
+- `.planning/config.json` — `workflow.nyquist_validation: true`, `commit_docs: true`
+
+### Secondary (MEDIUM confidence)
+- Today's clawdy journal trace (09:00, 08:26, 09:47–09:58 PT) — operator-captured repro per CONTEXT.md `<specifics>` section. Re-verifiable on the live host via `journalctl -u clawcode`.
+
+### Tertiary (LOW confidence)
+- *(None — every claim in this document is grounded in direct file reads or the operator-supplied CONTEXT.md.)*
+
+## Metadata
+
+**Confidence breakdown:**
+- Standard stack: HIGH — zero new dependencies; every primitive verified by direct file read.
+- Architecture: HIGH — change shape is constrained to two surgical edits (daemon line 2025-2044, bridge lines 733-762) plus one new method (SessionManager.hasActiveTurn pass-through if absent) and a small test set.
+- Pitfalls: HIGH — all pitfalls reasoned from in-tree code semantics (promise microtask ordering, schema constraints, log discipline). The watcher `add`-event blind spot is a known limitation flagged for follow-up.
+- Validation: HIGH — vitest fixtures already exist for both layers; all new tests are additions to existing describe blocks plus one new engine test file.
+
+**Research date:** 2026-04-30
+**Valid until:** 2026-05-30 (30 days — codebase is fast-moving but the touch points here are stable Phase 62 + Phase 100-fu surfaces)

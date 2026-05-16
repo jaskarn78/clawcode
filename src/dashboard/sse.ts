@@ -77,6 +77,25 @@ export class SseManager {
 
   /**
    * Broadcast an event to all connected SSE clients.
+   *
+   * Known event types currently dispatched by daemon-side callers:
+   *   - `agent-status`        (10s poll)            — DashboardState
+   *   - `schedules`           (10s poll)            — schedules array
+   *   - `health`              (10s poll)            — HealthData
+   *   - `delivery-queue`      (10s poll)            — DeliveryQueueData
+   *   - `task-state-change`   (10s poll)            — list-tasks payload
+   *   - `memory-stats`        (15s poll)            — MemoryStatsData
+   *   - `error`               (poll failure)        — { message }
+   *
+   * Phase 116-03 F27 — event-driven additions (NOT polled; fired inline
+   * from captureDiscordExchange in src/discord/capture.ts via the
+   * `onConversationTurn` hook the bridge constructor accepts):
+   *   - `conversation-turn`   (per turn write)      — { agent, turnId, role, ts }
+   *
+   * Payload is metadata-only — UI fetches full content on demand via
+   * /api/conversations/search or /api/conversations/:agent/recent. Keeps
+   * the per-event byte-count near-zero so 10-50 events/sec at peak stays
+   * well under 1KB/s aggregate.
    */
   broadcast(event: string, data: unknown): void {
     const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;

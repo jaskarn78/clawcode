@@ -6,6 +6,8 @@ import type { Registry } from "../manager/types.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
 import type { TaskStore } from "../tasks/store.js";
+import type { SecretsResolver } from "../manager/secrets-resolver.js";
+import type { BrokerStatusProvider } from "./checks/mcp-broker.js";
 import type {
   CheckModule,
   CheckContext,
@@ -72,6 +74,37 @@ export class HeartbeatRunner {
   private readonly zoneTrackers: Map<string, ContextZoneTracker> = new Map();
   private threadManager: ThreadManager | undefined;
   private taskStore: TaskStore | undefined;
+  // Phase 104 plan 03 (SEC-05) — passed into CheckContext so mcp-reconnect's
+  // RecoveryDeps factory can wire `invalidate: (ref) => secretsResolver.invalidate(ref)`.
+  private secretsResolver: SecretsResolver | undefined;
+  // Phase 108 (POOL-07) — daemon-side adapter exposing
+  // broker.getPoolStatus() to the mcp-broker check. Threaded into
+  // CheckContext per-tick. Setter wired in daemon.ts after broker
+  // construction, mirroring setSecretsResolver / setThreadManager /
+  // setTaskStore.
+  private brokerStatusProvider: BrokerStatusProvider | undefined;
+  // Phase 124 Plan 04 T-02 — auto-trigger closure threaded into the
+  // context-fill check via CheckContext. Daemon wires this to a
+  // handleCompactSession-bound closure; fire-and-forget on the check
+  // side so the heartbeat tick never blocks on compaction.
+  private compactSessionTrigger: ((agent: string) => Promise<void>) | undefined;
+  // Phase 124 Plan 04 T-02 — last-compaction lookup for the auto-trigger
+  // cooldown gate. Reads from the same `CompactionEventLog` the
+  // `heartbeat-status` IPC surfaces, so manual + auto paths share one
+  // cooldown view.
+  private getLastCompactionAt: ((agent: string) => string | null) | undefined;
+  // Phase 125 Plan 01 — active-state header provider. The daemon wires a
+  // closure that builds the per-agent ActiveStateBlock, persists it to
+  // ~/.clawcode/agents/<agent>/state/active-state.yaml, and returns the
+  // rendered text. Runner calls this once per tick per agent BEFORE
+  // executing checks; the rendered string is stashed in `lastProbeText`
+  // so future probe-text dispatch (deferred to a later phase) can prepend
+  // it. Errors are swallowed at the call site (warn-logged) so a builder
+  // failure never blocks the tick.
+  private activeStateProvider:
+    | ((agent: string) => Promise<string | null>)
+    | undefined;
+  private readonly lastProbeText: Map<string, string> = new Map();
 
   constructor(options: HeartbeatRunnerOptions) {
     this.sessionManager = options.sessionManager;
@@ -85,12 +118,22 @@ export class HeartbeatRunner {
 
   /**
    * Discover and load check modules from the checks directory.
+   *
+   * Phase 999.8 Plan 03 — discovery is now a static registry (see
+   * check-registry.ts). The boot log surfaces both the count AND the
+   * registered names so production journalctl gives operators an unambiguous
+   * read of which checks are alive after a restart. The message string
+   * changes from "discovered" → "registered" to make the new shape easy to
+   * grep against the prior (broken) deployment's log lines.
    */
   async initialize(): Promise<void> {
     this.checks = await discoverChecks(this.checksDir);
     this.log.info(
-      { checkCount: this.checks.length },
-      "heartbeat checks discovered",
+      {
+        checkCount: this.checks.length,
+        checks: this.checks.map((c) => c.name),
+      },
+      "heartbeat checks registered",
     );
   }
 
@@ -116,6 +159,66 @@ export class HeartbeatRunner {
    */
   setTaskStore(store: TaskStore): void {
     this.taskStore = store;
+  }
+
+  /**
+   * Phase 104 plan 03 (SEC-05) — inject the SecretsResolver into
+   * CheckContext so the op-refresh recovery handler can call
+   * deps.invalidate(ref) before re-reading via op CLI. Mirrors the
+   * setThreadManager / setTaskStore pattern.
+   */
+  setSecretsResolver(resolver: SecretsResolver): void {
+    this.secretsResolver = resolver;
+  }
+
+  /**
+   * Phase 108 (POOL-07) — inject the BrokerStatusProvider so the
+   * `mcp-broker` heartbeat check can poll pool liveness without holding
+   * a direct reference to the broker (keeps the check decoupled from
+   * the broker module's lifecycle). Mirrors the setSecretsResolver /
+   * setThreadManager / setTaskStore setter pattern.
+   */
+  setBrokerStatusProvider(provider: BrokerStatusProvider): void {
+    this.brokerStatusProvider = provider;
+  }
+
+  /**
+   * Phase 124 Plan 04 T-02 — wire the auto-trigger closure. The context-
+   * fill check fires this (fire-and-forget) when an agent's resolved
+   * `autoCompactAt` ratio is crossed and the 5-min cooldown has elapsed.
+   * Mirrors the setSecretsResolver / setBrokerStatusProvider pattern.
+   */
+  setCompactSessionTrigger(fn: (agent: string) => Promise<void>): void {
+    this.compactSessionTrigger = fn;
+  }
+
+  /**
+   * Phase 124 Plan 04 T-02 — wire the last-compaction lookup so the
+   * context-fill check can enforce the cooldown gate without holding a
+   * direct reference to the CompactionEventLog module.
+   */
+  setGetLastCompactionAt(fn: (agent: string) => string | null): void {
+    this.getLastCompactionAt = fn;
+  }
+
+  /**
+   * Phase 125 Plan 01 — wire the active-state builder/writer closure.
+   * Mirrors setCompactSessionTrigger pattern. No-op (back-compat) when
+   * unset, so legacy boot paths and tests keep working.
+   */
+  setActiveStateProvider(
+    fn: (agent: string) => Promise<string | null>,
+  ): void {
+    this.activeStateProvider = fn;
+  }
+
+  /**
+   * Phase 125 Plan 01 — accessor for tests + future probe-text dispatch
+   * (deferred to a later phase). Returns the latest rendered active-state
+   * header for `agent`, or undefined if no provider has run for them yet.
+   */
+  getLastProbeText(agentName: string): string | undefined {
+    return this.lastProbeText.get(agentName);
   }
 
   /**
@@ -169,6 +272,24 @@ export class HeartbeatRunner {
         continue;
       }
 
+      // Phase 125 Plan 01 — build + persist the active-state header
+      // BEFORE the check loop. Errors are warn-logged but never thrown:
+      // the heartbeat tick must not block on active-state builder failure.
+      if (this.activeStateProvider) {
+        try {
+          const rendered = await this.activeStateProvider(agentName);
+          if (typeof rendered === "string" && rendered.length > 0) {
+            const wrapped = `--- ACTIVE STATE ---\n${rendered}\n--- end ---`;
+            this.lastProbeText.set(agentName, wrapped);
+          }
+        } catch (err) {
+          this.log.warn(
+            { agent: agentName, error: (err as Error).message },
+            "active-state provider failed",
+          );
+        }
+      }
+
       if (!this.latestResults.has(agentName)) {
         this.latestResults.set(agentName, new Map());
       }
@@ -193,9 +314,31 @@ export class HeartbeatRunner {
           config: this.config,
           ...(this.threadManager ? { threadManager: this.threadManager } : {}),
           ...(this.taskStore ? { taskStore: this.taskStore } : {}),
+          ...(this.secretsResolver ? { secretsResolver: this.secretsResolver } : {}),
+          ...(this.brokerStatusProvider
+            ? { brokerStatusProvider: this.brokerStatusProvider }
+            : {}),
+          // Phase 124 Plan 04 T-02 — auto-trigger wiring threaded
+          // conditionally so legacy boot paths (and tests) that do not
+          // call the new setters keep a CheckContext that exactly
+          // matches the pre-Plan-04 shape.
+          ...(this.compactSessionTrigger
+            ? { compactSessionTrigger: this.compactSessionTrigger }
+            : {}),
+          ...(this.getLastCompactionAt
+            ? { getLastCompactionAt: this.getLastCompactionAt }
+            : {}),
         };
 
-        const timeoutMs = (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;
+        // Phase 999.12 HB-01 — special-case the inbox check timeout. Cross-
+        // agent turns commonly take 30-90s; the fleet-wide checkTimeoutSeconds
+        // (default 10s) creates false-positive critical alerts on the inbox
+        // check. inboxTimeoutMs (default 60_000 from schema) overrides ONLY
+        // the inbox check; other checks keep the fleet-wide timeout.
+        const timeoutMs =
+          check.name === "inbox" && this.config.inboxTimeoutMs !== undefined
+            ? this.config.inboxTimeoutMs
+            : (check.timeout ?? this.config.checkTimeoutSeconds) * 1000;
         const result = await this.executeWithTimeout(check, context, timeoutMs);
         const timestamp = new Date().toISOString();
 

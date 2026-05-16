@@ -1,25 +1,34 @@
 /**
  * Phase 73 Plan 01 — Persistent per-agent SDK session handle.
  *
- * ONE sdk.query({ prompt: asyncIterable, options: {...} }) per agent lifetime.
- * Turns are fed via an AsyncPushQueue<SDKUserMessage>; outputs stream out of
- * the single generator. The SerialTurnQueue guarantees depth-1 semantics.
+ * ONE sdk.query({ prompt: asyncIterable, options: {...} }) per agent lifetime
+ * PER EPOCH. `handle.swap(newSessionId)` opens a new epoch by closing the
+ * current SDK query and constructing a fresh one resumed against the new
+ * session id (Phase 124 Plan 05 — live hot-swap for operator-triggered
+ * compaction). Within a single epoch the original invariants hold; the swap
+ * is gated through the SerialTurnQueue so it cannot interleave with an
+ * in-flight turn.
  *
  * Replaces wrapSdkQuery's per-turn sdk.query() pattern from session-adapter.ts.
  * See 73-RESEARCH.md Pattern 1 for the SDK contract + Pitfalls 1/2/3.
  *
- * Invariants (enforced by tests in __tests__/persistent-session-handle.test.ts):
- *   - Exactly ONE sdk.query() call per handle, regardless of turn count.
- *   - The driverIter (Query[Symbol.asyncIterator]) is captured ONCE and consumed
- *     across all turns; each per-turn `iterateUntilResult` breaks out when its
- *     `result` message arrives, leaving the next turn's messages for the next
- *     invocation.
+ * Invariants (enforced by tests in __tests__/persistent-session-handle.test.ts
+ * + __tests__/persistent-session-handle-swap.test.ts):
+ *   - Exactly ONE sdk.query() call per handle PER EPOCH, regardless of turn
+ *     count within that epoch. Swap opens a new epoch.
+ *   - The driverIter (Query[Symbol.asyncIterator]) is captured ONCE per epoch
+ *     and consumed across all turns in that epoch; each per-turn
+ *     `iterateUntilResult` breaks out when its `result` message arrives,
+ *     leaving the next turn's messages for the next invocation.
  *   - Abort mid-turn races `q.interrupt()` with a 2s deadline. First to fire
  *     ends the turn handler with an AbortError and releases the queue slot.
  *   - onError fires when the generator throws; any in-flight turn rejects with
  *     the same error; `generatorDead` flag prevents further sends.
  *   - SessionHandle public surface is byte-identical to session-adapter's
- *     SessionHandle type.
+ *     SessionHandle type (swap is an additive-optional extension).
+ *   - swap() builds the new SDK query BEFORE closing the old one. If the SDK
+ *     rejects the rebuild, the old epoch remains intact and the caller sees
+ *     swap rejection; never leaves the handle in a half-built state.
  */
 
 import type { SdkModule, SdkQuery, SdkQueryOptions, SdkStreamMessage, SdkUserMessage, SlashCommand, PermissionMode } from "./sdk-types.js";
@@ -29,12 +38,33 @@ import type {
   UsageCallback,
   PrefixHashProvider,
   SkillTrackingConfig,
+  AdvisorObserverConfig,
+  AdapterBaseOptions,
 } from "./session-adapter.js";
+// Phase 127 — stream-stall supervisor module. Single chokepoint for the
+// no-useful-tokens timeout (per feedback_silent_path_bifurcation.md): the
+// production iteration loop AND the test-only wrapSdkQuery path both
+// import this factory so the trip logic is testable in isolation.
+import {
+  createStreamStallTracker,
+  type StreamStallTracker,
+  type StreamStallPayload,
+} from "./stream-stall-tracker.js";
+// Phase 117 Plan 04 T03 — typed advisor event payloads. The observer
+// emits the two events via `advisorObserver.advisorEvents.emit(name, payload)`
+// where payload conforms to these shapes. RESEARCH §13.10 — emitter
+// ownership lives on SessionManager; payload shapes live in src/advisor/types.ts.
+import type {
+  AdvisorInvokedEvent,
+  AdvisorResultedEvent,
+} from "../advisor/types.js";
 import type { Turn, Span } from "../performance/trace-collector.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { McpServerState } from "../mcp/readiness.js";
 import type { FlapHistoryEntry } from "./filter-tools-by-capability-probe.js";
 import type { AttemptRecord } from "./recovery/types.js";
+import type { RateLimitTracker } from "../usage/rate-limit-tracker.js";
+import type { SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
 
 /**
  * Phase 94 Plan 01 — capability probe types re-anchored at this file path
@@ -85,9 +115,59 @@ const _capabilityProbeSnapshotGuard: CapabilityProbeSnapshot = {
   status: "unknown",
 } as import("../mcp/readiness.js").CapabilityProbeSnapshot;
 void _capabilityProbeSnapshotGuard;
+
+/**
+ * Phase 96 Plan 01 D-CONTEXT — filesystem capability primitives.
+ *
+ * 3-value status enum (ready|degraded|unknown) — INTENTIONALLY DIVERGES
+ * from Phase 94's 5-value MCP capability enum because filesystem capability
+ * has no reconnect/failed analog: operator-driven ACL changes don't
+ * transition through transient connect states. A path is either readable
+ * NOW (ready), declared-but-not-readable (degraded), or never probed
+ * (unknown).
+ *
+ * Adding a 4th value (such as the Phase 94 transient-state enum entries)
+ * requires explicit STATE.md decision and cascades through Plans
+ * 96-02/03/04/05/07 consumers. Pinned by static-grep in 96-01-PLAN.md.
+ *
+ * Mode enum models POSIX read/write permissions:
+ *   - "rw"     — fs.access(R_OK | W_OK) succeeded
+ *   - "ro"     — fs.access(R_OK) succeeded; W_OK either denied or not probed
+ *   - "denied" — fs.access(R_OK) failed
+ *
+ * Verbatim error pass-through (Phase 85 TOOL-04 inheritance): the `error`
+ * field carries the raw `err.message` from `fs.access` — no wrapping, no
+ * classification at probe layer. ToolCallError schema (Phase 94 D-06) does
+ * the classification at the executor edge in 96-03 / 96-04.
+ */
+export type FsCapabilityStatus =
+  | "ready"          // fs.access(R_OK) succeeded — path readable now
+  | "degraded"       // declared in fileAccess but fs.access failed
+  | "unknown";       // never probed (boot pre-warm-path)
+
+export type FsCapabilityMode = "rw" | "ro" | "denied";
+
+export interface FsCapabilitySnapshot {
+  /** D-02 3-value status enum. */
+  readonly status: FsCapabilityStatus;
+  /** POSIX read/write mode classification. */
+  readonly mode: FsCapabilityMode;
+  /** ISO8601 — when this probe last ran. */
+  readonly lastProbeAt: string;
+  /** ISO8601 — most recent ready outcome; preserved across degraded ticks. */
+  readonly lastSuccessAt?: string;
+  /** Verbatim error from fs.access — Phase 85 TOOL-04 inheritance. */
+  readonly error?: string;
+}
 import { AsyncPushQueue, SerialTurnQueue } from "./persistent-session-queue.js";
 import { extractSkillMentions } from "../usage/skill-usage-tracker.js";
 import { mapEffortToTokens } from "./effort-mapping.js";
+// FIND-123-A.next T-02 — structural spawn wrapper for the SDK's
+// `spawnClaudeCodeProcess` hook. Single import point — the closure +
+// per-handle pidSink live for the handle's lifetime so every (re-)spawn
+// inside `buildEpoch` writes the latest pid into the same sink the
+// daemon reads at shutdown via `handle.getClaudePid()`.
+import { makeDetachedSpawn, type ClaudePidSink } from "./detached-spawn.js";
 
 /** Deadline (ms) the abort path waits after calling q.interrupt() before
  *  throwing AbortError. Pitfall 3 guard — SDK may not emit `result` on abort. */
@@ -109,39 +189,115 @@ const INTERRUPT_DEADLINE_MS = 2000;
  */
 export function createPersistentSessionHandle(
   sdk: SdkModule,
-  baseOptions: SdkQueryOptions & { readonly mutableSuffix?: string },
+  baseOptions: AdapterBaseOptions,
   initialSessionId: string,
   usageCallback?: UsageCallback,
   prefixHashProvider?: PrefixHashProvider,
   skillTracking?: SkillTrackingConfig,
+  // Phase 117 Plan 04 T03/T04 — native advisor observer. Threaded
+  // through from SessionManager.makeAdvisorObserver(agent); when
+  // absent (test paths, fork-backend agents, missing budget) the
+  // observer is a no-op. RESEARCH §13.10 (production wiring).
+  advisorObserver?: AdvisorObserverConfig,
 ): SessionHandle {
-  const inputQueue = new AsyncPushQueue<SdkUserMessage>();
   const turnQueue = new SerialTurnQueue();
+
+  // Phase 124 follow-up — turn-start timestamp slot.
+  //
+  // Set at the TOP of the inner callback passed to `turnQueue.run` inside
+  // `send` / `sendAndCollect` / `sendAndStream` (after the queue actually
+  // dispatches the turn — not before, which would count queue-wait time).
+  // Cleared in `finally` so a turn that rejects (AbortError, generator-dead,
+  // etc.) still releases the slot. Read by `compact-session` IPC to enforce
+  // the ERR_TURN_TOO_LONG safety budget (CONTEXT D-03 step 2).
+  //
+  // Deliberately NOT instrumented inside `swap()` — swap also routes through
+  // turnQueue.run but it is not a user turn; instrumenting it would skew the
+  // budget and cause a no-op compaction swap to register as an active turn.
+  let turnStartedAt: number | null = null;
 
   // Strip adapter-only fields; enable streaming input mode via AsyncIterable
   // prompt + includePartialMessages for token-level streaming.
-  const { mutableSuffix, ...sdkOptions } = baseOptions;
-  const q: SdkQuery = sdk.query({
-    // AsyncPushQueue<SdkUserMessage> is an AsyncIterable<SdkUserMessage>.
-    // The real SDK type is AsyncIterable<SDKUserMessage> with a richer shape;
-    // SdkUserMessage is our narrower local projection — the SDK accepts any
-    // iterable of user messages, and the extra fields we push (message,
-    // parent_tool_use_id) are ignored by the SdkUserMessage cast.
-    prompt: inputQueue as unknown as AsyncIterable<SdkUserMessage>,
-    options: {
-      ...sdkOptions,
-      resume: initialSessionId,
-      // Token-level streaming — adapter's stream_event branch consumes these.
-      // Cast: local SdkQueryOptions is narrower than the real SDK Options
-      // (missing includePartialMessages); see sdk-types.ts deferred-items.
-      includePartialMessages: true,
-    } as SdkQueryOptions,
-  });
+  // Phase 127 — also strip the stream-stall supervisor knobs
+  // (`streamStallTimeoutMs` + `onStreamStall`). They are consumed by the
+  // iteration loop below via closure, never by `sdk.query`.
+  const {
+    mutableSuffix,
+    streamStallTimeoutMs: streamStallTimeoutMsOption,
+    onStreamStall: onStreamStallOption,
+    ...sdkOptions
+  } = baseOptions;
+  // Phase 127 — default threshold matches the loader cascade fallback.
+  // When the adapter omitted the field (legacy call site, test path that
+  // didn't thread it through), we still construct the tracker so the
+  // protection is on by default. Operators can disable by setting a
+  // huge value in clawcode.yaml (the schema enforces max 1_800_000ms).
+  const streamStallTimeoutMs = streamStallTimeoutMsOption ?? 180_000;
 
-  // Capture ONE iterator for the whole handle lifetime (Pattern 1 invariant).
-  const driverIter = (q as unknown as AsyncIterable<SdkStreamMessage>)[Symbol.asyncIterator]();
+  // FIND-123-A.next T-02 — per-handle mutable PID sink. Populated by
+  // `makeDetachedSpawn` on every (re-)spawn the SDK performs for this
+  // handle; read by the daemon's shutdown path via `getClaudePid()` to
+  // group-kill the claude process tree BEFORE `manager.stopAll()` so MCP
+  // grandchildren can't reparent to PID 1 while the SDK's normal close
+  // runs. Cleared in `close()` so a terminal shutdown never group-kills
+  // a recycled PID. Sink mutates on every spawn (locked sink semantics);
+  // the swap path's `buildEpoch` call rolls the value forward.
+  const pidSink: ClaudePidSink = { pid: null };
+  const detachedSpawn = makeDetachedSpawn(pidSink);
+
+  /**
+   * Phase 124 Plan 05 — epoch builder. Each call constructs a fresh SDK query
+   * + matching AsyncPushQueue + driverIter for the supplied session id. The
+   * stripped `sdkOptions` are reused so the swap path inherits the agent's
+   * boot-time wiring (model, cwd, systemPrompt, MCP servers, etc.) and only
+   * the resume target rolls forward.
+   *
+   * FIND-123-A.next T-02 — `spawnClaudeCodeProcess` flows through every
+   * epoch (initial + every swap). The same `detachedSpawn` closure +
+   * `pidSink` are reused so a swap on claude crash + daemon respawn
+   * updates the sink to the new PID atomically.
+   */
+  function buildEpoch(resumeSessionId: string): {
+    readonly q: SdkQuery;
+    readonly inputQueue: AsyncPushQueue<SdkUserMessage>;
+    readonly driverIter: AsyncIterator<SdkStreamMessage>;
+  } {
+    const ipq = new AsyncPushQueue<SdkUserMessage>();
+    const nextQ: SdkQuery = sdk.query({
+      // AsyncPushQueue<SdkUserMessage> is an AsyncIterable<SdkUserMessage>.
+      // The real SDK type is AsyncIterable<SDKUserMessage> with a richer shape;
+      // SdkUserMessage is our narrower local projection — the SDK accepts any
+      // iterable of user messages, and the extra fields we push (message,
+      // parent_tool_use_id) are ignored by the SdkUserMessage cast.
+      prompt: ipq as unknown as AsyncIterable<SdkUserMessage>,
+      options: {
+        ...sdkOptions,
+        resume: resumeSessionId,
+        // Token-level streaming — adapter's stream_event branch consumes these.
+        // Cast: local SdkQueryOptions is narrower than the real SDK Options
+        // (missing includePartialMessages); see sdk-types.ts deferred-items.
+        includePartialMessages: true,
+        // FIND-123-A.next T-02 — structural spawn override; see import
+        // banner above for the lifecycle invariants.
+        spawnClaudeCodeProcess: detachedSpawn,
+      } as SdkQueryOptions,
+    });
+    const iter = (nextQ as unknown as AsyncIterable<SdkStreamMessage>)[Symbol.asyncIterator]();
+    return { q: nextQ, inputQueue: ipq, driverIter: iter };
+  }
+
+  // Epoch-0 binding. Mutated by handle.swap (Phase 124 Plan 05) — every
+  // closure that reads q / inputQueue / driverIter must do so via these
+  // bindings, NEVER via a captured local copy, so the swap takes effect on
+  // the very next dispatch.
+  let { q, inputQueue, driverIter } = buildEpoch(initialSessionId);
 
   let sessionId = initialSessionId;
+  // Phase 124 Plan 05 — monotonic epoch counter. Incremented on every
+  // successful swap; exposed via handle.getEpoch() for test assertions and
+  // for downstream consumers that need to observe an epoch boundary (e.g.
+  // skill caches or prefix-hash provider invalidation).
+  let epoch = 0;
   // Phase 83 EFFORT-04 — widened from v2.1 set ("low"|"medium"|"high"|"max")
   // to the full v2.2 EffortLevel union (adds "xhigh", "auto", "off").
   let currentEffort: EffortLevel =
@@ -197,6 +353,27 @@ export function createPersistentSessionHandle(
   // at the moment of first query (e.g. early in the warm-path).
   let supportedCommandsCache: readonly SlashCommand[] | null = null;
 
+  // Phase 96 Plan 01 D-CONTEXT — per-handle filesystem capability snapshot
+  // mirror. Lazy-init: undefined until the first runFsProbe outcome is
+  // populated by SessionManager (boot probe + heartbeat tick + on-demand).
+  // Accessor returns an empty Map when null so callers can read
+  // unconditionally without a reachable null path. Mirrors the Phase 85
+  // getMcpState/setMcpState pair exactly — 6th application of the post-
+  // construction DI mirror pattern (after McpState, FlapHistory,
+  // RecoveryAttemptHistory, SupportedCommands, and ModelMirror).
+  let _fsCapabilitySnapshot: ReadonlyMap<string, FsCapabilitySnapshot> | undefined;
+
+  // Phase 103 OBS-04 / OBS-05 — per-handle RateLimitTracker mirror. Lazy-init:
+  // undefined until SessionManager calls setRateLimitTracker after handle
+  // construction. The iterateUntilResult dispatch branch reads via closure
+  // (`_rateLimitTracker` resolved at branch-eval time) so a late injection is
+  // picked up on the very next message. 7th application of the post-
+  // construction DI mirror pattern (after McpState, FlapHistory,
+  // RecoveryAttemptHistory, SupportedCommands, ModelMirror, FsCapability).
+  // Pitfall 8: messages arriving in the handle-construction → injection race
+  // window are silently dropped — best-effort capture is acceptable.
+  let _rateLimitTracker: RateLimitTracker | undefined;
+
   function notifyError(err: Error): void {
     generatorDead = true;
     generatorError = err;
@@ -234,8 +411,50 @@ export function createPersistentSessionHandle(
 
   /** Safely invoke the UsageCallback with a result message. */
   function extractUsage(msg: SdkStreamMessage): void {
-    if (!usageCallback) return;
     if (msg.type !== "result") return;
+
+    // Phase 117 Plan 04 T04 — ground-truth advisor iteration count
+    // (RESEARCH §2.1 parse-site B + §13.6 message_delta).
+    //
+    // The terminal SDKResultMessage's `usage.iterations[]` is the
+    // authoritative count of every advisor sub-inference that fired
+    // during the turn (filtered on `type === "advisor_message"`).
+    // Each entry consumes one daily-budget slot. The per-block scan
+    // at iterateUntilResult :579 (T03) is the EARLY signal for
+    // Discord visibility; only this terminal path charges the budget
+    // (RESEARCH §6 Pitfall 4 — no double-record).
+    //
+    // Observational ONLY: any failure (missing iterations, malformed
+    // entry, AdvisorBudget DB write error) is silently swallowed so
+    // the message path is never broken (matches the existing
+    // usageCallback try/catch immediately below).
+    if (advisorObserver) {
+      try {
+        const iterations = (msg as { usage?: { iterations?: unknown[] | null } })
+          .usage?.iterations;
+        if (Array.isArray(iterations)) {
+          for (const entry of iterations) {
+            if (
+              entry !== null &&
+              typeof entry === "object" &&
+              (entry as { type?: unknown }).type === "advisor_message"
+            ) {
+              try {
+                advisorObserver.advisorBudget.recordCall(
+                  advisorObserver.agentName,
+                );
+              } catch {
+                // DB write failed — keep iterating, never break message path
+              }
+            }
+          }
+        }
+      } catch {
+        // observational only — never break the message path
+      }
+    }
+
+    if (!usageCallback) return;
     try {
       const result = msg as {
         total_cost_usd?: number;
@@ -283,10 +502,131 @@ export function createPersistentSessionHandle(
     const blockTextParts: string[] = [];
     let streamedText = "";
     let interruptCalled = false;
+    // Phase 127 — per-turn stream-stall tracker. Constructed at iteration
+    // entry so the threshold + onStall handler are captured fresh each
+    // turn (a yaml hot-reload between turns picks up the new threshold via
+    // the closure-captured baseOptions reference — the tracker re-reads
+    // `streamStallTimeoutMs` from the outer closure at construction time;
+    // mid-turn yaml edits land on the NEXT turn's tracker).
+    //
+    // On trip:
+    //   1. Emit structured `phase127-stream-stall` log line (operator
+    //      grep target: `journalctl -u clawcode | grep phase127-stream-stall`).
+    //   2. Invoke `fireInterruptOnce()` which calls `q.interrupt()` + arms
+    //      the abort-deadline race. The existing INTERRUPT_DEADLINE_MS
+    //      guarantee (2s) ensures the in-flight turn terminates within
+    //      bounded time even if `q.interrupt()` hangs.
+    //   3. Forward payload to `onStreamStallOption` if the operator wired
+    //      one (Plan 02 attaches Discord notification + session-log row).
+    //
+    // The tracker is created BEFORE the for-await loop so a stall
+    // detected before the first message lands still trips. Cleanup
+    // happens in BOTH success (`return`) AND catch paths via
+    // `streamStallTracker.stop()` calls below — T-127-04 mitigation
+    // prevents leaked setIntervals on abort.
+    let streamStallTracker: StreamStallTracker | null = null;
+    try {
+      streamStallTracker = createStreamStallTracker({
+        thresholdMs: streamStallTimeoutMs,
+        onStall: (payload: StreamStallPayload) => {
+          // Single structured log line — operator-visible without
+          // requiring Discord wiring (Plan 02). Mirrors Phase 115
+          // quickwin + Phase 999.54 precedent.
+          try {
+            console.info(
+              "phase127-stream-stall",
+              JSON.stringify({
+                lastUsefulTokenAgeMs: payload.lastUsefulTokenAgeMs,
+                thresholdMs: payload.thresholdMs,
+                sessionId,
+              }),
+            );
+          } catch {
+            // Observational path — never break the trip behavior.
+          }
+          // Hand to the optional operator-injected callback. Plan 02
+          // wires Discord notification + session-log row here.
+          try {
+            onStreamStallOption?.(payload);
+          } catch {
+            // Operator callback failures must not prevent the abort.
+          }
+          // Abort the in-flight turn via the existing interrupt path —
+          // re-uses the 2s deadline race so a misbehaving SDK can't
+          // hang the turn even on trip.
+          fireInterruptOnce();
+        },
+      });
+    } catch (err) {
+      // Tracker construction can throw only for invalid threshold
+      // (defensive guard). Log and continue without the tracker rather
+      // than crashing the turn — protective behavior is missing but
+      // observability is preserved.
+      try {
+        console.error(
+          "phase127-tracker-construction-failed",
+          err instanceof Error ? err.message : String(err),
+        );
+      } catch {
+        // Observational path — never break.
+      }
+    }
+    const stopStreamStallTracker = (): void => {
+      try {
+        streamStallTracker?.stop();
+      } catch {
+        // Idempotent stop, but guard against pathological clearInterval errors.
+      }
+      streamStallTracker = null;
+    };
+    /**
+     * Phase 115 Plan 08 T01 — per-batch roundtrip timer for sub-scope 17(a).
+     * Ported from session-adapter.ts:iterateWithTracing (the test-only path).
+     * Opens on the first tool_use of a parent assistant message, closes when
+     * the NEXT parent assistant arrives — wall-clock interval covering SDK
+     * dispatch + tool runtime + result delivery + LLM resume.
+     *
+     * Per-batch (not per-tool) so parallel batches collapse to one interval.
+     * Multi-batch turns accumulate via Turn.addToolRoundtripMs sums.
+     */
+    let batchOpenedAtMs: number | null = null;
 
     const closeAllSpans = (): void => {
-      for (const entry of activeTools.values()) entry.span.end();
+      for (const entry of activeTools.values()) {
+        entry.span.end();
+        // Phase 115 Plan 08 T01 — final-batch execution-side fallback. If
+        // the SDK terminated mid-tool (error / abort / timeout) the
+        // user-message tool_result branch never fired, so addToolExecutionMs
+        // would be skipped for these spans. Compute a best-effort duration
+        // from openedAtMs at termination so the column doesn't undercount
+        // pathological turns. Wrapped in try/catch — observability MUST
+        // NEVER break the message path (Phase 50 invariant).
+        try {
+          const executionMs = Date.now() - entry.openedAtMs;
+          (turn as { addToolExecutionMs?: (ms: number) => void })
+            .addToolExecutionMs?.(executionMs);
+        } catch {
+          // Observational only — never break.
+        }
+      }
       activeTools.clear();
+      // Phase 115 Plan 08 T01 — final-batch roundtrip fallback. If the run
+      // terminated before the LLM emitted a "next parent assistant" message
+      // (terminal error, normal completion, or final result-only path), the
+      // currently-open batch timer would otherwise be lost. Close it here
+      // so the column reflects every batch the run observed. Reset to null
+      // so a second invocation (success finally + catch path) cannot
+      // double-count.
+      try {
+        if (batchOpenedAtMs !== null && turn) {
+          const roundtripMs = Date.now() - batchOpenedAtMs;
+          (turn as { addToolRoundtripMs?: (ms: number) => void })
+            .addToolRoundtripMs?.(roundtripMs);
+          batchOpenedAtMs = null;
+        }
+      } catch {
+        // Observational only — never break.
+      }
       if (!firstTokenEnded) {
         firstToken?.end();
         firstTokenEnded = true;
@@ -425,8 +765,74 @@ export function createPersistentSessionHandle(
               ).length;
               const isParallelBatch = toolUseCount > 1;
 
+              // Phase 115 Plan 08 T01 — sub-scope 17(a/b) split-latency.
+              // Ported from session-adapter.ts:iterateWithTracing (test-only
+              // path) into the production iterateUntilResult so traces.db
+              // columns `tool_execution_ms`, `tool_roundtrip_ms`, and
+              // `parallel_tool_call_count` actually populate.
+              //
+              // (1) Close the prior batch's roundtrip timer FIRST. This
+              //     parent assistant message represents the LLM resuming
+              //     after the previous batch's tool_results — exactly the
+              //     wall-clock interval we want to record. Try/catch so an
+              //     observability failure cannot break the dispatch path
+              //     (Phase 50 invariant).
+              try {
+                if (batchOpenedAtMs !== null && turn) {
+                  const roundtripMs = Date.now() - batchOpenedAtMs;
+                  (turn as { addToolRoundtripMs?: (ms: number) => void })
+                    .addToolRoundtripMs?.(roundtripMs);
+                  batchOpenedAtMs = null;
+                }
+              } catch {
+                // Observational only — never break the message path.
+              }
+              // (2) Record the parallel batch size for sub-scope 17(b).
+              //     Only fire when this message HAS tool_use blocks;
+              //     pure-text parent assistant messages don't contribute to
+              //     the MAX.
+              try {
+                if (toolUseCount > 0 && turn) {
+                  (turn as { recordParallelToolCallCount?: (n: number) => void })
+                    .recordParallelToolCallCount?.(toolUseCount);
+                  // (3) Open the next batch's roundtrip timer at the moment
+                  //     this message was observed — closest available proxy
+                  //     for "LLM finished generating tool_use". Will be
+                  //     closed when the NEXT parent assistant arrives.
+                  batchOpenedAtMs = Date.now();
+                }
+              } catch {
+                // Observational only — never break the message path.
+              }
+
+              // Phase 117 Plan 04 T03 — pending advisor tool_use id, scoped
+              // to THIS assistant message's content[]. Per RESEARCH §13.3,
+              // `server_tool_use{name:"advisor"}` and the matching
+              // `advisor_tool_result` block arrive in the SAME assistant
+              // message's content array (typically with text blocks around
+              // them); the id correlator must outlive a single loop
+              // iteration but reset between assistant messages. The advisor
+              // server tool is single-call-per-turn under the SDK's default
+              // max_uses (RESEARCH §13.5) — message-scope is sufficient.
+              let pendingAdvisorToolUseId: string | null = null;
+              // Capture the assistant message's uuid for turnId correlation
+              // (RESEARCH §13.10 — AdvisorInvokedEvent.turnId carries the
+              // SDK message id so listeners can match :invoked → :resulted
+              // pairs even across interleaved per-agent streams).
+              const messageUuid =
+                typeof (msg as { uuid?: unknown }).uuid === "string"
+                  ? (msg as { uuid: string }).uuid
+                  : sessionId;
+
               for (const raw of contentBlocks) {
-                const block = raw as { type?: string; name?: string; id?: string; text?: string };
+                const block = raw as {
+                  type?: string;
+                  name?: string;
+                  id?: string;
+                  text?: string;
+                  tool_use_id?: string;
+                  content?: unknown;
+                };
                 if (block.type === "text" && !firstTokenEnded) {
                   firstToken?.end();
                   firstTokenEnded = true;
@@ -452,6 +858,96 @@ export function createPersistentSessionHandle(
                     });
                   }
                 }
+                // Phase 117 Plan 04 T03 — native advisor observation
+                // (corrected per RESEARCH §13.1 + §13.3 + §13.4).
+                //
+                // Two block shapes to observe inside the SAME content[]:
+                //
+                //   1. `server_tool_use{name:"advisor"}` — the executor
+                //      signals "consult advisor now." Per §13.1 the
+                //      `input` is ALWAYS empty `{}`; the advisor builds
+                //      its view from the full transcript server-side, so
+                //      we deliberately do NOT extract a `question`.
+                //      Emit `advisor:invoked` carrying the toolUseId for
+                //      pair correlation.
+                //
+                //   2. `advisor_tool_result` — the advisor's answer (or
+                //      redaction / error). Per §13.4 the `content` field
+                //      is a discriminated union of three variants. Emit
+                //      `advisor:resulted` with the discriminant in `kind`
+                //      and the variant-specific payload in `text` or
+                //      `errorCode`.
+                //
+                // Wrapped in try/catch — observational only; RESEARCH §6
+                // Pitfall 1 + Pitfall 7 invariant: a listener throw MUST
+                // NOT break the message path.
+                if (
+                  advisorObserver &&
+                  block.type === "server_tool_use" &&
+                  block.name === "advisor" &&
+                  typeof block.id === "string"
+                ) {
+                  pendingAdvisorToolUseId = block.id;
+                  try {
+                    const payload: AdvisorInvokedEvent = {
+                      agent: advisorObserver.agentName,
+                      turnId: messageUuid,
+                      toolUseId: block.id,
+                    };
+                    advisorObserver.advisorEvents.emit(
+                      "advisor:invoked",
+                      payload,
+                    );
+                  } catch {
+                    // observational only — never break the message path
+                  }
+                }
+                if (
+                  advisorObserver &&
+                  block.type === "advisor_tool_result" &&
+                  typeof block.tool_use_id === "string" &&
+                  block.tool_use_id === pendingAdvisorToolUseId
+                ) {
+                  try {
+                    const content = block.content as
+                      | { type: "advisor_result"; text: string }
+                      | { type: "advisor_redacted_result"; encrypted_content: string }
+                      | { type: "advisor_tool_result_error"; error_code: string }
+                      | null
+                      | undefined;
+                    const kind =
+                      content && typeof content === "object" && "type" in content
+                        ? content.type
+                        : undefined;
+                    if (
+                      kind === "advisor_result" ||
+                      kind === "advisor_redacted_result" ||
+                      kind === "advisor_tool_result_error"
+                    ) {
+                      const payload: AdvisorResultedEvent = {
+                        agent: advisorObserver.agentName,
+                        turnId: messageUuid,
+                        toolUseId: pendingAdvisorToolUseId,
+                        kind,
+                        text:
+                          kind === "advisor_result"
+                            ? (content as { text: string }).text
+                            : undefined,
+                        errorCode:
+                          kind === "advisor_tool_result_error"
+                            ? (content as { error_code: string }).error_code
+                            : undefined,
+                      };
+                      advisorObserver.advisorEvents.emit(
+                        "advisor:resulted",
+                        payload,
+                      );
+                    }
+                  } catch {
+                    // observational only — never break the message path
+                  }
+                  pendingAdvisorToolUseId = null;
+                }
               }
             }
             if (typeof (msg as { content?: string }).content === "string" && (msg as { content: string }).content.length > 0) {
@@ -460,23 +956,58 @@ export function createPersistentSessionHandle(
           }
 
           // -- token-level streaming via SDKPartialAssistantMessage --
-          if ((msg as { type?: string }).type === "stream_event" && onChunk !== null) {
+          // Phase 127 — useful-token tracker reset. The SAME predicate that
+          // drives `streamedText` (text_delta) AND a broader predicate
+          // covering tool-use streams (input_json_delta.partial_json) both
+          // mark the tracker so the stall countdown restarts on any visible
+          // forward progress (D-02 anti-pattern definition).
+          if ((msg as { type?: string }).type === "stream_event") {
             const parentToolUseId =
               (msg as { parent_tool_use_id?: string | null }).parent_tool_use_id ?? null;
             if (parentToolUseId === null) {
-              const event = (msg as { event?: { type?: string; delta?: { type?: string; text?: string } } }).event;
-              if (
-                event?.type === "content_block_delta" &&
-                event.delta?.type === "text_delta" &&
-                typeof event.delta.text === "string" &&
-                event.delta.text.length > 0
-              ) {
-                if (!firstTokenEnded) {
-                  firstToken?.end();
-                  firstTokenEnded = true;
+              // Local cast: pick up both delta shapes (text_delta + input_json_delta).
+              // The SDK's real union is wider; we only inspect the two fields the
+              // useful-token predicate cares about.
+              const event = (msg as {
+                event?: {
+                  type?: string;
+                  delta?: {
+                    type?: string;
+                    text?: string;
+                    partial_json?: string;
+                  };
+                };
+              }).event;
+              if (event?.type === "content_block_delta") {
+                const isTextDelta =
+                  event.delta?.type === "text_delta" &&
+                  typeof event.delta.text === "string" &&
+                  event.delta.text.length > 0;
+                const isPartialJson =
+                  event.delta?.type === "input_json_delta" &&
+                  typeof event.delta.partial_json === "string" &&
+                  event.delta.partial_json.length > 0;
+
+                // Phase 127 — mark the tracker on EITHER useful-token type.
+                // This is the production single-chokepoint per
+                // feedback_silent_path_bifurcation.md — the synthetic-stream
+                // tests in __tests__/session-adapter-stream-stall.test.ts
+                // exercise the SAME predicate via the tracker module.
+                if (isTextDelta || isPartialJson) {
+                  streamStallTracker?.markUsefulToken();
                 }
-                streamedText += event.delta.text;
-                onChunk(streamedText);
+
+                // Existing editor pipeline — only text_delta lands in
+                // streamedText; tool-use partial_json never reached the
+                // editor stream pre-127 either.
+                if (onChunk !== null && isTextDelta && event.delta) {
+                  if (!firstTokenEnded) {
+                    firstToken?.end();
+                    firstTokenEnded = true;
+                  }
+                  streamedText += event.delta.text ?? "";
+                  onChunk(streamedText);
+                }
               }
             }
           }
@@ -501,8 +1032,46 @@ export function createPersistentSessionHandle(
                   // observational — never break message path
                 }
                 entry.span.end();
+                // Phase 115 Plan 08 T01 — sub-scope 17(a) execution-side
+                // latency aggregation. The span's duration is exactly the
+                // pure-execution interval (tool_use_emitted →
+                // tool_result_arrived); sum across every tool call in the
+                // turn. Wrapped in try/catch so observability never breaks
+                // the message path (Phase 50 invariant). Ported from
+                // session-adapter.ts:iterateWithTracing (test-only path) so
+                // the production caller chain actually populates
+                // `tool_execution_ms` in traces.db.
+                try {
+                  const executionMs = Date.now() - entry.openedAtMs;
+                  (turn as { addToolExecutionMs?: (ms: number) => void })
+                    .addToolExecutionMs?.(executionMs);
+                } catch {
+                  // Observational only — never break the message path.
+                }
                 activeTools.delete(toolUseId);
               }
+            }
+          }
+
+          // -- rate_limit_event: forward to per-handle tracker (Phase 103 OBS-05) --
+          // Observational like extractUsage — never breaks the message flow.
+          // SDK fires rate_limit_event inline on the same async iterator as
+          // assistant/result/stream_event/user; per Research Pattern 1 the only
+          // correct hook point is here in the per-agent loop. Branch is
+          // positioned BEFORE the `result` branch so result still terminates
+          // the turn (the two are mutually exclusive on `msg.type`, but the
+          // ordering documents intent and keeps the result-terminator path
+          // unchanged). Pitfall 8: tracker may be undefined during the race
+          // window between handle construction and SessionManager's
+          // `setRateLimitTracker` call — silently drop in that case.
+          if ((msg as { type?: string }).type === "rate_limit_event") {
+            try {
+              const event = msg as unknown as { rate_limit_info?: SDKRateLimitInfo };
+              if (event.rate_limit_info) {
+                _rateLimitTracker?.record(event.rate_limit_info);
+              }
+            } catch {
+              // observational — never break message flow (matches extractUsage)
             }
           }
 
@@ -582,6 +1151,9 @@ export function createPersistentSessionHandle(
             }
 
             closeAllSpans();
+            // Phase 127 — stop tracker on success exit. Idempotent;
+            // safe to pair with the catch-path stop below (T-127-04).
+            stopStreamStallTracker();
 
             if (typeof resMsg.result === "string" && resMsg.result.length > 0) {
               return resMsg.result;
@@ -597,9 +1169,17 @@ export function createPersistentSessionHandle(
         // Quick task 260419-nic — clear handle-level interrupt slot on every
         // exit path (success and error). Post-turn handle.interrupt() is a no-op.
         currentInterruptFn = null;
+        // Phase 127 — defense-in-depth: also stop the tracker on any
+        // finally exit so a code path that returns without hitting the
+        // success branch above (e.g. break-out paths added in future
+        // patches) still cleans up the interval (T-127-04).
+        stopStreamStallTracker();
       }
     } catch (err) {
       closeAllSpans();
+      // Phase 127 — stop the tracker on catch path. Defense-in-depth
+      // against AbortError + generator-dead exits (T-127-04 mitigation).
+      stopStreamStallTracker();
       // Quick task 260419-nic — also clear on error path (defense in depth;
       // the try/finally above already clears, but pair this with closeAllSpans).
       currentInterruptFn = null;
@@ -630,8 +1210,13 @@ export function createPersistentSessionHandle(
         throw generatorError ?? new Error(`Session ${sessionId} closed: generator-dead`);
       }
       await turnQueue.run(async () => {
-        inputQueue.push(buildUserMessage(promptWithMutable(message)));
-        await iterateUntilResult(null, turn, options?.signal);
+        turnStartedAt = Date.now();
+        try {
+          inputQueue.push(buildUserMessage(promptWithMutable(message)));
+          await iterateUntilResult(null, turn, options?.signal);
+        } finally {
+          turnStartedAt = null;
+        }
       });
     },
 
@@ -641,8 +1226,13 @@ export function createPersistentSessionHandle(
         throw generatorError ?? new Error(`Session ${sessionId} closed: generator-dead`);
       }
       return turnQueue.run(async () => {
-        inputQueue.push(buildUserMessage(promptWithMutable(message)));
-        return iterateUntilResult(null, turn, options?.signal);
+        turnStartedAt = Date.now();
+        try {
+          inputQueue.push(buildUserMessage(promptWithMutable(message)));
+          return await iterateUntilResult(null, turn, options?.signal);
+        } finally {
+          turnStartedAt = null;
+        }
       });
     },
 
@@ -657,8 +1247,13 @@ export function createPersistentSessionHandle(
         throw generatorError ?? new Error(`Session ${sessionId} closed: generator-dead`);
       }
       return turnQueue.run(async () => {
-        inputQueue.push(buildUserMessage(promptWithMutable(message)));
-        return iterateUntilResult(onChunk, turn, options?.signal);
+        turnStartedAt = Date.now();
+        try {
+          inputQueue.push(buildUserMessage(promptWithMutable(message)));
+          return await iterateUntilResult(onChunk, turn, options?.signal);
+        } finally {
+          turnStartedAt = null;
+        }
       });
     },
 
@@ -668,6 +1263,10 @@ export function createPersistentSessionHandle(
       // Quick task 260419-nic — clear handle-level interrupt slot so any
       // post-close handle.interrupt() call is a hard no-op.
       currentInterruptFn = null;
+      // FIND-123-A.next T-02 — clear the pid sink at terminal close so a
+      // subsequent daemon shutdown sweep does not group-kill a PID that
+      // has already been recycled by the kernel. Locked sink semantics.
+      pidSink.pid = null;
       inputQueue.end();
       try {
         q.close();
@@ -782,6 +1381,158 @@ export function createPersistentSessionHandle(
     },
 
     /**
+     * Phase 124 follow-up — turn-start timestamp accessor.
+     *
+     * Returns the ms-epoch time the in-flight turn began (set at the top of
+     * the inner turnQueue.run callback inside send / sendAndCollect /
+     * sendAndStream). Null when no turn is in-flight, between turns, after
+     * a resolved or rejected turn, and after close(). Read by the
+     * `compact-session` IPC handler to enforce the ERR_TURN_TOO_LONG safety
+     * budget (CONTEXT D-03 step 2).
+     *
+     * Single source of truth — the daemon mirrors this via SessionManager's
+     * `getTurnStartedAt(name)` rather than maintaining a parallel map.
+     */
+    getTurnStartedAt(): number | null {
+      if (closed) return null;
+      return turnStartedAt;
+    },
+
+    /**
+     * Phase 124 Plan 05 — live hot-swap to a forked SDK session.
+     *
+     * Closes the current SDK Query and constructs a fresh one resumed
+     * against `newSessionId`. The handle identity is preserved; downstream
+     * consumers (daemon `sessions` Map, Discord bridge, etc.) keep their
+     * existing reference. The swap is serialized through the SerialTurnQueue
+     * so it cannot interleave with an in-flight `send` — when a turn is
+     * mid-flight, the swap enqueues and runs after the turn resolves.
+     *
+     * Fallback safety: the new SDK query is constructed BEFORE the old one
+     * is closed. If `sdk.query` throws on the rebuild path, the old epoch
+     * remains intact and the rejection propagates to the caller — the
+     * compaction handler then surfaces `swapped_live: false` and the
+     * operator-manual `clawcode restart` path stays available.
+     *
+     * No-op when the handle is closed or when `newSessionId` equals the
+     * current sessionId (re-swap to the same id is wasted work).
+     *
+     * Resets `supportedCommandsCache` so the next caller re-pulls
+     * `q.initializationResult()` from the new SDK query. Re-applies
+     * `currentModel` / `currentEffort` / `currentPermissionMode` on the
+     * new q so the operator-visible state survives the epoch boundary.
+     */
+    async swap(newSessionId: string): Promise<void> {
+      if (closed) {
+        throw new Error(`Session ${sessionId} is closed; cannot swap`);
+      }
+      if (newSessionId === sessionId) {
+        // Idempotent no-op — same epoch.
+        return;
+      }
+      // Serialize behind any in-flight turn. SerialTurnQueue is depth-1, so
+      // a 2nd concurrent swap rejects with QUEUE_FULL — same shape as the
+      // 3rd-concurrent-send case. Caller (daemon-compact-session-ipc) catches
+      // and reports swapped_live:false on rejection.
+      await turnQueue.run(async () => {
+        // Build the new epoch FIRST (commit-point safety). If sdk.query
+        // throws, the old q/inputQueue/driverIter are untouched and the
+        // caller sees the rejection; no half-built state.
+        const next = buildEpoch(newSessionId);
+
+        // Past the commit point — tear down the old epoch.
+        try {
+          inputQueue.end();
+        } catch {
+          // Best-effort — old queue may already be ended.
+        }
+        try {
+          q.close();
+        } catch {
+          // Best-effort — old SDK query may already be closing.
+        }
+
+        // Swap closure bindings — every closure that reads via `q`,
+        // `driverIter`, `inputQueue` resolves the binding at call time, so
+        // the next `send` dispatches into the new SDK query.
+        q = next.q;
+        inputQueue = next.inputQueue;
+        driverIter = next.driverIter;
+        sessionId = newSessionId;
+        epoch += 1;
+
+        // New SDK query — clear generator-dead flag (it tracks the OLD
+        // generator's lifecycle, and the swap discarded that generator
+        // intentionally) and invalidate the cached supported-commands.
+        generatorDead = false;
+        generatorError = null;
+        supportedCommandsCache = null;
+
+        // Re-apply per-handle runtime mutations on the new q so the
+        // operator-visible state survives the epoch boundary. Each setter
+        // is fire-and-forget on the SDK side (sdk.d.ts:1704/1711/1728 are
+        // async but the handle's existing setters never await); we mirror
+        // that contract here so swap stays fast.
+        try {
+          const budget = mapEffortToTokens(currentEffort);
+          void q.setMaxThinkingTokens(budget).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[swap] setMaxThinkingTokens(${String(budget)}) failed: ${msg}`);
+          });
+        } catch {
+          // Never let reapply failure poison the swap.
+        }
+        if (currentModel !== undefined) {
+          try {
+            void q.setModel(currentModel).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.warn(`[swap] setModel(${currentModel}) failed: ${msg}`);
+            });
+          } catch {
+            // Never let reapply failure poison the swap.
+          }
+        }
+        try {
+          void q.setPermissionMode(currentPermissionMode).catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[swap] setPermissionMode(${currentPermissionMode}) failed: ${msg}`);
+          });
+        } catch {
+          // Never let reapply failure poison the swap.
+        }
+      });
+    },
+
+    /**
+     * Phase 124 Plan 05 — observable epoch counter. Starts at 0; incremented
+     * once per successful `swap`. Tests assert the boundary; downstream
+     * consumers (prefix-hash provider, etc.) can detect a fresh SDK query
+     * by tracking this value across calls.
+     */
+    getEpoch(): number {
+      return epoch;
+    },
+
+    /**
+     * FIND-123-A.next T-02 — read the live claude subprocess PID captured
+     * by the structural spawn wrapper at the most recent (re-)spawn.
+     *
+     * Returns null when:
+     *   - the SDK has not yet spawned (race window between handle
+     *     construction and the first `query()`-driven spawn)
+     *   - the handle has been closed (terminal-shutdown sink-clear)
+     *   - the SDK respawn path failed before producing a child PID
+     *
+     * Read by the daemon's shutdown sequence to `process.kill(-pid,
+     * SIGTERM)` the claude process group BEFORE `manager.stopAll()`,
+     * which closes the SDK normally and otherwise lets MCP grandchildren
+     * reparent to PID 1.
+     */
+    getClaudePid(): number | null {
+      return pidSink.pid;
+    },
+
+    /**
      * Phase 85 Plan 01 TOOL-01 — read the per-handle MCP state mirror.
      *
      * Always returns the latest map set via `setMcpState`. Returns the
@@ -800,6 +1551,61 @@ export function createPersistentSessionHandle(
      */
     setMcpState(state: ReadonlyMap<string, McpServerState>): void {
       currentMcpState = new Map(state);
+    },
+
+    /**
+     * Phase 96 Plan 01 D-CONTEXT — read the per-handle filesystem capability
+     * snapshot mirror.
+     *
+     * Always returns a Map (empty when first probe hasn't yet run). Allows
+     * callers (Plan 96-02 prompt-builder, Plan 96-03 clawcode_list_files,
+     * Plan 96-04 share-file boundary check) to read unconditionally — the
+     * empty-map default is the "no paths probed yet" signal.
+     */
+    getFsCapabilitySnapshot(): ReadonlyMap<string, FsCapabilitySnapshot> {
+      return _fsCapabilitySnapshot ?? new Map();
+    },
+
+    /**
+     * Phase 96 Plan 01 D-CONTEXT — update the per-handle filesystem
+     * capability snapshot mirror.
+     *
+     * Called by:
+     *   - SessionManager (at warm-path gate / boot probe)
+     *   - heartbeat fs-probe check (every 60s tick — wired in 96-07)
+     *   - on-demand /clawcode-probe-fs slash + clawcode probe-fs CLI (96-05)
+     *
+     * Always stores a defensive copy so external mutations of the passed-
+     * in map don't leak into the handle's state. NEVER mutates the input.
+     */
+    setFsCapabilitySnapshot(next: ReadonlyMap<string, FsCapabilitySnapshot>): void {
+      _fsCapabilitySnapshot = new Map(next);
+    },
+
+    /**
+     * Phase 103 OBS-04 — read the per-handle RateLimitTracker mirror.
+     *
+     * Returns undefined until SessionManager calls setRateLimitTracker.
+     * Downstream consumers (Plan 03 IPC list-rate-limit-snapshots, slash
+     * commands /clawcode-usage and /clawcode-status) read via this accessor
+     * routed through SessionManager.getRateLimitTrackerForAgent.
+     */
+    getRateLimitTracker(): RateLimitTracker | undefined {
+      return _rateLimitTracker;
+    },
+
+    /**
+     * Phase 103 OBS-04 — inject the per-handle RateLimitTracker mirror.
+     *
+     * Called by SessionManager AFTER handle construction (post-construction
+     * DI mirror — Pitfall 8 best-effort race window: rate_limit_event
+     * messages arriving in the gap between construction and injection are
+     * dropped). The dispatch branch in iterateUntilResult reads
+     * `_rateLimitTracker` via closure so a late injection is honored on the
+     * very next message.
+     */
+    setRateLimitTracker(tracker: RateLimitTracker): void {
+      _rateLimitTracker = tracker;
     },
 
     /**

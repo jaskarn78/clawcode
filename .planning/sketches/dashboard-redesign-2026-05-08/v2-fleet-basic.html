@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode — Fleet (Basic)</title>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,600,700,800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        display: ['"Cabinet Grotesk"', 'sans-serif'],
+        sans: ['Geist', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
+      },
+      colors: {
+        bg: { base: '#0e0e12', s1: '#16161c', s2: '#1c1c24', s3: '#252530' },
+        fg: { 1: '#f4f4f5', 2: '#a1a1aa', 3: '#71717a' },
+        accent: {
+          green: '#10b981', blue: '#3b82f6',
+          amber: '#f59e0b', red: '#ef4444',
+          gold: '#eab308', pink: '#ff3366',
+        },
+      },
+    },
+  },
+};
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Geist', sans-serif; background: #0e0e12; color: #f4f4f5; }
+  .font-display { font-family: 'Cabinet Grotesk', sans-serif; }
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+  /* Status dots */
+  .dot-active { background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); }
+  .dot-warn   { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
+  .dot-idle   { background: #71717a; }
+
+  /* Agent row hover */
+  .agent-row { transition: background 100ms ease; cursor: pointer; }
+  .agent-row:hover { background: rgba(255,255,255,0.03); }
+
+  /* Streaming pulse (hot pink — only for active streaming) */
+  .streaming-pulse {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #ff3366; animation: ping 1.5s cubic-bezier(0,0,0.2,1) infinite;
+  }
+  @keyframes ping { 75%,100% { transform: scale(1.8); opacity: 0; } }
+
+  /* Mode toggle pill */
+  .mode-pill { display: flex; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 3px; gap: 2px; }
+  .mode-btn { padding: 5px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; transition: all 150ms ease; color: #71717a; }
+  .mode-btn.active { background: rgba(255,255,255,0.08); color: #f4f4f5; }
+  .mode-btn:hover:not(.active) { color: #a1a1aa; }
+
+  /* Cmd palette */
+  .palette-overlay { position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,0.55); display: none; backdrop-filter: blur(6px); }
+  .palette-overlay.open { display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }
+  .palette-box { width: min(560px, calc(100vw - 32px)); background: #1c1c24; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 32px 64px rgba(0,0,0,0.7); overflow: hidden; animation: fadeUp 180ms ease; }
+  .p-item { transition: background 80ms ease; cursor: pointer; }
+  .p-item:hover, .p-item.sel { background: rgba(255,255,255,0.05); }
+
+  /* Dormant toggle */
+  .dormant-row { transition: background 100ms ease; }
+  .dormant-row:hover { background: rgba(255,255,255,0.03); }
+
+  /* Task modal */
+  .modal-overlay { position: fixed; inset: 0; z-index: 400; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(4px); }
+  .modal-overlay.open { display: flex; }
+  .modal-box { width: min(520px, 100%); background: #16161c; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; box-shadow: 0 24px 48px rgba(0,0,0,0.6); animation: fadeUp 180ms ease; }
+
+  /* Bottom nav (mobile only) */
+  .bottom-nav { display: none; }
+  @media (max-width: 767px) {
+    .bottom-nav { display: flex; }
+    .sidebar { display: none !important; }
+    .main-content { padding-bottom: 72px !important; }
+  }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-in { animation: fadeUp 200ms ease both; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- COMMAND PALETTE -->
+<div class="palette-overlay" id="palette" onclick="closePalette(event)">
+  <div class="palette-box" onclick="event.stopPropagation()">
+    <div class="flex items-center gap-3 px-4 py-3.5 border-b border-white/5">
+      <i data-lucide="search" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+      <input id="palette-input" placeholder="Search agents, actions..." autocomplete="off"
+        class="flex-1 bg-transparent text-fg-1 text-[15px] outline-none placeholder-fg-3"
+        oninput="filterPalette(this.value)" onkeydown="paletteKey(event)">
+      <span class="font-mono text-xs text-fg-3 bg-bg-s3 px-1.5 py-0.5 rounded">ESC</span>
+    </div>
+    <div id="p-list" class="py-1.5 max-h-72 overflow-y-auto"></div>
+    <div class="px-4 py-2.5 border-t border-white/5 flex gap-5 text-xs text-fg-3">
+      <span><kbd class="font-mono">↑↓</kbd> navigate</span>
+      <span><kbd class="font-mono">↵</kbd> open</span>
+      <span><kbd class="font-mono">ESC</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<!-- NEW TASK MODAL -->
+<div class="modal-overlay" id="task-modal" onclick="closeTaskModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-white/5">
+      <h3 class="font-display text-[17px] font-bold text-fg-1">New Task</h3>
+      <button onclick="closeTaskModal()" class="p-1.5 rounded-md hover:bg-white/5 transition-colors">
+        <i data-lucide="x" class="w-4 h-4 text-fg-3"></i>
+      </button>
+    </div>
+    <div class="px-6 py-5 space-y-4">
+      <div>
+        <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Title</label>
+        <input placeholder="Investigate Schwab AIP question from Ramy" class="w-full bg-bg-s2 border border-white/8 rounded-lg px-3 py-2.5 text-[14px] text-fg-1 outline-none placeholder-fg-3 focus:border-accent-blue/50 transition-colors">
+      </div>
+      <div>
+        <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Assign to</label>
+        <select class="w-full bg-bg-s2 border border-white/8 rounded-lg px-3 py-2.5 text-[14px] text-fg-1 outline-none appearance-none cursor-pointer">
+          <option>fin-acquisition (sonnet)</option>
+          <option>Admin Clawdy (opus)</option>
+          <option>research (sonnet)</option>
+          <option>fin-research (haiku)</option>
+        </select>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Priority</label>
+          <div class="flex gap-2">
+            <button class="flex-1 py-2 rounded-lg text-xs font-medium border border-white/8 text-fg-3 hover:border-white/15 transition-colors">Low</button>
+            <button class="flex-1 py-2 rounded-lg text-xs font-medium border border-accent-blue/50 text-accent-blue bg-accent-blue/5">Med</button>
+            <button class="flex-1 py-2 rounded-lg text-xs font-medium border border-white/8 text-fg-3 hover:border-white/15 transition-colors">High</button>
+          </div>
+        </div>
+        <div>
+          <label class="block text-[13px] font-medium text-fg-2 mb-1.5">Schedule</label>
+          <select class="w-full bg-bg-s2 border border-white/8 rounded-lg px-3 py-2.5 text-[14px] text-fg-1 outline-none">
+            <option>Run now</option>
+            <option>Schedule for later</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/5">
+      <button onclick="closeTaskModal()" class="px-4 py-2 text-[14px] text-fg-2 hover:text-fg-1 transition-colors">Cancel</button>
+      <button class="px-5 py-2 bg-accent-green text-white text-[14px] font-medium rounded-lg hover:bg-emerald-400 transition-colors">Create Task</button>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="flex min-h-screen">
+
+  <!-- SIDEBAR (md+) -->
+  <aside class="sidebar hidden md:flex flex-col w-[220px] flex-shrink-0 bg-bg-s1 border-r border-white/5 sticky top-0 h-screen">
+    <div class="px-5 py-4 border-b border-white/5">
+      <div class="flex items-center gap-2">
+        <span class="font-mono font-semibold text-accent-pink text-[17px]">{/}</span>
+        <span class="font-display font-bold text-fg-1 text-[15px] tracking-tight">ClawCode</span>
+      </div>
+      <div class="flex items-center gap-2 mt-1.5">
+        <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+        <span class="text-[11px] text-fg-3 font-mono">clawdy · live</span>
+      </div>
+    </div>
+    <nav class="flex-1 py-3 px-2">
+      <a href="v2-fleet-basic.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[14px] text-fg-1 bg-white/5 mb-0.5">
+        <i data-lucide="layout-grid" class="w-4 h-4 text-accent-green"></i> Fleet
+      </a>
+      <a href="v2-conversations.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[14px] text-fg-2 hover:text-fg-1 hover:bg-white/3 transition-colors mb-0.5">
+        <i data-lucide="message-square" class="w-4 h-4"></i> Conversations
+      </a>
+      <a href="v2-tasks.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[14px] text-fg-2 hover:text-fg-1 hover:bg-white/3 transition-colors mb-0.5">
+        <i data-lucide="check-square" class="w-4 h-4"></i> Tasks
+      </a>
+      <a href="v2-agent-detail.html" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[14px] text-fg-2 hover:text-fg-1 hover:bg-white/3 transition-colors mb-0.5">
+        <i data-lucide="settings" class="w-4 h-4"></i> Config
+      </a>
+    </nav>
+    <div class="p-4 border-t border-white/5">
+      <div class="text-[11px] text-fg-3 font-mono mb-2">7 active · 3 dormant</div>
+      <div class="flex items-center gap-1.5">
+        <div class="flex-1 h-1 bg-white/8 rounded-full overflow-hidden">
+          <div class="h-full bg-accent-green rounded-full" style="width:70%"></div>
+        </div>
+        <span class="text-[11px] text-fg-3 font-mono">healthy</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CONTENT -->
+  <div class="flex-1 flex flex-col min-w-0 main-content">
+
+    <!-- HEADER -->
+    <header class="bg-bg-s1/90 backdrop-blur border-b border-white/5 px-4 md:px-6 h-14 flex items-center justify-between sticky top-0 z-50">
+      <div class="flex items-center gap-3">
+        <!-- Mobile: logo -->
+        <div class="md:hidden flex items-center gap-2">
+          <span class="font-mono font-semibold text-accent-pink text-[15px]">{/}</span>
+          <span class="font-display font-bold text-fg-1 text-[14px]">ClawCode</span>
+        </div>
+        <!-- Desktop: breadcrumb -->
+        <div class="hidden md:flex items-center gap-2 text-[13px] text-fg-3">
+          <span>Fleet</span>
+          <span class="text-fg-3/40">/</span>
+          <span class="text-fg-1">Overview</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <!-- Mode toggle -->
+        <div class="mode-pill">
+          <button class="mode-btn active" onclick="location.href='v2-fleet-basic.html'">Basic</button>
+          <button class="mode-btn" onclick="location.href='v2-fleet-advanced.html'">Advanced</button>
+        </div>
+        <!-- Cmd+K -->
+        <button onclick="openPalette()" class="hidden sm:flex items-center gap-2 text-[12px] text-fg-3 bg-bg-s3 border border-white/5 rounded-lg px-3 py-1.5 hover:border-white/10 transition-colors">
+          <i data-lucide="search" class="w-3 h-3"></i>
+          <kbd class="font-mono">⌘K</kbd>
+        </button>
+        <button class="p-2 rounded-lg hover:bg-white/5 transition-colors relative">
+          <i data-lucide="bell" class="w-4 h-4 text-fg-2"></i>
+          <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-accent-amber rounded-full"></span>
+        </button>
+        <div class="w-7 h-7 rounded-full bg-gradient-to-br from-accent-blue to-accent-green flex items-center justify-center text-[11px] font-mono font-semibold text-white">J</div>
+      </div>
+    </header>
+
+    <!-- STATUS BANNER -->
+    <div id="status-banner" class="px-4 md:px-6 py-3 border-b border-white/5 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="dot-warn w-2.5 h-2.5 rounded-full flex-shrink-0"></div>
+        <span class="text-[14px] font-medium text-fg-1">2 agents need attention</span>
+        <span class="hidden sm:inline text-[13px] text-fg-3">· 7 active · SLO breach on research + finmentum-content-creator</span>
+      </div>
+      <button onclick="toggleAttention()" class="text-[12px] text-fg-2 hover:text-fg-1 transition-colors flex items-center gap-1">
+        <span id="attn-label">show</span>
+        <i data-lucide="chevron-down" class="w-3.5 h-3.5" id="attn-chevron"></i>
+      </button>
+    </div>
+
+    <!-- ATTENTION DETAILS (collapsed by default) -->
+    <div id="attention-detail" class="hidden px-4 md:px-6 py-3 bg-accent-amber/5 border-b border-accent-amber/15">
+      <div class="space-y-2">
+        <div class="flex items-start gap-3">
+          <i data-lucide="alert-triangle" class="w-3.5 h-3.5 text-accent-amber mt-0.5 flex-shrink-0"></i>
+          <div>
+            <span class="text-[13px] font-medium text-fg-1">research</span>
+            <span class="text-[13px] text-fg-3 ml-2">first_token p50 2,120ms · SLO target ≤ 2,000ms (sonnet) · MCP search degraded</span>
+          </div>
+        </div>
+        <div class="flex items-start gap-3">
+          <i data-lucide="alert-triangle" class="w-3.5 h-3.5 text-accent-amber mt-0.5 flex-shrink-0"></i>
+          <div>
+            <span class="text-[13px] font-medium text-fg-1">finmentum-content-creator</span>
+            <span class="text-[13px] text-fg-3 ml-2">first_token p50 2,080ms · SLO target ≤ 2,000ms (sonnet)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- QUICK ACTIONS -->
+    <div class="px-4 md:px-6 py-4 border-b border-white/5 flex items-center gap-3 overflow-x-auto">
+      <button onclick="openTaskModal()" class="flex items-center gap-2 text-[13px] font-medium text-fg-1 bg-bg-s2 border border-white/8 rounded-lg px-4 py-2.5 hover:border-white/15 transition-colors whitespace-nowrap min-h-[44px]">
+        <i data-lucide="plus" class="w-3.5 h-3.5 text-accent-green"></i> New task
+      </button>
+      <button class="flex items-center gap-2 text-[13px] font-medium text-fg-2 bg-bg-s2 border border-white/8 rounded-lg px-4 py-2.5 hover:border-white/15 hover:text-fg-1 transition-colors whitespace-nowrap min-h-[44px]">
+        <i data-lucide="message-square" class="w-3.5 h-3.5 text-accent-blue"></i> Send message
+      </button>
+      <button onclick="location.href='v2-config-editor.html'" class="flex items-center gap-2 text-[13px] font-medium text-fg-2 bg-bg-s2 border border-white/8 rounded-lg px-4 py-2.5 hover:border-white/15 hover:text-fg-1 transition-colors whitespace-nowrap min-h-[44px]">
+        <i data-lucide="settings-2" class="w-3.5 h-3.5 text-fg-3"></i> Config editor
+      </button>
+    </div>
+
+    <!-- AGENT LIST -->
+    <div class="flex-1 px-4 md:px-6 py-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-display text-[15px] font-bold text-fg-2 uppercase tracking-wide">Active Agents</h2>
+        <span class="text-[12px] font-mono text-fg-3">7 / 10</span>
+      </div>
+
+      <div class="bg-bg-s1 border border-white/5 rounded-xl overflow-hidden fade-in" id="agent-list">
+        <!-- Populated by JS -->
+      </div>
+
+      <!-- DORMANT FOOTER -->
+      <button id="dormant-btn" onclick="toggleDormant()" class="dormant-row w-full mt-3 flex items-center justify-between bg-bg-s1 border border-white/5 rounded-xl px-5 py-3.5 min-h-[44px]">
+        <div class="flex items-center gap-3">
+          <i data-lucide="moon" class="w-3.5 h-3.5 text-fg-3"></i>
+          <span class="text-[13px] text-fg-3">3 dormant agents</span>
+          <div class="hidden sm:flex gap-1.5">
+            <span class="text-[11px] font-mono text-fg-3/60 bg-bg-s3 px-2 py-0.5 rounded">personal</span>
+            <span class="text-[11px] font-mono text-fg-3/60 bg-bg-s3 px-2 py-0.5 rounded">fin-playground</span>
+            <span class="text-[11px] font-mono text-fg-3/60 bg-bg-s3 px-2 py-0.5 rounded">fin-tax</span>
+          </div>
+        </div>
+        <i data-lucide="chevron-down" class="w-4 h-4 text-fg-3" id="dormant-chevron"></i>
+      </button>
+      <div id="dormant-expanded" class="hidden mt-1 bg-bg-s1 border border-white/5 rounded-xl overflow-hidden">
+        <div class="px-5 py-4 space-y-2">
+          <div class="flex items-center gap-3 py-2 opacity-50">
+            <div class="w-2 h-2 rounded-full bg-fg-3"></div>
+            <span class="text-[14px] text-fg-2 font-medium">personal</span>
+            <span class="text-[11px] font-mono text-fg-3 ml-auto">stopped · autoStart: false</span>
+          </div>
+          <div class="flex items-center gap-3 py-2 opacity-50">
+            <div class="w-2 h-2 rounded-full bg-fg-3"></div>
+            <span class="text-[14px] text-fg-2 font-medium">fin-playground</span>
+            <span class="text-[11px] font-mono text-fg-3 ml-auto">stopped · autoStart: false</span>
+          </div>
+          <div class="flex items-center gap-3 py-2 opacity-50">
+            <div class="w-2 h-2 rounded-full bg-fg-3"></div>
+            <span class="text-[14px] text-fg-2 font-medium">fin-tax</span>
+            <span class="text-[11px] font-mono text-fg-3 ml-auto">stopped · autoStart: false</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MOBILE BOTTOM NAV -->
+<nav class="bottom-nav fixed bottom-0 left-0 right-0 bg-bg-s1/95 backdrop-blur border-t border-white/5 px-2 py-2 z-40">
+  <div class="flex">
+    <a href="v2-fleet-basic.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg bg-white/5">
+      <i data-lucide="layout-grid" class="w-4 h-4 text-accent-green"></i>
+      <span class="text-[10px] text-accent-green font-medium">Fleet</span>
+    </a>
+    <a href="v2-conversations.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="message-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Convos</span>
+    </a>
+    <a href="v2-tasks.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="check-square" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">Tasks</span>
+    </a>
+    <a href="v2-agent-detail.html" class="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-lg hover:bg-white/3 transition-colors">
+      <i data-lucide="settings" class="w-4 h-4 text-fg-3"></i>
+      <span class="text-[10px] text-fg-3">More</span>
+    </a>
+  </div>
+</nav>
+
+<script>
+const agents = [
+  { name: "Admin Clawdy", model: "opus", status: "active", lastSeen: "4m ago", snippet: "Reviewing the Phase 115 migration audit log — 7 agents in dual-write, no drift detected...", warn: false, streaming: false, channel: "#admin-clawdy" },
+  { name: "fin-acquisition", model: "sonnet", status: "active", lastSeen: "2m ago", snippet: "Following up on the Schwab AIP question from Ramy — checking the latest account restrictions...", warn: false, streaming: true, channel: "#fin-acquisition", ramy: true },
+  { name: "research", model: "sonnet", status: "warn", lastSeen: "7m ago", snippet: "Investigating recent FINRA guidance on crypto ETF allocations for retail accounts...", warn: true, warnReason: "SLO breach: first_token p50", streaming: false, channel: "#research" },
+  { name: "fin-research", model: "haiku", status: "active", lastSeen: "14m ago", snippet: "Pulling YTD returns for the Vanguard VTSAX vs FXAIX comparison Ramy requested...", warn: false, streaming: false, channel: "#fin-research" },
+  { name: "finmentum-content-creator", model: "sonnet", status: "warn", lastSeen: "9m ago", snippet: "Drafting the Q2 newsletter section on portfolio rebalancing strategies for retail investors...", warn: true, warnReason: "SLO breach: first_token p50", streaming: false, channel: "#finmentum-content" },
+  { name: "general", model: "sonnet", status: "active", lastSeen: "22m ago", snippet: "Summarized the AWS cost report for May — EC2 spend up 12% vs April, flagged for review...", warn: false, streaming: false, channel: "#general" },
+  { name: "projects", model: "sonnet", status: "active", lastSeen: "31m ago", snippet: "Updated the ClawCode Phase 115 plan with sub-scope 17b tool latency methodology...", warn: false, streaming: false, channel: "#projects" },
+];
+
+const modelColors = { opus: { bg: 'rgba(234,179,8,0.1)', text: '#eab308', border: 'rgba(234,179,8,0.25)' }, sonnet: { bg: 'rgba(59,130,246,0.1)', text: '#3b82f6', border: 'rgba(59,130,246,0.25)' }, haiku: { bg: 'rgba(16,185,129,0.1)', text: '#10b981', border: 'rgba(16,185,129,0.25)' } };
+
+function renderAgents() {
+  const list = document.getElementById('agent-list');
+  list.innerHTML = agents.map((a, i) => {
+    const mc = modelColors[a.model];
+    const isLast = i === agents.length - 1;
+    return `<div class="agent-row flex items-center gap-4 px-5 py-4 min-h-[72px] ${isLast ? '' : 'border-b border-white/5'}" onclick="openAgent('${a.name}')">
+      <div class="flex-shrink-0 flex flex-col items-center gap-1.5">
+        <div class="w-2.5 h-2.5 rounded-full ${a.warn ? 'dot-warn' : 'dot-active'}"></div>
+        ${a.streaming ? '<div class="streaming-pulse"></div>' : ''}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-0.5">
+          <span class="font-display text-[15px] font-bold text-fg-1">${a.name}</span>
+          ${a.ramy ? '<span class="text-accent-gold text-[13px]">★</span>' : ''}
+          <span class="text-[11px] font-mono px-1.5 py-0.5 rounded border" style="background:${mc.bg};color:${mc.text};border-color:${mc.border}">${a.model}</span>
+          ${a.warn ? `<span class="text-[11px] font-mono text-accent-amber bg-accent-amber/8 border border-accent-amber/20 px-1.5 py-0.5 rounded">${a.warnReason}</span>` : ''}
+        </div>
+        <p class="text-[13px] text-fg-3 truncate italic">"${a.snippet}"</p>
+      </div>
+      <div class="flex-shrink-0 text-right hidden sm:block">
+        <span class="text-[12px] font-mono text-fg-3">${a.lastSeen}</span>
+        <div class="text-[11px] text-fg-3/50 mt-0.5">${a.channel}</div>
+      </div>
+      <i data-lucide="chevron-right" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+    </div>`;
+  }).join('');
+  lucide.createIcons();
+}
+
+function openAgent(name) {
+  location.href = `v2-conversations.html?agent=${encodeURIComponent(name)}`;
+}
+
+function toggleAttention() {
+  const d = document.getElementById('attention-detail');
+  const ch = document.getElementById('attn-chevron');
+  const lb = document.getElementById('attn-label');
+  const open = d.classList.toggle('hidden');
+  ch.style.transform = open ? '' : 'rotate(180deg)';
+  lb.textContent = open ? 'show' : 'hide';
+}
+
+function toggleDormant() {
+  const d = document.getElementById('dormant-expanded');
+  const ch = document.getElementById('dormant-chevron');
+  const open = d.classList.toggle('hidden');
+  ch.style.transform = open ? '' : 'rotate(180deg)';
+}
+
+// Command palette
+const pItems = [
+  { icon: 'bot', label: 'Jump to Admin Clawdy', group: 'Agents', href: '#agent-Admin Clawdy' },
+  { icon: 'bot', label: 'Jump to fin-acquisition', group: 'Agents', href: 'v2-conversations.html?agent=fin-acquisition' },
+  { icon: 'bot', label: 'Jump to research', group: 'Agents' },
+  { icon: 'plus', label: 'Create new task', group: 'Actions', fn: 'openTaskModal' },
+  { icon: 'settings-2', label: 'Open config editor', group: 'Actions', href: 'v2-config-editor.html' },
+  { icon: 'message-square', label: 'View conversations', group: 'Actions', href: 'v2-conversations.html' },
+  { icon: 'check-square', label: 'View task board', group: 'Actions', href: 'v2-tasks.html' },
+  { icon: 'refresh-cw', label: 'Restart fin-acquisition', group: 'Actions' },
+  { icon: 'alert-triangle', label: 'Show SLO breaches', group: 'Actions', fn: 'toggleAttention' },
+];
+
+let pSel = 0, pFiltered = [];
+function openPalette() {
+  document.getElementById('palette').classList.add('open');
+  setTimeout(() => document.getElementById('palette-input').focus(), 50);
+  filterPalette('');
+}
+function closePalette(e) {
+  if (!e || e.target === document.getElementById('palette')) document.getElementById('palette').classList.remove('open');
+}
+function filterPalette(q) {
+  pFiltered = pItems.filter(i => i.label.toLowerCase().includes(q.toLowerCase()));
+  pSel = 0;
+  renderPalette();
+}
+function renderPalette() {
+  document.getElementById('p-list').innerHTML = pFiltered.map((item, idx) => `
+    <div class="p-item flex items-center gap-3 px-4 py-2.5 ${idx === pSel ? 'sel' : ''}" onclick="selectPItem(${idx})">
+      <i data-lucide="${item.icon}" class="w-4 h-4 text-fg-3 flex-shrink-0"></i>
+      <span class="text-[14px] text-fg-1">${item.label}</span>
+      <span class="ml-auto text-[11px] text-fg-3">${item.group}</span>
+    </div>`).join('');
+  lucide.createIcons();
+}
+function selectPItem(idx) {
+  const item = pFiltered[idx];
+  if (!item) return;
+  document.getElementById('palette').classList.remove('open');
+  if (item.href) location.href = item.href;
+  else if (item.fn) window[item.fn]();
+}
+function paletteKey(e) {
+  if (e.key === 'Escape') document.getElementById('palette').classList.remove('open');
+  else if (e.key === 'ArrowDown') { pSel = Math.min(pSel + 1, pFiltered.length - 1); renderPalette(); }
+  else if (e.key === 'ArrowUp') { pSel = Math.max(pSel - 1, 0); renderPalette(); }
+  else if (e.key === 'Enter') selectPItem(pSel);
+}
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+});
+
+function openTaskModal() {
+  document.getElementById('task-modal').classList.add('open');
+  document.getElementById('palette').classList.remove('open');
+}
+function closeTaskModal(e) {
+  if (!e || e.target === document.getElementById('task-modal')) document.getElementById('task-modal').classList.remove('open');
+}
+
+renderAgents();
+</script>
+</body>
+</html>

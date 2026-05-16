@@ -32,7 +32,7 @@ function buildContext(overrides: {
     // Stubs for unused SessionManager surface:
     getTraceStore: vi.fn(),
     startAgent: vi.fn(),
-    sendToAgent: vi.fn(),
+    dispatchTurn: vi.fn(),
     streamFromAgent: vi.fn(),
     forwardToAgent: vi.fn(),
     forkSession: vi.fn(),

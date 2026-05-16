@@ -177,6 +177,25 @@ export async function syncOnce(deps: SyncRunnerDeps): Promise<SyncRunOutcome> {
     return outcome;
   }
 
+  // Phase 96 D-11: when authoritativeSide === "deprecated", the Phase 91
+  // mirror is disabled; agents read source-of-truth via ACL. Short-circuit:
+  // no rsync, no alert, ledger-only at info level (informational, not warn).
+  // Operator restores via `clawcode sync re-enable-timer` within
+  // DEPRECATION_ROLLBACK_WINDOW_MS of state.deprecatedAt.
+  if (state.authoritativeSide === "deprecated") {
+    const outcome: SyncRunOutcome = {
+      kind: "deprecated",
+      cycleId,
+      reason: "phase-91-mirror-deprecated; agents read source via ACL",
+    };
+    await appendOutcomeToJsonl(deps, outcome, start);
+    deps.log.info(
+      { cycleId, reason: outcome.reason, deprecatedAt: state.deprecatedAt },
+      "sync cycle skipped — Phase 91 mirror deprecated",
+    );
+    return outcome;
+  }
+
   // Build rsync command. SSH options are verbatim from D-04 runbook:
   //   BatchMode=yes            → never prompt for password (key-only auth)
   //   ConnectTimeout=10        → bail fast on Tailscale outage
@@ -645,6 +664,8 @@ export function flattenOutcomeToJsonl(
     case "skipped-no-changes":
       return { ...base, durationMs: outcome.durationMs };
     case "paused":
+      return { ...base, reason: outcome.reason };
+    case "deprecated":
       return { ...base, reason: outcome.reason };
     case "failed-ssh":
       return { ...base, error: outcome.error, durationMs: outcome.durationMs };

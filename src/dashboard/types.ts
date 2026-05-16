@@ -29,6 +29,33 @@ export type DashboardServerConfig = {
     req: IncomingMessage,
     res: ServerResponse,
   ) => Promise<void>;
+
+  /**
+   * Phase 116-06 T04/T07 — dashboard action audit log. Optional so legacy
+   * callers (tests, fixtures) keep working without a JSONL writer. When
+   * provided, every dashboard-originated mutation (the F26 PUT config, the
+   * F09 migration POSTs, the F10 MCP reconnect, the F28 task POSTs, the
+   * F15 veto, the POST /api/agents/:n/:action) calls `.recordAction(...)`
+   * after the IPC dispatch succeeds. The SPA telemetry POST appends
+   * through the same writer with `action: 'dashboard_v2_*'`. The F23
+   * viewer reads the same file via the `list-dashboard-audit` IPC.
+   */
+  readonly auditTrail?: import("./dashboard-audit-trail.js").DashboardAuditTrail;
+
+  /**
+   * Phase 116-06 T08 — operator-driven cutover redirect.
+   *
+   * When this getter returns `true`, `GET /` responds with
+   * `301 Location: /dashboard/v2/` instead of serving the legacy
+   * static index.html. The daemon injects a closure over the live
+   * `config` ref so the read picks up `defaults.dashboardCutoverRedirect`
+   * AFTER each ConfigWatcher hot-reload — no server restart needed.
+   *
+   * The getter is invoked on every incoming GET / request; keep it cheap
+   * (a single property read). Omit (undefined) for legacy callers (tests,
+   * embeddings); the handler treats `undefined` identically to `false`.
+   */
+  readonly cutoverRedirectEnabled?: () => boolean;
 };
 
 /**
@@ -133,6 +160,88 @@ export type MemoryStatsData = {
       readonly tierDistribution: Record<string, number>;
     }
   >;
+};
+
+/**
+ * Phase 109-D — fleet-wide observability snapshot.
+ *
+ * Surfaced via the `fleet-stats` IPC method and the `/api/fleet-stats`
+ * dashboard endpoint. All fields are optional/nullable so a host without
+ * the underlying source (non-Linux dev machine, broker not running, etc.)
+ * still produces a valid response — operators see "unknown" rather than
+ * a 500.
+ *
+ * Back-compat invariant: this type is NOT folded into DashboardState.
+ * The existing /api/status payload stays byte-identical so the current
+ * dashboard JS keeps rendering. Operators who want fleet-stats poll the
+ * new endpoint.
+ */
+export type FleetStatsData = {
+  /** cgroup memory pressure snapshot (Linux only — null on other hosts). */
+  readonly cgroup: {
+    readonly memoryCurrentBytes: number;
+    readonly memoryMaxBytes: number | null;
+    readonly memoryPercent: number | null;
+  } | null;
+  /**
+   * Live `claude` proc count (from /proc) minus daemon-tracked agent count.
+   * Positive value = orphan claudes the daemon doesn't see (109-B target).
+   * null when /proc is unavailable.
+   */
+  readonly claudeProcDrift: {
+    readonly liveCount: number;
+    readonly trackedCount: number;
+    readonly drift: number;
+  } | null;
+  /**
+   * Per-MCP-cmdline-pattern aggregate (count + summed VmRSS in MB).
+   *
+   * Phase 110 Stage 0a — `runtime` field added so /api/fleet-stats
+   * consumers can split shim-runtime cohorts (Stage 0/1 targets) from
+   * yaml-defined externals (out of scope) without re-deriving from
+   * cmdline. Optional in the type because pre-Stage-0a dashboards keep
+   * working byte-identically; daemon always populates it post-Stage-0a.
+   */
+  readonly mcpFleet: ReadonlyArray<{
+    readonly pattern: string;
+    readonly count: number;
+    readonly rssMB: number;
+    readonly runtime?: "node" | "static" | "python" | "external";
+  }>;
+  /**
+   * Phase 110 Stage 0a — rolled-up shim-runtime baseline. The summary
+   * `/api/fleet-stats` consumers read to track Stage 0 progress without
+   * iterating `mcpFleet`. `null` when no shim-runtime entries exist
+   * (distinguish from all-zero baseline). Optional for back-compat with
+   * pre-Stage-0a clients; always populated post-Stage-0a.
+   */
+  readonly shimRuntimeBaseline?: {
+    readonly node: { readonly count: number; readonly rssMB: number };
+    readonly static?: { readonly count: number; readonly rssMB: number };
+    readonly python?: { readonly count: number; readonly rssMB: number };
+  } | null;
+  /**
+   * Phase 119 D-05 — `no_webhook_fallbacks_total{agent, channel}` counter.
+   *
+   * Monotonic counter since daemon start. Keyed by `${agent}:${channel}` so
+   * a single colon separator stays journalctl-grep friendly. Increments on
+   * every fallback dispatch (bot-direct path OR inbox-only return path) via
+   * the single helper `incrementNoWebhookFallback` in `fleet-stats.ts`. The
+   * webhook-success path does NOT increment — the counter measures fallback
+   * frequency, not delivery volume.
+   *
+   * JSON-safe by construction: typed as Record (not Map) so the IPC reply
+   * serializes correctly without a Map→Record adapter at the boundary. The
+   * snapshot is a shallow copy of the internal counter map — mutating the
+   * returned value never mutates daemon state.
+   *
+   * Optional for back-compat with pre-Phase-119 clients; the daemon always
+   * populates it (even at `{}`) post-Phase-119. Dashboard explicitly renders
+   * the empty-state, not absent-state.
+   */
+  readonly noWebhookFallbacksTotal?: Readonly<Record<string, number>>;
+  /** Epoch ms — when this snapshot was taken. */
+  readonly sampledAt: number;
 };
 
 /** A single task edge for the dashboard task graph (OBS-03). */

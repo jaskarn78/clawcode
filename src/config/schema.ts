@@ -117,13 +117,304 @@ export const DEFAULT_SYSTEM_PROMPT_DIRECTIVES: Readonly<
 > = Object.freeze({
   "file-sharing": Object.freeze({
     enabled: true,
-    text: "When you produce a file the user wants to access, ALWAYS upload via Discord (the channel/thread you're answering in) and return the CDN URL. NEVER just tell the user a local file path they can't reach (e.g., '/home/clawcode/...'). If unsure where to send it, ask which channel.",
+    // Phase 94 D-09 baseline + Phase 96 D-10 extension (2026-04-25):
+    //   1. Auto-upload heuristic — distinguishes file-as-artifact references
+    //      ("here's the PDF", "I generated X") from text-only Q&A about file
+    //      content ("the PDF says X"). The former MUST upload via
+    //      clawcode_share_file; the latter MUST NOT.
+    //   2. OpenClaw-fallback prohibition — operator surfaced this anti-pattern
+    //      in #finmentum-client-acquisition on 2026-04-25 (bot recommended
+    //      "spawn a subagent on the OpenClaw side" for DB access). OpenClaw
+    //      is being deprecated; recommending it as a fallback reinforces a
+    //      sunset path. Agents instead surface the actual gap to the operator.
+    //
+    // Pinned by static-grep regression tests:
+    //   - "ALWAYS upload via Discord"            (Phase 94 D-09 verbatim)
+    //   - "NEVER just tell the user a local file path" (Phase 94 D-09 NEVER)
+    //   - "When you produce a file the user wants to access" (D-10 auto-upload)
+    //   - "If your response is text-only Q&A about file content" (D-10 negative)
+    //   - "NEVER recommend falling back to the legacy OpenClaw agent" (D-10 prohibition)
+    //   - "OpenClaw is being deprecated"          (D-10 deprecation rationale)
+    text:
+      "When you produce a file the user wants to access, ALWAYS upload via Discord (the channel/thread you're answering in) and return the CDN URL. NEVER just tell the user a local file path they can't reach (e.g., '/home/clawcode/...'). If unsure where to send it, ask which channel.\n\n" +
+      "When you produce a file the user wants to access OR your response references a file as an artifact (\"here's the PDF\", \"I generated X\", \"attached below\", or includes file as evidence), upload it via clawcode_share_file and include the CDN URL inline. If your response is text-only Q&A about file content (e.g., \"the PDF says X\"), do NOT upload — the user is asking about content, not asking for the file.\n\n" +
+      "NEVER recommend falling back to the legacy OpenClaw agent or \"the OpenClaw side\" to work around a capability gap (filesystem, network, DB, MCP, etc.). OpenClaw is being deprecated — recommending it as a fallback reinforces a sunset path. Instead: surface the actual gap clearly to the operator (e.g., \"I cannot reach the DB from this container — Docker bridge IP 172.17.0.1 is not in the MySQL bind-address allowlist; please add it\"; \"I cannot read /path/X — please extend my fileAccess in clawcode.yaml or check ACLs\"; \"MCP server Y is not responding — please check its health\"). Ask the operator to fix the underlying capability so I can do the work directly next time.",
   }),
   "cross-agent-routing": Object.freeze({
     enabled: true,
     text: "If a user asks you to do something requiring a tool you don't have, check your tool list. If unavailable, suggest the user ask another agent (mention specific channel/agent name) that has the tool ready.",
   }),
+  // Phase 99 sub-scope K (2026-04-26) — operator observed agents blocking the
+  // main channel while a subagent / opus delegation runs. They had to manually
+  // ask "use a subagent thread" every time. Make it the default behavior:
+  // any long-running / heavy operation routes to a Discord subthread via the
+  // subagent-thread skill, and the main agent stays available for follow-ups.
+  "subagent-routing": Object.freeze({
+    enabled: true,
+    text:
+      "When you would delegate work / spawn a subagent / call opus / run any operation that takes >30 seconds (deep research, multi-file refactor, large analysis, PDF generation, complex DB queries, web scraping, batch operations), ALWAYS route the work into a Discord subthread using the `spawn_subagent_thread` MCP tool instead of blocking the current channel.\n\n" +
+      "USE: `spawn_subagent_thread` MCP tool (or `subagent-thread` skill which wraps it). This is FIRE-AND-FORGET — returns the thread URL immediately, the subagent runs in the background and posts directly to the Discord thread.\n\n" +
+      "DO NOT USE: the SDK's built-in `Task` tool for any operator-facing delegation. `Task` is BLOCKING — your turn pauses while the child runs, the typing indicator stays on, and the operator can't reach you in the channel until the child finishes. `Task` is acceptable only for sub-second internal tool composition (e.g., a quick one-shot search the LLM uses inside a single response), never for user-visible work.\n\n" +
+      "Pattern (5 steps, in order):\n" +
+      "1. Briefly acknowledge in the current channel (1-2 sentences max): \"Spinning up a subagent in a thread to dig into this; I'll keep this channel free for follow-ups.\"\n" +
+      "2. Call `spawn_subagent_thread` with `task` set to the FULL work description. The subagent starts on the task automatically — you do NOT need to send a follow-up.\n" +
+      "3. Return the thread URL inline (1 sentence: \"Working in <thread-name> — results post there.\").\n" +
+      "4. END YOUR TURN. Do NOT call `read_thread` to poll the subagent's progress. Do NOT call `Task`. Do NOT loop on tool calls waiting for output. The subagent posts its results in the thread; the operator can read them there.\n" +
+      "5. On the operator's NEXT turn (or at any future point), if they ask \"what did the subagent say\" or similar, THEN call `read_thread` once with the saved thread ID, summarize, return.\n\n" +
+      "Why this matters: Discord shows \"<agent> is typing...\" while your turn is active. If you stay in the turn polling `read_thread` or running `Task`, the operator sees typing-state for minutes — they think you're stuck and can't ask follow-ups. The subthread pattern unblocks the channel immediately.\n\n" +
+      "When NOT to use a subthread:\n" +
+      "- Quick lookups (<10s expected — single memory_lookup, single tool call, simple Q&A from loaded context).\n" +
+      "- Conversational replies that need the main thread's flow continuity.\n" +
+      "- When the user explicitly says \"do it inline\" or \"don't use a subthread\".\n\n" +
+      "Default to subthread when in doubt. Blocking the main channel for a multi-minute task is worse UX than a subthread the operator can collapse if uninterested.",
+  }),
+  // Phase 100-fu (2026-04-26) — silent-recall problem fix. Pre-100-fu the
+  // pre-turn <memory-context> auto-injection only included the top-K hybrid
+  // RRF chunks from MEMORY.md. The agent's own saved memories
+  // (memory_save → memories table) were ONLY visible if the agent explicitly
+  // invoked memory_lookup. So when an operator asked "what's my favorite
+  // X?" or "what did I tell you about Y?", the agent often said "I don't
+  // know" because (a) the relevant memory was in the memories table not the
+  // chunks table OR (b) auto-retrieval's top-K didn't surface it.
+  //
+  // Fix lives in two parts:
+  //   1. Code-level (memory-retrieval.ts) — fan out to memories table so
+  //      saved memories are auto-injected too.
+  //   2. Prompt-level (this directive) — instruct the agent to invoke
+  //      memory_lookup before saying "I don't know" since auto-retrieval
+  //      can still miss specific facts buried in long memories.
+  //
+  // Pinned by static-grep: "Before saying 'I don't know'" (line 1) and
+  // "memory_lookup" (multiple).
+  "memory-recall-before-uncertainty": Object.freeze({
+    enabled: true,
+    text:
+      "Before saying 'I don't know' or 'I don't remember' or 'I don't have that information', ALWAYS invoke the `memory_lookup` MCP tool with the user's question terms. The `<memory-context>` block at the start of your turn is auto-populated with relevant content but covers only the top-K matches — for specific facts the operator has shared with you, an explicit memory_lookup catches what auto-retrieval missed.\n\n" +
+      "Pattern: (a) reflect on what the operator asked, (b) extract 2-4 noun phrases as search terms, (c) call memory_lookup, (d) ONLY THEN form your response. If memory_lookup returns nothing useful, you may say 'I don't have that in memory'. If it returns something, integrate it.\n\n" +
+      "Don't apologize for searching. Don't announce 'let me check' — just search silently and respond with what you found.",
+  }),
+  // Phase 100-fu (2026-04-28) — long-output-to-file directive.
+  //
+  // Real production failure 2026-04-28: an Opus deep-dive subagent generated
+  // a multi-thousand-character analysis, posted only the first 2000 chars
+  // to the Discord thread (silent truncation), then claimed the full
+  // analysis was "saved to clients/.../tax-return-analysis.md" — the file
+  // didn't exist (hallucinated save). The parent agent's auto-relay built
+  // its main-channel summary on the truncated content, and the operator
+  // had no way to recover the full analysis.
+  //
+  // Fix forces a "save first, summarize+link in Discord" pattern so long
+  // outputs become durable artifacts the operator can open, while Discord
+  // posts stay under the 2000-char cap with deterministic content.
+  //
+  // Pinned by static-grep:
+  //   - "Discord messages are hard-capped" (this directive)
+  //   - "SAVE the full content first" (step 1)
+  //   - "VERIFY the save by Reading the file back" (step 2)
+  //   - "POST to Discord" (step 3)
+  //   - "NEVER paste >2000 chars into a Discord post" (step 4)
+  "long-output-to-file": Object.freeze({
+    enabled: true,
+    text:
+      "Discord messages are hard-capped at 2000 characters. When your reply will exceed ~1500 characters (rough estimate: 250 words, or ~5 short paragraphs of analysis), DO NOT just post the long text and hope it fits. Instead:\n\n" +
+      "1. SAVE the full content first to a file in your workspace. Use a descriptive path like `<your-workspace>/output/<task-slug>-<YYYY-MM-DD>.md` (e.g., `output/pon-tax-return-analysis-2026-04-28.md`). Use the Write tool.\n\n" +
+      "2. VERIFY the save by Reading the file back immediately. If the read fails or returns empty, the save failed — surface the error, do not claim success.\n\n" +
+      "3. POST to Discord (thread or channel) a 1000-1500 character SUMMARY + the absolute file path. Format:\n" +
+      "   ```\n" +
+      "   <2-4 sentence summary of the headline finding>\n" +
+      "   \n" +
+      "   <3-7 bullet points of key data>\n" +
+      "   \n" +
+      "   Full analysis: /absolute/path/to/file.md\n" +
+      "   ```\n\n" +
+      "4. NEVER paste >2000 chars into a Discord post. Discord silently truncates at 2000 and the parent agent's relay sees only the truncated content. Files are durable; Discord posts are ephemeral and bounded.\n\n" +
+      "Exceptions: short replies (under 1500 chars) post directly. Code blocks, tables, lengthy quotes — file. Conversational replies — direct.",
+  }),
+  // Phase 100-fu (2026-04-28) — verify-file-writes directive.
+  //
+  // Companion to long-output-to-file. The same 2026-04-28 incident showed
+  // an agent claiming a save that never happened — a hallucinated file
+  // path with no recoverable artifact. Force a Read-after-Write verify
+  // pattern so 'I saved X' is always backed by proof.
+  //
+  // Pinned by static-grep:
+  //   - "verify it by reading" (this directive)
+  //   - "hallucinated saves" (failure-mode anchor)
+  "verify-file-writes": Object.freeze({
+    enabled: true,
+    text:
+      "Whenever you claim to save, write, or update a file, you MUST immediately verify it by reading the file back. Never report 'saved' or 'written' without proof.\n\n" +
+      "Pattern:\n" +
+      "1. Call Write (or Edit) with the content\n" +
+      "2. Immediately call Read on the same path\n" +
+      "3. If Read returns the expected content → safely report success with the absolute path\n" +
+      "4. If Read fails (file not found, empty, mismatch) → DO NOT report success. Retry the save once. If still failing, surface the failure explicitly: 'I attempted to save to X but verification failed: <error>. The content is below — please save it manually.' Then paste the content (truncated to fit Discord if needed).\n\n" +
+      "Failure mode this prevents: hallucinated saves where the agent says 'analysis saved to /path/file.md' but the file doesn't exist, leaving the operator with no recoverable artifact.",
+  }),
+  // Phase 100-fu (2026-04-26) — operator-surfaced anti-pattern: agents
+  // hitting a tool-surface gap (read-only DB, no write tool, missing MCP)
+  // would simply say "I can't do that" and stop, leaving the operator to
+  // figure out the alternative path. Force the agent to enumerate concrete
+  // alternatives FIRST — a different tool, a generated payload the operator
+  // can run, a workaround — and only THEN ask which path the operator wants.
+  // Pinned by static-grep: "constraint" + "alternatives" + "Never just 'I can't'".
+  "propose-alternatives": Object.freeze({
+    enabled: true,
+    text:
+      "When a tool you have access to is insufficient for the user's request (e.g., you have read-only DB access but they need a write, or you have a search tool but the data is in a different system), DO NOT simply state 'I can't do that'. Instead:\n\n" +
+      "1. State the constraint specifically (\"the finmentum-db MCP is SELECT-only, so I can't INSERT directly\").\n" +
+      "2. Propose 1-2 concrete alternatives, in order of effort:\n" +
+      "   - Use a different tool that CAN do it (e.g., Playwright to fill an admin form, operator-runnable shell command, send_to_agent to delegate to an agent that has write access)\n" +
+      "   - Generate the SQL/payload + ask the operator to run it themselves (\"here's the INSERT statement — paste this into your DB client\")\n" +
+      "   - Suggest a workaround (e.g., \"I can update the cache file directly — does that meet your need?\")\n" +
+      "3. Only AFTER offering alternatives, ask the operator which path they want.\n\n" +
+      "Pattern: constraint → alternatives → ask. Never just 'I can't'.",
+  }),
+  // Phase 999.1 (2026-04-29) — freshness directive.
+  //
+  // Operator-observed pain (2026-04-29 session): agents emit
+  // 2025-anchored answers when asked about live prices, current laws,
+  // recent filings — silently anchor on training-cutoff knowledge
+  // instead of running web_search. Search MCP is already auto-injected
+  // fleet-wide; this directive is the prompt-side push to use it.
+  //
+  // Pinned by static-grep:
+  //   - "Do not anchor on training-cutoff knowledge" (D-FR-04 verbatim)
+  //   - "run `date` via Bash" (D-FR-02 verbatim)
+  "freshness": Object.freeze({
+    enabled: true,
+    text:
+      "When researching live prices, equity quotes, current tax rules, regulations, laws, financial filings, current events, recent news, or anything dated within ~6 months of today, run `web_search` BEFORE answering. Do not anchor on training-cutoff knowledge.\n\n" +
+      "If you need today's date, run `date` via Bash — don't guess from your training cutoff.",
+  }),
+  // Phase 999.1 (2026-04-29) — derivative-work directive.
+  //
+  // Operator-observed pain (2026-04-29 session): a delegated subagent
+  // refused to generate a parameterized PDF template, citing the
+  // global CLAUDE.md "don't add features beyond what's requested"
+  // rule. That rule applies to scope creep on the operator's request,
+  // not to fulfilling delegated work product. Per D-DR-01/D-DR-04 the
+  // directive fires fleet-wide (not subagent-only) — simpler shape,
+  // ~80 token cost is acceptable.
+  //
+  // Pinned by static-grep:
+  //   - "are all in-scope work product" (D-DR-03 verbatim)
+  "derivative-work": Object.freeze({
+    enabled: true,
+    text:
+      "When you've been delegated a task by another agent OR by the operator, creating new files, deriving parameterized templates from examples, generating code, and producing artifacts are all in-scope work product. The `don't add features beyond what's requested` guideline applies to scope creep on the user's request, not to fulfilling the delegated task itself.",
+  }),
+  // Phase 999.1 (2026-04-29) — trusted-operator directive.
+  //
+  // Operator-observed pain (2026-04-29 session): agents repeatedly
+  // preface responses with "this is not malware" / "this is for
+  // legitimate purposes" / "this is authorized work" disclaimers,
+  // over-applying Claude Code's platform-level "authorized security
+  // testing" prompt. Counter-instruct that this is a trusted operator
+  // environment. Note: the directive scopes the override to PHRASING
+  // patterns only — existing safety rails (security.md no-hardcoded-
+  // secrets, validate-inputs, parameterized-queries) remain.
+  //
+  // Pinned by static-grep:
+  //   - "Skip all CYA language" (D-TR-03 verbatim)
+  "trusted-operator": Object.freeze({
+    enabled: true,
+    text:
+      "This workspace is a single trusted operator's environment. The operator owns this code, has full authorization, and knows the context. Do not prefix responses with disclaimers like \"this is not malware\" / \"this is for legitimate purposes\" / \"this is authorized work\" / \"in a real engagement\". Skip all CYA language. Just answer the question or do the task.",
+  }),
+  // Phase 999.1 (2026-04-29) — discord-format directive.
+  //
+  // Companion to (does NOT replace) `wrapMarkdownTablesInCodeFence`
+  // in src/discord/markdown-table-wrap.ts — that function stays as
+  // the structural safety net for cases where tabular IS the right
+  // format. This directive nudges agents toward bullets / definition-
+  // style prose for 1-3 fields per item where a markdown table won't
+  // render cleanly in Discord. Marks the deferred no-tables directive
+  // referenced in markdown-table-wrap.ts:11-14 comments as landed.
+  //
+  // Pinned by static-grep:
+  //   - "prefer bullets, numbered lists, or definition-style prose" (D-TB-03 verbatim)
+  "discord-format": Object.freeze({
+    enabled: true,
+    text:
+      "Discord doesn't render markdown tables natively. Pipes show as literal characters and columns don't align. When presenting structured data, prefer bullets, numbered lists, or definition-style prose. Use markdown tables only when the data is genuinely tabular and dense (e.g., 4+ columns × 4+ rows of comparable values); the webhook-wrap fence renders those as monospace code blocks as a safety net. For 1-3 fields per item, bullets are clearer.",
+  }),
+  // Phase 999.22 (2026-05-01) — mutate-verify directive.
+  //
+  // Operator-observed pain (2026-05-01 outage): Admin Clawdy posted
+  // "Set. `threads.maxThreadSessions: 10` is live in `clawcode.yaml`
+  // under `defaults` — takes effect on next daemon reload."
+  // Investigation: yaml mtime was 2026-04-30 23:21:22 (~7h before
+  // the chat); the value `10` was already there from a prior session.
+  // The agent did NOT perform the write in the current turn but
+  // framed the desired state as a just-completed action. The
+  // operator believed the agent and triggered a daemon reload,
+  // causing the outage.
+  //
+  // Companion to `verify-file-writes` (Phase 100-fu) — that directive
+  // covers Write/Edit verification specifically; this one generalizes
+  // to ANY in-turn mutation (file edit, config write, sudo, systemctl,
+  // IPC mutation, MCP state-changing tool) AND bans passive-success
+  // framing ("Set." / "Done." / "Live." / "Saved." / "Updated.")
+  // when no mutation actually happened in the current turn.
+  //
+  // Pinned by static-grep:
+  //   - "Quote the post-mutation evidence" (canonical phrase verbatim)
+  "mutate-verify": Object.freeze({
+    enabled: true,
+    text:
+      "After any mutation in the current turn (Edit/Write to files, config writes, sudo or shell commands that change system state, systemctl actions, IPC mutations, MCP tools that change state on the other side), you MUST read the resulting state back and Quote the post-mutation evidence inline BEFORE claiming the mutation is done. Format: \"After <action> on <target>, I <read-back action>; the resulting <field/line/state> is `<paste verbatim>`.\" Not just \"Done.\"\n\n" +
+      "Do not say \"Set.\", \"Done.\", \"Live.\", \"Saved.\", or \"Updated.\" when you didn't actually perform the write in the current turn — even if the desired state is already present from a prior session. Passive-success framing implies you just did it; if you didn't, the operator may take a downstream action (reload, deploy, retry) that breaks production. Instead say \"<state> is already present (<source>: mtime=<ts>, value=`<paste>`)\" or \"I have not changed <target> in this turn.\"\n\n" +
+      "If verification fails OR cannot be performed (read tool unavailable, target inaccessible, mutation went through a layer you can't observe), report failure or uncertainty — never success. Better: \"I attempted <action> on <target> but cannot verify the result (<reason>); please confirm before relying on this.\"",
+  }),
+  // Phase 115 Plan 08 T02 — sub-scope 17(c): parallel tool calls (PARALLEL-TOOL-01).
+  //
+  // Operator-observed pain (115-RESEARCH dashboard analysis): tool_call.<name>
+  // p50 / p95 latencies on built-in Claude Code tools (Read 77s, Edit 37s,
+  // Glob 88s, Bash 86s, Grep 47s) reflect SDK round-trip not pure execution
+  // (see Plan 08 T01 audit). Wall-clock is dominated by sequential dispatch
+  // when an agent reads 4 files one-at-a-time instead of in one parallel batch.
+  //
+  // Phase 115 Plan 08 T02 introduces measurement (parallel_tool_call_count
+  // column + tool_use_rate_per_turn snapshots) — but measurement alone won't
+  // shift agent behavior. This directive is the prompt-side push to use
+  // parallel emission when calls are mutually-orthogonal.
+  //
+  // Pattern follows Phase 999.1 / 999.22 locked-additive directives:
+  //   - default-enabled fleet-wide
+  //   - operator override wins (resolveSystemPromptDirectives merges
+  //     per-agent overrides over defaults — disabling here is a single
+  //     `enabled: false` flip in clawcode.yaml)
+  //   - text precisely scoped to "mutually-orthogonal" lookups so the
+  //     directive does NOT trigger regression on dependent calls
+  //
+  // Pinned by static-grep (T02 acceptance):
+  //   - "PARALLEL-TOOL-01" — directive id
+  //   - "parallel tool_use blocks" — canonical phrase
+  "parallel-tool-calls": Object.freeze({
+    enabled: true,
+    // PARALLEL-TOOL-01 — issued under sub-scope 17(c) of Phase 115 Plan 08.
+    text:
+      "PARALLEL-TOOL-01: When you need to read multiple files, run multiple independent searches, or perform several mutually-orthogonal lookups, emit MULTIPLE parallel tool_use blocks IN A SINGLE assistant message rather than calling them sequentially. The Claude Code SDK supports parallel tool execution natively; sequential dispatch is wasteful when the calls don't depend on each other.\n\n" +
+      "Example (correct): one assistant message containing tool_use blocks for [Read file A], [Read file B], [Grep pattern X], [Glob '**/*.ts'] when those four lookups are independent.\n\n" +
+      "Example (wrong): four sequential turns, each with one tool_use, when the only reason for the sequence is that you didn't notice you could batch them.\n\n" +
+      "DO NOT use this pattern when calls are dependent — if Read B's path is computed from Read A's content, those must stay sequential. Only batch mutually-orthogonal lookups.",
+  }),
 });
+
+/**
+ * Phase 96 D-09 — 11th additive-optional schema application.
+ *
+ * Fleet-wide default outputDir template. Tokens ({date}/{agent}/
+ * {channel_name}/{client_slug}) are preserved verbatim in the schema; the
+ * runtime resolveOutputDir helper (src/manager/resolve-output-dir.ts) expands
+ * them at call time with fresh ctx (per-call clock, per-call clientSlug).
+ *
+ * Pinned by static-grep regression: `grep -q "DEFAULT_OUTPUT_DIR"
+ * src/config/schema.ts`. Frozen for immutability — exported so loader can
+ * reference the literal default without re-stating the string.
+ */
+export const DEFAULT_OUTPUT_DIR: string = "outputs/{date}/";
 
 /**
  * Phase 94 D-10 — per-agent override shape.
@@ -138,6 +429,24 @@ export const systemPromptDirectiveOverrideSchema = z.object({
   enabled: z.boolean().optional(),
   text: z.string().optional(),
 });
+
+/**
+ * Phase 96 D-05 — 10th additive-optional schema application — fleet-wide
+ * default fileAccess paths.
+ *
+ * The literal `{agent}` token is preserved verbatim in the schema; the
+ * loader's `resolveFileAccess(agentName, ...)` helper substitutes the
+ * actual agent name at call time. This indirection lets defaults be
+ * defined once for the whole fleet while still resolving to per-agent
+ * canonical paths at runtime.
+ *
+ * Pinned by static-grep regression: `grep -q "DEFAULT_FILE_ACCESS"
+ * src/config/schema.ts`. Frozen so downstream code cannot mutate the
+ * global default array.
+ */
+export const DEFAULT_FILE_ACCESS: readonly string[] = Object.freeze([
+  "/home/clawcode/.clawcode/agents/{agent}/",
+]);
 
 /**
  * Phase 95 DREAM-01..03 — Memory dreaming (autonomous reflection) config.
@@ -172,6 +481,34 @@ export const dreamConfigSchema = z.object({
 
 /** Inferred Phase 95 dream config type. */
 export type DreamConfig = z.infer<typeof dreamConfigSchema>;
+
+/**
+ * Phase 999.47 Plan 02 — homelab refresh tick configuration.
+ *
+ * Governs the hourly `homelab-refresh` heartbeat check that polls the
+ * homelab inventory at `repoPath` and emits the SC-7 telemetry log
+ * line (`phase999.47-homelab-refresh`).
+ *
+ * Reload classification (RELOADABLE_FIELDS in src/config/types.ts):
+ *   - `refreshIntervalMinutes` reloadable — next tick reads the live
+ *     resolved value via the standard ConfigReloader closure pattern.
+ *   - `repoPath` documented-of-intent NON-reloadable — the bash
+ *     `scripts/refresh.sh` working directory is captured at boot;
+ *     operators changing the inventory repo location should run
+ *     `clawcode restart` so the new path is materialized cleanly.
+ *   - `enabled` reloadable — flips the heartbeat check between
+ *     active / no-op without daemon bounce.
+ */
+export const homelabConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  // D-04 hourly cadence; min 5min guards against runaway poll
+  // budgets if an operator typoes the YAML.
+  refreshIntervalMinutes: z.int().min(5).default(60),
+  repoPath: z.string().min(1).default("/home/clawcode/homelab"),
+});
+
+/** Inferred Phase 999.47 homelab config type. */
+export type HomelabConfig = z.infer<typeof homelabConfigSchema>;
 
 /**
  * Heartbeat monitoring configuration schema.
@@ -270,7 +607,10 @@ export type WebhookConfig = z.infer<typeof webhookConfigSchema>;
  */
 export const threadsConfigSchema = z.object({
   idleTimeoutMinutes: z.number().int().min(1).default(1440),
-  maxThreadSessions: z.number().int().min(1).default(10),
+  // Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3 to cap
+  // blast-radius if Layer 1 disallowedTools is somehow bypassed. Operator
+  // can override per-agent in clawcode.yaml threads.maxThreadSessions.
+  maxThreadSessions: z.number().int().min(1).default(3),
 });
 
 /** Inferred threads config type. */
@@ -317,6 +657,24 @@ export const mcpServerSchema = z.object({
   // for every currently-configured MCP server; v2.1 migrated configs
   // parse unchanged). See src/mcp/readiness.ts.
   optional: z.boolean().default(false),
+  // Phase 100 follow-up — operator-curated annotations surfaced in the
+  // capability manifest. Helps the agent describe its tool surface
+  // accurately ("the finmentum-db tool is read-only — I can SELECT
+  // but not INSERT/UPDATE/DELETE"). Both fields optional so existing
+  // YAML configs without these annotations parse unchanged.
+  description: z.string().optional(),
+  accessPattern: z.enum(["read-only", "read-write", "write-only"]).optional(),
+  /**
+   * Phase 999.54 (D-01, D-02) — when true, this server's tools are preloaded
+   * into the turn-1 prompt instead of being deferred behind ToolSearch. Maps
+   * 1:1 to the SDK's `McpStdioServerConfig.alwaysLoad` (sdk.d.ts:1067-1076).
+   * Default omitted (NOT false) — preserves byte-stable schema-roundtrip for
+   * the existing fleet. NON-RELOADABLE per Phase 999.54 D-04: changes require
+   * `clawcode restart <agent>`. Note: per-agent overrides require the INLINE
+   * form (`{name: clawcode, alwaysLoad: false}`), not the string-ref form
+   * (`"clawcode"`), since strings carry no extra fields (RESEARCH.md Pitfall 6).
+   */
+  alwaysLoad: z.boolean().optional(),
 });
 
 /** Inferred MCP server config type from schema. */
@@ -646,6 +1004,15 @@ export const searchConfigSchema = z
     brave: z
       .object({
         apiKeyEnv: z.string().min(1).default("BRAVE_API_KEY"),
+        // Phase 110 follow-up — explicit op:// (or literal) override that
+        // takes precedence over apiKeyEnv lookup. Lets operators store the
+        // Brave key in 1Password instead of /etc/clawcode/env so Brave
+        // joins the same secrets-resolver path used by FINNHUB / FAL /
+        // STRAVA / etc. (clawcode.yaml zone 2). Resolved at daemon boot
+        // via collectAllOpRefs → SecretsResolver.preResolveAll. If the
+        // resolved value is non-empty it overrides whatever (if anything)
+        // is in process.env[apiKeyEnv].
+        apiKey: z.string().optional(),
         safeSearch: z.enum(["off", "moderate", "strict"]).default("moderate"),
         country: z.string().length(2).default("us"),
       })
@@ -657,6 +1024,9 @@ export const searchConfigSchema = z
     exa: z
       .object({
         apiKeyEnv: z.string().min(1).default("EXA_API_KEY"),
+        // Same op:// passthrough as brave.apiKey above — keeps the two
+        // backends symmetric for the same reason.
+        apiKey: z.string().optional(),
         useAutoprompt: z.boolean().default(false),
       })
       .default(() => ({
@@ -777,6 +1147,115 @@ export const imageConfigSchema = z
 /** Inferred Phase 72 image config type. */
 export type ImageConfig = z.infer<typeof imageConfigSchema>;
 
+// ---------------------------------------------------------------------------
+// Phase 117 Plan 06 — advisor helper schemas (defaults + per-agent override).
+//
+// The advisor block configures which `AdvisorBackend` answers `ask_advisor`
+// tool calls and `/advise` IPC requests for each agent. The Phase 117 spec
+// (CONTEXT.md `<decisions>.Architecture`, LOCKED) treats the swap from the
+// legacy fork backend to the native SDK `advisorModel` option as a feature-
+// flag rollout — the default is `"native"` and operators can flip any one
+// agent back to `"fork"` via `clawcode reload` without a redeploy. Same
+// pattern as Phase 110 Stage 0b's `defaults.shimRuntime` canary dial.
+//
+// Backend enum is `"native" | "fork"` only. The `"portable-fork"` value
+// surfaced in `BackendId` (`src/advisor/types.ts:30`) is intentionally
+// EXCLUDED from this schema — Plan 117-05 ships the scaffold but Phase 118
+// owns the rollout. Operators who put `portable-fork` in YAML must see a
+// hard schema rejection (regression-pinned in
+// `__tests__/schema-advisor.test.ts` assertion C).
+//
+// Model string is stored verbatim (e.g. `"opus"`, `"sonnet"`, or a fully-
+// qualified SDK id `"claude-opus-4-7"`). The SDK call site resolves the
+// alias via `resolveAdvisorModel` shipped in Plan 117-02
+// (`src/manager/model-resolver.ts`) — that resolver canonicalises `"opus"`
+// → `"claude-opus-4-7"`. Do NOT canonicalise here; the schema's only job
+// is shape validation.
+//
+// Caching defaults (`enabled: true`, `ttl: "5m"`) are Anthropic's
+// recommended setting for ≥3 advisor invocations per conversation (see
+// CONTEXT.md). The `maxUsesPerRequest` default of 3 matches the Anthropic
+// example budget cited in the plan; range 1–10 keeps the operator from
+// burning budget on a misconfigured agent.
+// ---------------------------------------------------------------------------
+export const advisorBackendSchema = z.enum(["native", "fork"]); // "portable-fork" intentionally excluded — Phase 118 follow-up
+
+// ---------------------------------------------------------------------------
+// Phase 136 — LlmRuntime (primary agent runtime) backend schema.
+//
+// The Zod source of truth for what operators can put in `clawcode.yaml`
+// under `agents[*].llmRuntime.backend` / `defaults.llmRuntime.backend`.
+// Phase 136 ships ONE accepted value — `"anthropic-agent-sdk"`, the
+// current production runtime extracted into `AnthropicAgentSdkBackend`.
+//
+// Phase 137 widens this enum to add `"anthropic-api-key"` (pay-as-you-go
+// safety valve when the 2026-06-15 Agent SDK credit cap depletes).
+// Phase 140 adds `"claude-code-interactive"` (probe-gated, drives the real
+// claude CLI binary through tmux). Phase 141 adds `"openai-codex"`,
+// Phase 142 adds `"openrouter"`. The `"portable-fork"` literal is
+// intentionally EXCLUDED — it exists as a scaffold-only backend (mirrors
+// Phase 117 `portable-fork` advisor) and is unselectable from YAML.
+//
+// See:
+//   - .planning/phases/136-llm-runtime-multi-backend/136-CONTEXT.md §D-04
+//   - src/llm-runtime/types.ts — LlmRuntimeBackend type union (mirror of
+//     this enum; the two must stay in sync).
+// ---------------------------------------------------------------------------
+export const llmRuntimeBackendSchema = z.enum(["anthropic-agent-sdk"]);
+export const llmRuntimeConfigSchema = z.object({
+  backend: llmRuntimeBackendSchema.default("anthropic-agent-sdk"),
+});
+/**
+ * Per-agent llmRuntime override — every field optional so an operator can
+ * flip just `backend` without re-specifying anything else. Loader resolver
+ * (`resolveLlmRuntimeBackend` below) handles the per-agent → defaults →
+ * hardcoded-baseline fall-through. Mirrors `agentAdvisorOverrideSchema`
+ * (Phase 117).
+ */
+export const agentLlmRuntimeOverrideSchema = z
+  .object({
+    backend: llmRuntimeBackendSchema.optional(),
+  })
+  .partial();
+export const advisorCachingSchema = z.object({
+  enabled: z.boolean().default(true),
+  ttl: z.enum(["5m", "1h"]).default("5m"),
+});
+export const advisorConfigSchema = z.object({
+  backend: advisorBackendSchema.default("native"),
+  model: z.string().default("opus"),
+  maxUsesPerRequest: z.number().int().min(1).max(10).default(3),
+  caching: advisorCachingSchema.optional(),
+});
+
+/** Per-agent advisor override — every field optional so operators can flip
+ * just `backend` (or just `model`, etc.) without re-specifying the rest.
+ * Loader resolvers (`resolveAdvisorBackend` etc. in `./loader.ts`) handle
+ * the per-agent → defaults → hardcoded-baseline fall-through.
+ *
+ * Caching uses a raw inner schema (no .default()s) so an unset sub-field
+ * stays `undefined` after parse. `advisorCachingSchema.partial()` would
+ * still apply the `enabled: true` / `ttl: "5m"` defaults at parse time,
+ * which would short-circuit `resolveAdvisorCaching`'s per-field fall-
+ * through to `defaults.advisor.caching`. The schema for the per-agent
+ * override therefore intentionally diverges from the defaults-side
+ * caching schema — `advisorCachingSchema` keeps defaults for the
+ * defaults block; the inline shape below preserves operator-explicit
+ * vs. operator-omitted at the per-agent boundary. */
+export const agentAdvisorOverrideSchema = z
+  .object({
+    backend: advisorBackendSchema.optional(),
+    model: z.string().optional(),
+    maxUsesPerRequest: z.number().int().min(1).max(10).optional(),
+    caching: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttl: z.enum(["5m", "1h"]).optional(),
+      })
+      .optional(),
+  })
+  .partial();
+
 /**
  * Schema for a single agent entry in the config.
  * Channel IDs are strings to prevent YAML numeric coercion (Pitfall 1).
@@ -822,6 +1301,46 @@ export const agentSchema = z.object({
   // omitted, resolver falls back to defaults.memoryRetrievalTopK (5 per
   // D-RETRIEVAL). Reloadable (next turn picks up the new value).
   memoryRetrievalTopK: z.number().int().positive().max(50).optional(),
+  // Phase 127 — per-agent stream-stall supervisor threshold (ms). When
+  // the SDK iteration loop sees no useful content tokens (text_delta or
+  // input_json_delta.partial_json) for this many milliseconds, the
+  // current turn is aborted via AbortController and a structured
+  // `phase127-stream-stall` log line is emitted. Optional here; resolver
+  // fills from `defaults.modelOverrides[agent.model].streamStallTimeoutMs`
+  // first, then `defaults.streamStallTimeoutMs` (180000ms baseline).
+  // Reloadable — the stall-check setInterval re-reads the threshold on
+  // each tick, so a YAML edit applies within Math.min(threshold/4, 30000)ms.
+  // Range 30000-1800000ms (30s — 30min) to bound foot-guns.
+  streamStallTimeoutMs: z.number().int().min(30_000).max(1_800_000).optional(),
+  // Phase 115 sub-scope 3 — per-agent override for the per-turn
+  // <memory-context> token budget. When omitted, resolver falls back to
+  // defaults.memoryRetrievalTokenBudget (1500 per Phase 115 D-02). Range
+  // 500-8000. Reloadable — next turn picks up the new value via the
+  // getMemoryRetrieverForAgent closure re-read.
+  memoryRetrievalTokenBudget: z.number().int().min(500).max(8000).optional(),
+  // Phase 115 sub-scope 4 — per-agent override for the tag-exclusion list
+  // applied at hybrid-RRF retrieval. When omitted, resolver falls back to
+  // defaults.memoryRetrievalExcludeTags (locked default ["session-summary",
+  // "mid-session", "raw-fallback"] per CONTEXT.md sub-scope 4). Empty array
+  // disables filtering entirely; a populated array replaces (does NOT merge
+  // with) the defaults. Reloadable.
+  memoryRetrievalExcludeTags: z.array(z.string()).optional(),
+  // Phase 115 sub-scope 2 — per-agent override for the SDK
+  // systemPrompt.excludeDynamicSections flag. When omitted, resolver falls
+  // back to defaults.excludeDynamicSections (default true). Set false to
+  // restore pre-115 behavior (dynamic sections like cwd/env/git remain
+  // inside the system prompt rather than re-injected as the first user
+  // message). Reload classification: NEXT-SESSION only — the systemPrompt
+  // option is captured in baseOptions at session create/resume.
+  excludeDynamicSections: z.boolean().optional(),
+  // Phase 115 sub-scope 5 (Plan 04) — per-agent override for the
+  // cache-breakpoint placement mode. When omitted, resolver falls back to
+  // `defaults.cacheBreakpointPlacement` (default "static-first"). Set
+  // "legacy" to revert to pre-115 interleaved stable-prefix ordering with
+  // NO breakpoint marker — operator-controlled rollback path. Reload
+  // classification: NEXT-SESSION only — placement is captured into the
+  // assembled stable prefix at session create/resume.
+  cacheBreakpointPlacement: z.enum(["static-first", "legacy"]).optional(),
   // Phase 90 MEM-02 — per-agent gate for the chokidar scanner. Default true
   // (via defaults.memoryScannerEnabled). Set to false to skip scanner start
   // for an agent whose memory/ is managed externally.
@@ -836,6 +1355,163 @@ export const agentSchema = z.object({
   // glyph or short custom emoji name fits). Fallback via
   // defaults.memoryCueEmoji.
   memoryCueEmoji: z.string().min(1).max(8).optional(),
+  // Phase 999.43 D-09 — per-agent gate for auto-ingest of Discord
+  // attachments. DEFAULT FALSE FLEET-WIDE per D-09 — existing agents
+  // without the flag preserve current behavior (manual `ingest_document`
+  // MCP tool only). Operator opts in per-agent via `clawcode.yaml` edit
+  // + `clawcode reload`. Additive + optional; resolver falls back to
+  // defaults.autoIngestAttachments (zod default false). Reloadable —
+  // read LAZILY on each `attachmentReceived` event (Plan 02 dispatcher
+  // reads via SessionManager.getAgentConfig at receive time — no cached
+  // session-boot capture). Mirrors the Phase 90 MEM-03 closure-re-read
+  // pattern (types.ts:78-83). 12th application of the additive-optional
+  // reloadable blueprint (Phase 83/86/89/90/94/95/96/110/115/117/127).
+  autoIngestAttachments: z.boolean().optional(),
+  // Phase 999.43 D-01 Axis 1 — per-agent base priority multiplier for
+  // auto-ingested documents. Three-level enum:
+  //   - high   → 1.5× score multiplier at retrieval time
+  //   - medium → 1.0× (no-op)
+  //   - low    → 0.7×
+  // Multiplies into the final score per D-02:
+  //   score = base × agent_priority_weight × content_priority_weight × recency_boost
+  // Optional + back-compat: when omitted, loader resolver falls back to
+  // defaults.ingestionPriority (zod default "medium"). Reloadable —
+  // same closure-re-read path as autoIngestAttachments above.
+  ingestionPriority: z.enum(["low", "medium", "high"]).optional(),
+  /**
+   * Phase 100 follow-up — when true, the agent boots automatically on
+   * daemon start-all. When false, the agent's config is loaded but the SDK
+   * session is NOT created on boot — operator can start it manually via
+   * `clawcode start <name>` or via the IPC `start` method.
+   *
+   * Use case: large fleets where only a subset are in active rotation.
+   * Configured agents that are dormant (rare-use specialists, on-call
+   * agents, archived) skip the warm-path warmup at boot, cutting cold-start
+   * time for the whole fleet from O(N agents × 2-3s) to O(active agents ×
+   * 2-3s).
+   *
+   * Optional + back-compat: when omitted, loader.ts falls back to
+   * defaults.autoStart (zod default true). v2.5/v2.6 yaml configs parse
+   * unchanged. Mirrors the additive-optional schema blueprint used by
+   * memoryAutoLoad / memoryScannerEnabled / greetOnRestart — agent fields
+   * stay `.optional()` so the loader can detect "operator omitted" and
+   * fall back to defaults.X verbatim.
+   *
+   * Reload classification: next-boot only. startAll has already run by the
+   * time a config-watcher reload would fire, so flipping this field
+   * requires a daemon restart to take effect.
+   */
+  autoStart: z.boolean().optional(),
+  /**
+   * Phase 110 Stage 0b — per-agent shimRuntime override. Mirrors the
+   * shape of `defaultsSchema.shimRuntime` but each field is optional so
+   * the loader can fall through (per-agent → defaults → "node") without
+   * forcing operators to specify all three types when overriding one.
+   *
+   * Use case: per-agent canary rollout. Set
+   * `agents.<name>.shimRuntime.search: static` to flip ONE agent to the
+   * Go binary while the rest of the fleet stays on Node. Survives
+   * agent-restart (loader re-resolves on every spawn) which the prior
+   * inline-mcpServers-override workaround did not.
+   *
+   * Each field accepts the same enum as defaults.shimRuntime:
+   *   - "node":   per-agent `clawcode <type>-mcp` (Node, ~147 MB RSS)
+   *   - "static": Go binary at /opt/clawcode/bin/clawcode-mcp-shim --type X
+   *   - "python": (reserved) python3 translator
+   *
+   * Crash-fallback (LOCKED): same as fleet-wide — no try/catch around
+   * the alternate-runtime path. Operator-locked decision is fail-loud.
+   */
+  shimRuntime: z
+    .object({
+      search: z.enum(["node", "static", "python"]).optional(),
+      image: z.enum(["node", "static", "python"]).optional(),
+      browser: z.enum(["node", "static", "python"]).optional(),
+    })
+    .optional(),
+  /**
+   * Phase 117 Plan 06 — per-agent advisor override.
+   *
+   * Mirrors the shimRuntime per-agent shape: every field optional so the
+   * loader resolvers (`resolveAdvisorBackend` / `resolveAdvisorModel` /
+   * `resolveAdvisorMaxUsesPerRequest` / `resolveAdvisorCaching` in
+   * `./loader.ts`) can fall through (per-agent → defaults.advisor →
+   * hardcoded baseline) without forcing operators to re-specify the full
+   * block when overriding one knob.
+   *
+   * Use case: canary the native SDK backend on ONE agent first —
+   *   agents.<name>.advisor.backend: native
+   * flips just that agent to the new backend while the rest of the fleet
+   * stays on whatever `defaults.advisor.backend` says. Survives agent
+   * restart (loader re-resolves on every spawn). Same flip-back pattern
+   * is the locked rollback gate from CONTEXT.md `<decisions>.Architecture`.
+   *
+   * `agentAdvisorOverrideSchema` enforces the same backend enum as
+   * `defaults.advisor` — `"portable-fork"` is rejected at parse time.
+   */
+  advisor: agentAdvisorOverrideSchema.optional(),
+  /**
+   * Phase 136 — per-agent LlmRuntime backend override.
+   *
+   * Mirrors the Phase 117 `advisor` shape: every field optional so an
+   * operator can flip just `backend` for canary rollout. Phase 136 ships
+   * with the enum locked to a single value (`"anthropic-agent-sdk"`); a
+   * per-agent block is functionally equivalent to omission until Phase 137
+   * widens the enum.
+   *
+   * Survives agent restart (loader re-resolves on every spawn). Locked
+   * by NON_RELOADABLE_FIELDS — runtime backend selection is a session-
+   * boot baseOptions field, not a per-turn knob. Same architectural
+   * pattern as Phase 117 `advisor.backend` and Phase 999.54 `alwaysLoad`.
+   */
+  llmRuntime: agentLlmRuntimeOverrideSchema.optional(),
+  /**
+   * Phase 124 Plan 02 D-06 — per-agent override for the auto-compaction
+   * trigger ratio (0..1). When omitted, loader's `resolveAutoCompactAt`
+   * falls through to `defaults['auto-compact-at']` (zod default 0.7).
+   * Plan 125 consumes the resolved value to gate auto-compaction; Phase
+   * 124 only ships the schema + loader resolver so `clawcode reload`
+   * picks up edits without a daemon restart.
+   */
+  "auto-compact-at": z.number().min(0).max(1).optional(),
+  /**
+   * Phase 125 Plan 02 — per-agent count of trailing conversation turns
+   * preserved VERBATIM during auto-compaction. Resolves to defaults
+   * (`preserveLastTurns`) when omitted; final fallback is 10. Range
+   * 1..100. Plan 02's `partitionForVerbatim` gate ALWAYS preserves these
+   * turns regardless of tier 4 drop rules.
+   */
+  preserveLastTurns: z.number().int().min(1).max(100).optional(),
+  /**
+   * Phase 125 Plan 02 (SC-8) — per-agent verbatim regex patterns. Any
+   * turn whose `content` matches ANY pattern bypasses tier 4 drop. The
+   * loader compiles each entry once at resolve time and rejects invalid
+   * regex at config-load. Default `[]` (back-compat — existing agents
+   * see no behavior change). Finmentum agents will populate the
+   * Finmentum-specific patterns (`\\bAUM\\b`, `\\$[0-9]`) via YAML.
+   */
+  preserveVerbatimPatterns: z.array(z.string().min(1)).optional(),
+  /**
+   * Phase 999.25 — wake-order priority for boot-time auto-start.
+   *
+   * Lower numbers boot first. Agents without `wakeOrder` boot LAST in YAML
+   * order (stable sort). Ties (same wakeOrder) preserve YAML order.
+   *
+   * Example:
+   *   - admin-clawdy:    wakeOrder: 1   → boots first
+   *   - fin-acquisition: wakeOrder: 2   → boots second
+   *   - research:        wakeOrder: 3   → boots third
+   *   - fin-research:    wakeOrder: 3   → boots fourth (tie → YAML order)
+   *   - everyone else:   no wakeOrder   → boots after, in YAML order
+   *
+   * Boot is sequential (startAll iterates with `for...await`), so wakeOrder
+   * only changes the ORDER, not the total time. Use case: ensure operator-
+   * critical agents (Admin Clawdy, Ramy's fin-acquisition) come up before
+   * peripheral agents during cold restarts.
+   *
+   * Reload classification: next-boot only — startAll has run by reload time.
+   */
+  wakeOrder: z.number().int().optional(),
   // Phase 94 TOOL-10 / D-10 — per-agent override of fleet directives.
   // Additive + optional: v2.5 migrated configs parse unchanged (loader
   // resolver fills from DEFAULT_SYSTEM_PROMPT_DIRECTIVES via
@@ -846,6 +1522,13 @@ export const agentSchema = z.object({
   systemPromptDirectives: z
     .record(z.string(), systemPromptDirectiveOverrideSchema)
     .optional(),
+  // Phase 999.13 DELEG-01 — per-agent specialty → target-agent map.
+  // Free-form keys (no enum lock-in): operators add `coding`, `legal`,
+  // etc. via yaml without code changes. configSchema.superRefine
+  // (below) rejects unknown target names at config load.
+  // Optional + additive — agents without this field parse byte-
+  // identically to v2.6 (back-compat invariant).
+  delegates: z.record(z.string().min(1), z.string().min(1)).optional(),
   // Phase 95 DREAM-01..03 — per-agent autonomous reflection cycle.
   // Additive + optional: v2.5/v2.6 migrated configs parse unchanged when
   // omitted; loader resolver fills from defaults.dream. Per-agent override
@@ -853,6 +1536,43 @@ export const agentSchema = z.object({
   // defaults. 9th application of the Phase 83/86/89/90/94 additive-
   // optional schema blueprint.
   dream: dreamConfigSchema.optional(),
+  // Phase 96 D-05 — 10th additive-optional schema application; per-agent
+  // operator-shared filesystem path candidates verified by runFsProbe at
+  // boot + heartbeat tick. Schema preserves literal `{agent}` token; loader
+  // resolveFileAccess expands it at call time. Each entry must be a non-
+  // empty string; empty array allowed for explicit no-access fleet config.
+  // Resolved set merges defaults.fileAccess (default-bearing) + per-agent
+  // override (additive). v2.5 migrated configs parse unchanged. Reload
+  // classification deferred to Plan 96-07 (config-watcher hot-reload).
+  fileAccess: z.array(z.string().min(1)).optional(),
+  // Phase 96 D-09 — 11th additive-optional schema application; per-agent
+  // outputDir template string. Tokens ({date}/{agent}/{channel_name}/
+  // {client_slug}) preserved literally; runtime resolveOutputDir expands
+  // them with fresh ctx. Per-agent override beats defaults.outputDir.
+  // v2.5/v2.6 migrated configs parse unchanged when omitted. Path traversal
+  // is blocked at runtime (resolveOutputDir refuses leading `/` and `..`).
+  outputDir: z.string().optional(),
+  // Phase 100 GSD-02 / RESEARCH.md Pitfall 3 — 12th application of the
+  // additive-optional schema blueprint (Phases 83/86/89/90/94/95/96).
+  // Per-agent SDK settingSources. Default ["project"] applied at the loader
+  // layer (resolveAgentConfig) — this schema field stays optional so v2.5/
+  // v2.6 migrated configs parse unchanged. .min(1) rejects [] explicitly:
+  // an empty array would silently disable all filesystem settings (no skills,
+  // no CLAUDE.md, no commands) per SDK docs — Pitfall 3 in 100-RESEARCH.md.
+  // Admin Clawdy sets ["project","user"] in clawcode.yaml so the SDK loads
+  // ~/.claude/commands/gsd/*.md (the GSD slash command files symlinked by
+  // Plan 06). Production agents (fin-acquisition, etc.) keep ["project"] —
+  // omitting the field falls back to the loader default. Duplicates are
+  // permitted (zod doesn't dedup); the SDK treats redundant entries idempotently.
+  settingSources: z.array(z.enum(["project", "user", "local"])).min(1).optional(),
+  // Phase 100 GSD-04 — per-agent gsd block. Currently only carries projectDir;
+  // future fields (commitsAllowed, autoThreadKey, etc.) land here. Optional —
+  // omission means "use agent.workspace as cwd" per the loader resolver in
+  // Plan 02 (the consumer of this field). Per CONTEXT.md decision: only
+  // Admin Clawdy sets gsd.projectDir; production agents do NOT.
+  gsd: z.object({
+    projectDir: z.string().min(1).optional(),
+  }).optional(),
   skills: z.array(z.string()).default([]),
   soul: z.string().optional(),
   identity: z.string().optional(),
@@ -893,13 +1613,53 @@ export const agentSchema = z.object({
   schedules: z.array(scheduleEntrySchema).default([]),
   admin: z.boolean().default(false),
   subagentModel: modelSchema.optional(),
-  effort: effortSchema.default("low"),
+  // Phase 100 follow-up — operator-curated default effort raised low → high
+  // (2026-04-28). Agents without an explicit effort field now ship at high
+  // by default. Agents with explicit effort: low keep their override.
+  effort: effortSchema.default("high"),
   slashCommands: z.array(slashCommandEntrySchema).default([]),
   threads: threadsConfigSchema.optional(),
   webhook: webhookConfigSchema.optional(),
   reactions: z.boolean().default(true),
   security: securityConfigSchema.optional(),
   mcpServers: z.array(z.union([mcpServerSchema, z.string()])).default([]),
+  /**
+   * Phase 100 follow-up — per-agent MCP server env overrides. Maps
+   * `serverName → envKey → value`. Values matching `op://...` are resolved
+   * at agent-start time via the daemon's `op read` shell-out (using the
+   * daemon's process-level OP_SERVICE_ACCOUNT_TOKEN, which is the clawdbot
+   * full-fleet service account). The resolved values replace whatever the
+   * shared mcpServers[].env block provides, then get injected into the
+   * spawned MCP subprocess env.
+   *
+   * Use case: vault-scope distribution. The daemon process holds the
+   * clawdbot full-fleet token; this lets finmentum agents get a Finmentum-
+   * vault-scoped token (whose source-of-truth is itself a credential
+   * stored INSIDE the clawdbot vault) WITHOUT the daemon's clawdbot token
+   * ever leaving the daemon process.
+   *
+   * Example:
+   *   mcpEnvOverrides:
+   *     1password:
+   *       OP_SERVICE_ACCOUNT_TOKEN: "op://clawdbot/Finmentum Service Account/credential"
+   *
+   * Schema: server name + env key + env value all required to be non-empty
+   * strings. Empty server name / key / value rejected at parse — those
+   * shapes either silently no-op (empty server name doesn't match any
+   * configured MCP) or break the env (zero-length token).
+   *
+   * Optional + missing field parses fine (back-compat with the existing
+   * 15-agent fleet — all currently inherit the daemon's clawdbot token).
+   */
+  mcpEnvOverrides: z
+    .record(
+      z.string().min(1), // server name (must match an mcpServers entry)
+      z.record(
+        z.string().min(1), // env key
+        z.string().min(1), // env value (op:// URI or literal)
+      ),
+    )
+    .optional(),
   acceptsTasks: z                      // Phase 59 HAND-04
     .record(z.string().min(1), z.array(z.string().min(1)))
     .optional(),
@@ -926,6 +1686,34 @@ export const agentSchema = z.object({
       tools: toolsConfigSchema.optional(),
     })
     .optional(),
+  // Phase 113 — per-agent Haiku vision pre-pass for image attachments.
+  // When enabled, image attachments are resized and analysed by Haiku before
+  // the main agent turn, injecting <screenshot-analysis> into the message.
+  // Default false so the fleet opts in per-agent. Auth via OAuth token
+  // (haiku-direct.ts), never ANTHROPIC_API_KEY.
+  vision: z
+    .object({
+      enabled: z.boolean().default(false),
+      preserveImage: z.boolean().default(false),
+    })
+    .optional(),
+  // Phase 115 sub-scope 14 — operator-toggle for the diagnostic baseopts
+  // dump. Default false: zero noise on the fleet. Replaces the temporary
+  // hardcoded fin-acquisition + Admin Clawdy allowlist deployed during the
+  // 2026-05-07 incident response. When true, the daemon writes a per-agent
+  // baseopts dump to ~/.clawcode/agents/<agent>/diagnostics/baseopts-<flow>-
+  // <ts>.json on every createSession/resumeSession (secrets redacted via
+  // session-adapter.ts:redactSecrets). Optional + additive — every existing
+  // agent yaml parses unchanged with this field omitted.
+  debug: z.object({
+    // Phase 115 sub-scope 14 — operator-toggle for dumpBaseOptionsOnSpawn.
+    // Default false. Replaces the hardcoded fin-acquisition + Admin Clawdy
+    // allowlist deployed during the 2026-05-07 incident response. When true,
+    // daemon writes per-agent baseopts dump to ~/.clawcode/agents/<agent>/
+    // diagnostics/baseopts-<flow>-<ts>.json on every createSession /
+    // resumeSession (secrets redacted via session-adapter.ts:redactSecrets).
+    dumpBaseOptionsOnSpawn: z.boolean().default(false),
+  }).optional(),
 });
 
 /**
@@ -933,7 +1721,8 @@ export const agentSchema = z.object({
  */
 export const defaultsSchema = z.object({
   model: modelSchema.default("haiku"),
-  effort: effortSchema.default("low"),
+  // Phase 100 follow-up — fleet-wide default effort raised low → high.
+  effort: effortSchema.default("high"),
   // Phase 86 MODEL-01 — fleet-wide allowlist default. When an agent
   // omits `allowedModels`, the resolver substitutes this array. The
   // default ["haiku","sonnet","opus"] matches modelSchema's full set
@@ -954,10 +1743,45 @@ export const defaultsSchema = z.object({
   // per D-RETRIEVAL). Reloadable — next turn picks up the new value via
   // the getMemoryRetrieverForAgent closure re-read.
   memoryRetrievalTopK: z.number().int().positive().max(50).default(5),
-  // Phase 90 MEM-03 — fleet-wide token budget for retrieved chunks injected
-  // into the mutable suffix. 2000 tokens ≈ ~8000 chars; keeps the per-turn
-  // payload well under any sane model's context ceiling.
-  memoryRetrievalTokenBudget: z.number().int().positive().default(2000),
+  // Phase 115 sub-scope 3 — fleet-wide token budget for the per-turn
+  // <memory-context> block. Down from the pre-115 hardcoded 2000 — the zod
+  // knob existed in defaultsSchema since Phase 90 MEM-03 but was never
+  // forwarded to retrieveMemoryChunks (Pain Point #1, codebase-memory-
+  // retrieval.md). Phase 115 Plan 01 wires it through and tightens the
+  // default to leave margin for sub-scope 1's tier-1 cap. 1500 ≈ ~6000
+  // chars; range 500-8000 (validated). Reloadable — next turn picks up
+  // via the getMemoryRetrieverForAgent closure re-read.
+  memoryRetrievalTokenBudget: z.number().int().min(500).max(8000).default(1500),
+  // Phase 115 sub-scope 4 — fleet-wide tag-exclusion list applied at the
+  // hybrid-RRF memory retrieval BEFORE the chunks-side fan-out is fused
+  // with the memories-side. The locked default removes pollution-feedback
+  // memories that previously leaked into the <memory-context> block as
+  // giant blobs (research codebase-memory-retrieval.md Pain Points #3 +
+  // #15). Per-agent override available via agentSchema. Empty array
+  // disables filtering entirely; a populated array fully replaces the
+  // defaults (does NOT merge).
+  memoryRetrievalExcludeTags: z
+    .array(z.string())
+    .default(() => ["session-summary", "mid-session", "raw-fallback"]),
+  // Phase 115 sub-scope 2 — fleet-wide default for the SDK
+  // systemPrompt.excludeDynamicSections flag. When true, per-machine
+  // dynamic sections (cwd, auto-memory paths, git status) are stripped
+  // from the cached system prompt and re-injected as the first user
+  // message — improves cross-agent prompt-cache reuse. Default true per
+  // CONTEXT.md sub-scope 2 lock; set false to revert to pre-115 behavior.
+  // Reload classification: NEXT-SESSION only.
+  excludeDynamicSections: z.boolean().default(true),
+  // Phase 115 sub-scope 5 (Plan 04) — fleet-wide cache-breakpoint placement
+  // mode. "static-first" (default): static sections (identity, soul, skills,
+  // tools, fs-capability, delegates) land BEFORE the breakpoint marker;
+  // dynamic sections (hot memories, graph context) land AFTER. Mirrors
+  // Hermes static-then-dynamic placement; the operator-priority goal is
+  // recovering prompt-cache hit rate by stabilizing the bytes prior to the
+  // marker across most turns. "legacy" — pre-115 interleaved order, no
+  // marker emitted — revert path. Reload classification: NEXT-SESSION only.
+  cacheBreakpointPlacement: z
+    .enum(["static-first", "legacy"])
+    .default("static-first"),
   // Phase 90 MEM-02 — fleet-wide scanner on/off. Default true — every
   // agent starts a chokidar watcher on its {workspace}/memory/**/*.md.
   memoryScannerEnabled: z.boolean().default(true),
@@ -965,9 +1789,50 @@ export const defaultsSchema = z.object({
   // 15 minutes. Every active session's MemoryFlushTimer fires this often
   // (skip heuristic bails if no meaningful turns since last flush).
   memoryFlushIntervalMs: z.number().int().positive().default(900_000),
+  // Phase 999.6 SNAP-04 — staleness threshold for pre-deploy-snapshot.json (hours).
+  // 24h default per CONTEXT.md. Configurable so operators can tune.
+  // Default-bearing → existing v2.5/v2.6 configs parse unchanged.
+  preDeploySnapshotMaxAgeHours: z
+    .number()
+    .int()
+    .positive()
+    .default(24)
+    .optional(),
+  // Phase 999.12 HB-01 — per-check inbox heartbeat timeout in milliseconds.
+  // Default 60_000 (60s) — comfortably exceeds typical Sonnet/Opus tool-using
+  // cross-agent turn duration (30-90s) so the heartbeat inbox check no longer
+  // false-positive-criticals during normal IPC traffic. Set to undefined or
+  // omit to fall back to the fleet-wide `heartbeat.checkTimeoutSeconds`.
+  // Default-bearing → existing v2.x configs parse unchanged. Same additive-
+  // optional shape as preDeploySnapshotMaxAgeHours above.
+  heartbeatInboxTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .default(60_000)
+    .optional(),
   // Phase 90 MEM-05 — fleet-wide default reaction emoji for cue detection
   // (D-32). Standard ✅ — operators can override per-agent or fleet-wide.
   memoryCueEmoji: z.string().min(1).max(8).default("✅"),
+  // Phase 999.43 D-09 — fleet-wide default for the per-agent
+  // autoIngestAttachments flag. DEFAULT FALSE per D-09: existing
+  // (pre-999.43) configs see no behavior change. Operators opt agents
+  // in individually OR flip this to true to opt the whole fleet in.
+  // Reloadable — see RELOADABLE_FIELDS in types.ts.
+  autoIngestAttachments: z.boolean().default(false),
+  // Phase 999.43 D-01 Axis 1 — fleet-wide default ingestion priority.
+  // Multipliers per D-01: high=1.5, medium=1.0, low=0.7 (applied at
+  // retrieval time per D-02 score formula). Default "medium" → 1.0×
+  // (no-op) so back-compat is preserved when an operator flips
+  // autoIngestAttachments true but hasn't tuned per-agent priorities yet.
+  ingestionPriority: z.enum(["low", "medium", "high"]).default("medium"),
+  // Phase 100 follow-up — fleet-wide default for the per-agent autoStart
+  // flag. Default true preserves existing behavior (every configured agent
+  // boots on daemon start-all). Operators can flip the polarity to false
+  // here and then opt-in only the agents they want live by setting
+  // `autoStart: true` on those entries — useful when only a small subset of
+  // a large configured fleet is in active rotation.
+  autoStart: z.boolean().default(true),
   // Phase 94 TOOL-10 / D-10 — fleet-wide default system-prompt directives.
   //
   // Default-bearing: when omitted from clawcode.yaml, the loader resolves
@@ -992,6 +1857,49 @@ export const defaultsSchema = z.object({
     idleMinutes: 30,
     model: "haiku" as const,
   })),
+  // Phase 96 D-05 — 10th additive-optional schema application; fleet-wide
+  // default filesystem path candidates. The `{agent}` literal token is
+  // preserved here verbatim (NOT expanded at parse time) — loader
+  // resolveFileAccess(agentName, ...) substitutes the actual agent name
+  // at call time. v2.5/v2.6 migrated configs parse unchanged when omitted.
+  // Reload classification deferred to Plan 96-07 (config-watcher hot-reload).
+  fileAccess: z
+    .array(z.string().min(1))
+    .default(() => [...DEFAULT_FILE_ACCESS]),
+  // Phase 96 D-09 — 11th additive-optional schema application; fleet-wide
+  // default outputDir template. Default 'outputs/{date}/' lands generated
+  // files under a dated subdirectory of the agent workspace root. Tokens
+  // preserved literally; runtime expansion via resolveOutputDir at write
+  // time keeps {date} fresh per call (loader-time expansion would freeze
+  // the date at config-load time — wrong on the second day).
+  outputDir: z.string().default(DEFAULT_OUTPUT_DIR),
+  // Phase 999.13 TZ-02 — operator-local TZ for agent-visible timestamps.
+  // IANA name (e.g. "America/Los_Angeles"). When unset, the runtime helper
+  // resolveAgentTimezone() falls back to process.env.TZ → host TZ via
+  // Intl.DateTimeFormat resolution (captured once at module load).
+  // Pre-validation here catches typos like "Pacific/LosAngeles" at config
+  // load (Q3=YES) — fail-fast vs. discovering the bad TZ at first prompt
+  // assembly (where the helper would silently fall back to UTC).
+  // Internal storage / DB / structured event keys stay UTC ISO; this knob
+  // only affects agent-visible *rendering* at the prompt-emission boundary.
+  timezone: z
+    .string()
+    .optional()
+    .refine(
+      (tz) => {
+        if (tz === undefined) return true;
+        try {
+          new Intl.DateTimeFormat(undefined, { timeZone: tz });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      {
+        message:
+          "invalid IANA timezone name (e.g. use 'America/Los_Angeles' not 'Pacific/LosAngeles')",
+      },
+    ),
   skills: z.array(z.string()).default([]),
   basePath: z.string().default("~/.clawcode/agents"),
   skillsPath: z.string().default("~/.clawcode/skills"),
@@ -1051,7 +1959,7 @@ export const defaultsSchema = z.object({
     consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" },
     decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 },
     deduplication: { enabled: true, similarityThreshold: 0.85 },
-    tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 },
+    tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 },
     episodes: { archivalAgeDays: 90 },
   })),
   heartbeat: heartbeatConfigSchema.default(() => ({
@@ -1062,8 +1970,294 @@ export const defaultsSchema = z.object({
   })),
   threads: threadsConfigSchema.default(() => ({
     idleTimeoutMinutes: 1440,
-    maxThreadSessions: 10,
+    // Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3.
+    // See threadsConfigSchema comment above for context.
+    maxThreadSessions: 3,
   })),
+  // Phase 999.14 MCP-09 — idle threshold for the periodic stale-binding
+  // sweep. Format: "24h" / "6h" / "30m" / "0" ("0" disables sweep entirely).
+  // Default "24h" surfaces today's incident pattern (fin-acquisition's 22h+
+  // bindings) without surprising operators. The sweep runs on the same 60s
+  // tick as the MCP-03 orphan reaper, AFTER the orphan reap completes.
+  threadIdleArchiveAfter: z
+    .string()
+    .optional()
+    .describe(
+      "Idle duration after which stale Discord thread bindings get auto-archived (e.g. '24h', '6h', '30m'); '0' disables. Default '24h'.",
+    ),
+  // Phase 109-B — orphan-claude reaper config. Alert-only by default for the
+  // first ~7 days post-deploy so operators can audit the false-positive rate
+  // before flipping to "reap". Hot-reload via ConfigReloader; takes effect
+  // on the next 60s tick without daemon restart.
+  orphanClaudeReaper: z
+    .object({
+      mode: z.enum(["off", "alert", "reap"]).default("alert"),
+      // 120s = 4× the polled-discovery budget (MCP_POLL_INTERVAL_MS×MCP_POLL_MAX_ATTEMPTS
+      // = 30s in src/manager/session-manager.ts). The previous default of 30s exactly
+      // matched the discovery budget, leaving zero buffer — under contended parallel
+      // boots the reaper killed legitimate-but-not-yet-tracked claude subprocesses.
+      // Pinned by the structural-invariant test in
+      // src/mcp/__tests__/orphan-claude-reaper.test.ts.
+      minAgeSeconds: z.number().int().positive().default(120),
+    })
+    .optional(),
+  // Phase 999.25 — subagent completion relay. Decouples
+  // `relayCompletionToParent` (operator-channel notification) from
+  // session-end. Two new triggers: the `subagent_complete` MCP tool
+  // (explicit signal from skill author) and a quiescence-timer sweep
+  // (60s onTickAfter). `completedAt` on the ThreadBinding dedupes the
+  // three trigger paths (tool / quiescence / session-end). Hot-reload
+  // works post-PR #8 (closure-capture fix).
+  subagentCompletion: z
+    .object({
+      enabled: z.boolean().default(true),
+      quiescenceMinutes: z.number().int().positive().default(5),
+    })
+    .optional(),
+  // Phase 999.X — subagent-thread reaper. Auto-spawned subagent threads
+  // (SubagentThreadSpawner-named, see src/manager/subagent-name.ts) are
+  // one-shot delegated tasks; they should self-prune after the Discord
+  // thread goes idle but today nothing stops them. The fleet evidence
+  // (admin-clawdy 2026-05-04) showed two such threads running 8h+/13h+
+  // after their work completed. Hot-reload via ConfigReloader; takes
+  // effect on the next 60s tick. Default mode "reap" — the screenshot
+  // shows real leaks today, so we act on first tick rather than running
+  // alert-only first (operator decision). Env kill-switch:
+  // CLAWCODE_SUBAGENT_REAPER_DISABLE=1.
+  subagentReaper: z
+    .object({
+      mode: z.enum(["off", "alert", "reap"]).default("reap"),
+      idleTimeoutMinutes: z.number().int().positive().default(1440),
+      minAgeSeconds: z.number().int().positive().default(300),
+    })
+    .optional(),
+  // Phase 109-D — fleet-wide observability config. cgroupSampling reads
+  // /sys/fs/cgroup/system.slice/clawcode.service/memory.{current,max}; toggle
+  // off on hosts where cgroup v2 isn't mounted (the reader degrades to null
+  // gracefully anyway, but operators can disable explicitly).
+  observability: z
+    .object({
+      cgroupSampling: z.boolean().default(true),
+      cgroupAlertPercent: z.number().int().positive().max(100).default(80),
+    })
+    .optional(),
+  // Phase 109-C — broker pooling kill-switch. Phase 108 keeps `enabled: true`
+  // by default since the broker is LIVE in production; surfaced here so an
+  // operator can flip to false at runtime if the pool misbehaves under load.
+  brokerPooling: z
+    .object({
+      enabled: z.boolean().default(true),
+    })
+    .optional(),
+  // Phase 110 Stage 0a → Stage 0b — per-shim-type runtime selector. Each
+  // entry picks the runtime the loader-auto-injected `clawcode {search,
+  // image,browser}-mcp` shim spawns under. Stage 0a shipped the dial
+  // wired end-to-end with a single value ("node" — current behavior);
+  // Stage 0b widens the enum (DONE — see PR landing this commit) to
+  // ["node","static","python"] so an operator can flip a flag and the
+  // loader rewrites command/args without a daemon restart.
+  //
+  // - "node":   current behavior — `clawcode <type>-mcp` Node shim (~147 MB RSS each)
+  // - "static": Go binary at /opt/clawcode/bin/clawcode-mcp-shim --type <type> (target <10 MB RSS)
+  // - "python": (reserved) python3 translator at /opt/clawcode/bin/clawcode-mcp-shim.py;
+  //             no implementation in Stage 0b. Widening the enum together
+  //             with "static" lets a future Python pivot ship without
+  //             another schema migration.
+  //
+  // Default still "node": existing operator config is byte-identical
+  // until they explicitly flip a flag. Per-type independence — search
+  // can flip to "static" while image stays "node" — is intentional so
+  // the operator can roll out per-shim-type per CONTEXT.md's locked
+  // search → image → browser rollout order.
+  //
+  // Crash-fallback policy (LOCKED): if a "static" spawn fails, fail
+  // loud — do NOT auto-fall-back to "node". Surface the failure to the
+  // operator. Loader code intentionally contains no try/catch around
+  // the alternate-runtime path.
+  shimRuntime: z
+    .object({
+      search: z.enum(["node", "static", "python"]).default("node"),
+      image: z.enum(["node", "static", "python"]).default("node"),
+      browser: z.enum(["node", "static", "python"]).default("node"),
+    })
+    .optional(),
+  // Phase 127 — fleet-wide stream-stall supervisor threshold (ms). Default
+  // 180000ms (3 min) per CONTEXT.md. Cascade lookup order in loader:
+  //   agent.streamStallTimeoutMs ??
+  //   defaults.modelOverrides[agent.model].streamStallTimeoutMs ??
+  //   defaults.streamStallTimeoutMs (this value)
+  // Reloadable — tracker re-reads on each setInterval tick.
+  //
+  // `.optional()` after `.default(180_000)` mirrors the Phase 999.6
+  // preDeploySnapshotMaxAgeHours / Phase 999.12 heartbeatInboxTimeoutMs
+  // pattern above — z.infer<typeof defaultsSchema>.streamStallTimeoutMs
+  // becomes `number | undefined` at the type level so existing
+  // DefaultsConfig test factories continue to compile without an explicit
+  // entry; the loader resolver uses `?? 180_000` to materialize the
+  // baseline at consumption time.
+  streamStallTimeoutMs: z
+    .number()
+    .int()
+    .min(30_000)
+    .max(1_800_000)
+    .default(180_000)
+    .optional(),
+  // Phase 127 — per-model stream-stall threshold overrides. Operators set
+  // Opus longer (e.g. 300000ms) to cover advisor consults and Haiku shorter
+  // (e.g. 90000ms) since Haiku turns are expected to be fast. The resolver
+  // cascade picks up the entry keyed by the agent's resolved model; an
+  // agent-level `streamStallTimeoutMs` still beats this. Reloadable.
+  modelOverrides: z
+    .record(
+      z.enum(["haiku", "sonnet", "opus"]),
+      z.object({
+        streamStallTimeoutMs: z
+          .number()
+          .int()
+          .min(30_000)
+          .max(1_800_000)
+          .optional(),
+      }),
+    )
+    .optional(),
+  // Phase 117 Plan 06 — fleet-wide advisor block. Mirrors the shimRuntime
+  // canary dial: `.optional()` so omission yields `undefined` (operators on
+  // pre-117 configs see no behavior change at parse time; loader resolvers
+  // fall through to the hardcoded baseline {backend:"native", model:"opus",
+  // maxUsesPerRequest:3, caching:{enabled:true,ttl:"5m"}}). When an
+  // operator DOES supply a block, advisorConfigSchema's inner defaults
+  // populate any omitted sub-fields. Wave-4 Plan 117-04 reads the resolved
+  // model to wire `Options.advisorModel`; Plan 117-07 reads the resolved
+  // backend to gate IPC dispatch; Plan 117-08 reads the same backend for
+  // the capability manifest. See `advisorConfigSchema` block above.
+  advisor: advisorConfigSchema.optional(),
+  /**
+   * Phase 136 — fleet-wide LlmRuntime backend baseline.
+   *
+   * Optional at parse time so pre-Phase-136 configs see no parse error.
+   * Loader's `resolveLlmRuntimeBackend` falls through to the hardcoded
+   * baseline `"anthropic-agent-sdk"` when neither agent nor defaults
+   * supply the block. Phase 137 onwards: operators can flip the whole
+   * fleet to a new backend by setting `defaults.llmRuntime.backend` and
+   * `clawcode restart`-ing (NON_RELOADABLE — captured into session
+   * baseOptions at spawn).
+   */
+  llmRuntime: llmRuntimeConfigSchema.optional(),
+  // Phase 124 Plan 02 D-06 — fleet-wide auto-compaction trigger ratio.
+  // Plan 125 consumes the resolved value to decide when to fire compaction
+  // automatically; Phase 124 only ships the schema + reload integration.
+  // Default 0.7 (70% of context window). Per-agent override via
+  // `agentSchema['auto-compact-at']` cascades over this. Hyphenated key
+  // matches the YAML surface; the resolved type exposes the camelCase
+  // `autoCompactAt` field (see `loader.ts` resolver).
+  "auto-compact-at": z.number().min(0).max(1).default(0.7),
+  // Phase 125 Plan 02 — fleet-wide defaults for the tier 1 verbatim gate.
+  // Optional (consumer-side fallback to 10 / []) for back-compat with
+  // existing DefaultsConfig test factories. Per-agent overrides cascade
+  // via `agentSchema.preserveLastTurns` / `agentSchema.preserveVerbatimPatterns`.
+  preserveLastTurns: z.number().int().min(1).max(100).optional(),
+  preserveVerbatimPatterns: z.array(z.string().min(1)).optional(),
+  // Phase 115 D-08 + D-09 — embedding-v2 migration knobs. Default values
+  // match the Phase 115 D-09 cost discipline: 5% CPU budget, 50-row
+  // batch. These are knobs not constants; operator can dial both via
+  // hot-reload on a per-fleet basis. The pausedAgents array lets the
+  // operator pause migration for one or more agents (independent of the
+  // per-agent state machine — agent stays in dual-write/re-embedding,
+  // but the heartbeat-driven runner skips it). Schema-only this plan;
+  // wave 4's migration kickoff actually wires the runner reads.
+  embeddingMigration: z
+    .object({
+      cpuBudgetPct: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .default(5)
+        .describe(
+          "Phase 115 D-09 — CPU budget for the v2 re-embed batch worker. Default 5%.",
+        ),
+      batchSize: z
+        .number()
+        .int()
+        .min(10)
+        .max(500)
+        .default(50)
+        .describe(
+          "Phase 115 D-08 — re-embed batch size. Default 50 entries per batch.",
+        ),
+      pausedAgents: z
+        .array(z.string())
+        .default(() => [])
+        .describe(
+          "List of agents whose v2 re-embed batch is paused (operator-controlled).",
+        ),
+    })
+    // Optional (mirrors shimRuntime / brokers schema-only-default pattern)
+    // — schema ships in this plan, runtime wiring lands in wave 4. Operators
+    // who don't override see undefined; the runner fills in the cpuBudgetPct
+    // / batchSize / pausedAgents defaults at consumption time.
+    .optional(),
+  // Phase 115 Plan 07 sub-scope 15 — daemon-side MCP tool-response cache.
+  // Folds Phase 999.40 (now SUPERSEDED-BY-115). The cache lives at
+  // `~/.clawcode/manager/tool-cache.db` and intercepts repeated tool
+  // calls at the IPC dispatch boundary. Per-tool TTL + key-strategy
+  // defaults live in `src/mcp/tool-cache-policy.ts:DEFAULT_TOOL_CACHE_POLICY`;
+  // operators override per-tool here.
+  //
+  // Optional (mirrors shimRuntime / brokers / embeddingMigration
+  // schema-only-default pattern). When absent, runtime fills in
+  // `enabled=true` / `maxSizeMb=100` / empty policy overrides.
+  toolCache: z
+    .object({
+      enabled: z
+        .boolean()
+        .default(true)
+        .describe(
+          "Phase 115 sub-scope 15 — master switch. Set false to fully bypass the cache (e.g., debugging tool dispatch).",
+        ),
+      maxSizeMb: z
+        .number()
+        .int()
+        .min(10)
+        .max(10000)
+        .default(100)
+        .describe(
+          "Phase 115 sub-scope 15 — total cache size cap in MB. LRU evicts oldest rows when over cap. Default 100MB.",
+        ),
+      policy: z
+        .record(
+          z.string().min(1),
+          z.object({
+            ttlSeconds: z.number().int().min(0).max(86400).optional(),
+            keyStrategy: z
+              .enum(["per-agent", "cross-agent", "no-cache"])
+              .optional(),
+          }),
+        )
+        .default(() => ({}))
+        .describe(
+          "Per-tool overrides keyed by tool name. Operator can shorten TTL or flip strategy; cacheable predicate (e.g. mysql_query read-only gate) cannot be patched.",
+        ),
+    })
+    .optional(),
+  // Phase 110 Stage 0a — broker dispatch table. Server-id keyed map for
+  // generalizing Phase 108's OnePasswordMcpBroker to typed multi-server
+  // pools (one broker proc per server-id, N agents → 1 child). Schema
+  // only this PR; Stage 1a wires the broker class to read this map and
+  // Stage 1b wires the daemon dispatch. Reloadable in classification so
+  // the surface is stable; runtime edits are no-ops until Stage 1a.
+  brokers: z
+    .record(
+      z.string().min(1),
+      z.object({
+        enabled: z.boolean().default(true),
+        maxConcurrent: z.number().int().positive().default(4),
+        spawnArgs: z.array(z.string()).default(() => []),
+        env: z.record(z.string(), z.string()).default(() => ({})),
+        drainOnIdleMs: z.number().int().nonnegative().default(0),
+      }),
+    )
+    .optional(),
   perf: z
     .object({
       traceRetentionDays: z.number().int().positive().optional(),
@@ -1093,6 +2287,101 @@ export const defaultsSchema = z.object({
   // NOT idempotent (different images for same prompt) — explicitly
   // excluded from IDEMPOTENT_TOOL_DEFAULTS.
   image: imageConfigSchema,
+  // Phase 116-06 T08 — operator-driven cutover redirect flag. When `true`,
+  // the dashboard server responds with `301 Location: /dashboard/v2/`
+  // for every `GET /`; when `false` (the default) the legacy static
+  // index.html is served byte-identical to pre-Phase-116 behavior. The
+  // flip is INTENTIONALLY manual (`clawcode config set
+  // defaults.dashboardCutoverRedirect true`) so the operator owns the
+  // moment of cutover. Reload classification: the dashboard handler
+  // reads the live config ref on every request, so the flip takes
+  // effect on the very next HTTP request after ConfigWatcher fires —
+  // no daemon restart required.
+  //
+  // Operator rollback: `clawcode config set defaults.dashboardCutoverRedirect false`
+  // returns the dashboard to dual-mode immediately. Old static files
+  // remain on disk and untouched during the soak — see Phase 116-06
+  // SUMMARY "Decommission follow-up" section for the post-soak cleanup
+  // commit pattern.
+  dashboardCutoverRedirect: z.boolean().default(false),
+  /**
+   * Phase 999.47 Plan 02 — homelab refresh tick configuration.
+   *
+   * See `homelabConfigSchema` below for the resolved shape. Optional —
+   * pre-Phase-999.47 configs see no behaviour change at parse time;
+   * the heartbeat check falls back to the documented defaults
+   * (interval 60min, repoPath /home/clawcode/homelab) at consumption
+   * time.
+   */
+  homelab: homelabConfigSchema.optional(),
+  /**
+   * Phase 101 Plan 02 T03 — document-ingestion pipeline knobs.
+   *
+   * All fields are reload-safe (NOT in NON_RELOADABLE_FIELDS). Defaults
+   * mirror the values hard-coded in `src/document-ingest/` so existing
+   * configs see no behaviour change at parse time.
+   *
+   * - `allowMistralOcr` (D-08) — off-by-default escape hatch. When `true`,
+   *   `ingest_document --backend mistral` becomes selectable; otherwise
+   *   the OCR dispatcher throws "Mistral OCR backend disabled in config".
+   * - `tesseractConfidenceThreshold` (D-01) — minimum normalized confidence
+   *   (0-1) for the Tesseract tier to short-circuit before falling through
+   *   to Claude vision. Default 0.70 matches the locked plan value.
+   * - `pageBatchSize` (U3) — greedy bin-packer page-count cap per batch.
+   *   Matches `DEFAULT_BATCH_SIZE = 5` in `src/document-ingest/page-batch.ts`.
+   * - `dimensionMaxPx` (T-101-04) — long-side resize ceiling for any image
+   *   sent to Claude vision. Matches `DIMENSION_MAX_PX = 2000`.
+   * - `visionModelDefault` / `visionModelHighPrecision` (D-02) — Claude
+   *   vision model ids. Defaults match `claude-vision.ts`.
+   */
+  documentIngest: z
+    .object({
+      allowMistralOcr: z.boolean().default(false),
+      tesseractConfidenceThreshold: z.number().min(0).max(1).default(0.7),
+      pageBatchSize: z.number().int().min(1).max(20).default(5),
+      dimensionMaxPx: z.number().int().min(512).max(4096).default(2000),
+      visionModelDefault: z.string().default("claude-haiku-4-5"),
+      visionModelHighPrecision: z.string().default("claude-sonnet-4-5"),
+      // Phase 101 Plan 04 (D-04, U9, SC-10) — local cross-encoder reranker
+      // applied over Phase 90 RRF top-N. Hardcoded model id (T-101-13 — no
+      // config-driven model selection); only the orchestration knobs are
+      // exposed here. All four fields reloadable: `memory-retrieval.ts`
+      // reads via a closure DI'd at daemon boot (mirrors the Phase 101
+      // Plan 02 `setAllowMistralOcr` getter pattern).
+      reranker: z
+        .object({
+          enabled: z.boolean().default(true),
+          topNToRerank: z.number().int().min(1).max(100).default(20),
+          finalTopK: z.number().int().min(1).max(20).default(5),
+          timeoutMs: z.number().int().min(50).max(5000).default(500),
+        })
+        .default({
+          enabled: true,
+          topNToRerank: 20,
+          finalTopK: 5,
+          timeoutMs: 500,
+        }),
+    })
+    .default({
+      allowMistralOcr: false,
+      tesseractConfidenceThreshold: 0.7,
+      pageBatchSize: 5,
+      dimensionMaxPx: 2000,
+      visionModelDefault: "claude-haiku-4-5",
+      visionModelHighPrecision: "claude-sonnet-4-5",
+      reranker: {
+        enabled: true,
+        topNToRerank: 20,
+        finalTopK: 5,
+        timeoutMs: 500,
+      },
+    })
+    // `.optional()` after `.default(...)` mirrors the Phase 999.6
+    // preDeploySnapshotMaxAgeHours / Phase 999.12 heartbeatInboxTimeoutMs
+    // pattern — at the type level the field becomes optional so existing
+    // DefaultsConfig test factories continue to compile without an explicit
+    // entry; loader consumption uses `?? {...}` to materialize the baseline.
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1218,11 +2507,40 @@ export const configSchema = z.object({
     // values in defaultsSchema above. Scanner on by default; retrieval
     // topK=5 + token budget 2000 per D-RETRIEVAL.
     memoryRetrievalTopK: 5,
-    memoryRetrievalTokenBudget: 2000,
+    // Phase 115 sub-scope 3 — was 2000 (pre-115 dead-knob default). Now
+    // 1500 (CONTEXT.md D-02). Mirror exists for the configSchema fallback
+    // when `defaults:` is OMITTED entirely from clawcode.yaml.
+    memoryRetrievalTokenBudget: 1500,
+    // Phase 115 sub-scope 4 — locked default tag-exclusion list mirrors
+    // defaultsSchema's zod default. Mutable copy so the configSchema-level
+    // record is independent of the array literal.
+    memoryRetrievalExcludeTags: ["session-summary", "mid-session", "raw-fallback"],
+    // Phase 115 sub-scope 2 — fleet-wide default mirrors defaultsSchema.
+    excludeDynamicSections: true,
+    // Phase 115 sub-scope 5 (Plan 04) — fleet-wide default mirrors
+    // defaultsSchema. "static-first" places static sections before the
+    // CACHE_BREAKPOINT_MARKER and dynamic sections after; "legacy"
+    // preserves pre-115-04 interleaved order with no marker (revert path).
+    cacheBreakpointPlacement: "static-first" as const,
     memoryScannerEnabled: true,
+    // Phase 127 — fleet-wide stream-stall supervisor default mirrors
+    // defaultsSchema.streamStallTimeoutMs above (180000ms / 3 min). Per-model
+    // overrides (Opus 300000 / Haiku 90000) are operator-set; this literal
+    // applies only when `defaults:` is OMITTED entirely from clawcode.yaml.
+    streamStallTimeoutMs: 180_000,
     // Phase 90 MEM-04 / MEM-05 — fleet-wide defaults mirror defaultsSchema.
     memoryFlushIntervalMs: 900_000,
     memoryCueEmoji: "✅",
+    // Phase 999.43 D-09 — fleet-wide defaults mirror defaultsSchema above.
+    // Default false preserves back-compat: existing v2.x configs (no
+    // `defaults:` block at all) see auto-ingest OFF for every agent.
+    autoIngestAttachments: false,
+    ingestionPriority: "medium" as const,
+    // Phase 100 follow-up — fleet-wide autoStart default mirrors the
+    // zod-populated value in defaultsSchema above. Default true preserves
+    // back-compat: every configured agent boots on daemon start-all unless
+    // it (or the operator's defaults block) explicitly opts out.
+    autoStart: true,
     // Phase 94 TOOL-10 / D-10 — fleet-wide default directives mirror
     // DEFAULT_SYSTEM_PROMPT_DIRECTIVES (D-09 file-sharing + D-07 cross-
     // agent-routing). Spread to a fresh object so the configSchema-default
@@ -1233,6 +2551,16 @@ export const configSchema = z.object({
     // Phase 95 DREAM-01..03 — fleet-wide default dream cycle config
     // mirrors the zod-populated value in defaultsSchema above.
     dream: { enabled: false, idleMinutes: 30, model: "haiku" as const },
+    // Phase 96 D-05 — fleet-wide default fileAccess paths mirror the
+    // zod-populated value in defaultsSchema above. Spread to a fresh
+    // array so the configSchema-default is independent of the frozen
+    // exported constant (defensive copy — downstream merges via
+    // resolveFileAccess never see the frozen reference).
+    fileAccess: [...DEFAULT_FILE_ACCESS],
+    // Phase 96 D-09 — fleet-wide default outputDir mirrors the zod-populated
+    // value in defaultsSchema above. Tokens preserved literally; runtime
+    // resolveOutputDir expands them per call.
+    outputDir: DEFAULT_OUTPUT_DIR,
     // Phase 90 Plan 04 HUB-01 / HUB-08 — ClawHub registry defaults
     // mirroring the zod-populated values in defaultsSchema above.
     clawhubBaseUrl: "https://clawhub.ai",
@@ -1240,7 +2568,7 @@ export const configSchema = z.object({
     skills: [] as string[],
     basePath: "~/.clawcode/agents",
     skillsPath: "~/.clawcode/skills",
-    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20 }, episodes: { archivalAgeDays: 90 } },
+    memory: { compactionThreshold: 0.75, searchTopK: 10, consolidation: { enabled: true, weeklyThreshold: 7, monthlyThreshold: 4, schedule: "0 3 * * *" }, decay: { halfLifeDays: 30, semanticWeight: 0.7, decayWeight: 0.3 }, deduplication: { enabled: true, similarityThreshold: 0.85 }, tiers: { hotAccessThreshold: 3, hotAccessWindowDays: 7, hotDemotionDays: 7, coldRelevanceThreshold: 0.05, hotBudget: 20, centralityPromoteThreshold: 5 }, episodes: { archivalAgeDays: 90 } },
     heartbeat: {
       enabled: true,
       intervalSeconds: 60,
@@ -1249,7 +2577,8 @@ export const configSchema = z.object({
     },
     threads: {
       idleTimeoutMinutes: 1440,
-      maxThreadSessions: 10,
+      // Phase 99 sub-scope N (2026-04-26) — lowered from 10 to 3.
+      maxThreadSessions: 3,
     },
     // Phase 69 — OpenAI-compatible endpoint defaults (OPENAI-01..07).
     openai: {
@@ -1302,6 +2631,32 @@ export const configSchema = z.object({
       timeoutMs: 60000,
       workspaceSubdir: "generated-images",
     },
+    // Phase 116-06 T08 — cutover flag default mirror. FALSE preserves the
+    // current dual-mode behavior (both `/` and `/dashboard/v2/` reachable);
+    // operator flips to TRUE manually via `clawcode config set`.
+    dashboardCutoverRedirect: false,
+    // Phase 124 Plan 02 D-06 — fleet-wide auto-compaction trigger ratio
+    // mirror for the configSchema-default-when-`defaults`-omitted fallback.
+    "auto-compact-at": 0.7,
+    // Phase 101 Plan 02 T03 — fleet-wide document-ingestion defaults mirror
+    // for the configSchema-default-when-`defaults`-omitted fallback.
+    // Defaults mirror the values hard-coded in `src/document-ingest/`.
+    documentIngest: {
+      allowMistralOcr: false,
+      tesseractConfidenceThreshold: 0.7,
+      pageBatchSize: 5,
+      dimensionMaxPx: 2000,
+      visionModelDefault: "claude-haiku-4-5",
+      visionModelHighPrecision: "claude-sonnet-4-5",
+      // Phase 101 Plan 04 — reranker defaults mirror for the `defaults:`-omitted
+      // fallback. Operator override via per-agent or fleet-wide config.
+      reranker: {
+        enabled: true,
+        topNToRerank: 20,
+        finalTopK: 5,
+        timeoutMs: 500,
+      },
+    },
   })),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   triggers: triggersConfigSchema,
@@ -1348,6 +2703,23 @@ export const configSchema = z.object({
         path: ["agents"],
         message: `agent "${agent.name}": inline "identity" and "identityFile" cannot be used together — pick one (identityFile is preferred for migrated agents).`,
       });
+    }
+  }
+
+  // Phase 999.13 DELEG-03 — every delegates value must point to a known agent.
+  // Fail fast at config load (matches the soul/soulFile mutex pattern above)
+  // so operators don't ship a half-booted fleet with a broken delegate target.
+  const agentNames = new Set(cfg.agents.map((a) => a.name));
+  for (const agent of cfg.agents) {
+    if (!agent.delegates) continue;
+    for (const [specialty, target] of Object.entries(agent.delegates)) {
+      if (!agentNames.has(target)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agents"],
+          message: `agent "${agent.name}": delegates["${specialty}"] points to unknown agent "${target}". Configure that agent or remove this delegate entry.`,
+        });
+      }
     }
   }
 });

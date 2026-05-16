@@ -201,6 +201,62 @@ describe("MemoryStore", () => {
     });
   });
 
+  // Phase 107 VEC-CLEAN-01 / VEC-CLEAN-02 regression — pin the invariant
+  // that `MemoryStore.delete(id)` cascades to `vec_memories` ATOMICALLY
+  // (single transaction, paired rows always go together). RESEARCH.md
+  // confirms `MemoryStore.delete` is the only production
+  // `DELETE FROM memories` site; this test prevents future drift.
+  describe("Phase 107 VEC-CLEAN-01 regression — delete cascades to vec_memories", () => {
+    it("delete-cascades-vec — paired vec_memories row removed inside the same transaction", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const a = store.insert(
+        { content: "alpha", source: "manual", skipDedup: true },
+        randomEmbedding(),
+      );
+      const b = store.insert(
+        { content: "beta", source: "manual", skipDedup: true },
+        randomEmbedding(),
+      );
+
+      // Pre-state: both pairs present.
+      const beforeMemories = db
+        .prepare("SELECT count(*) as cnt FROM memories")
+        .get() as { cnt: number };
+      const beforeVec = db
+        .prepare("SELECT count(*) as cnt FROM vec_memories")
+        .get() as { cnt: number };
+      expect(beforeMemories.cnt).toBe(2);
+      expect(beforeVec.cnt).toBe(2);
+
+      // Delete `a`.
+      const deleted = store.delete(a.id);
+      expect(deleted).toBe(true);
+
+      // Cascade invariant: BOTH tables now lack `a.id`. The vec row was
+      // removed by `MemoryStore.delete` inside `db.transaction()` so the
+      // vec_memories table cannot be left with an orphan.
+      const aMemoryRow = db
+        .prepare("SELECT id FROM memories WHERE id = ?")
+        .get(a.id) as { id: string } | undefined;
+      const aVecRow = db
+        .prepare("SELECT memory_id FROM vec_memories WHERE memory_id = ?")
+        .get(a.id) as { memory_id: string } | undefined;
+      expect(aMemoryRow).toBeUndefined();
+      expect(aVecRow).toBeUndefined();
+
+      // `b` still paired in both tables (cascade is targeted, not blanket).
+      const bMemoryRow = db
+        .prepare("SELECT id FROM memories WHERE id = ?")
+        .get(b.id) as { id: string } | undefined;
+      const bVecRow = db
+        .prepare("SELECT memory_id FROM vec_memories WHERE memory_id = ?")
+        .get(b.id) as { memory_id: string } | undefined;
+      expect(bMemoryRow?.id).toBe(b.id);
+      expect(bVecRow?.memory_id).toBe(b.id);
+    });
+  });
+
   describe("listRecent", () => {
     it("returns entries ordered by created_at DESC", () => {
       store = createTestStore();
@@ -437,6 +493,97 @@ describe("MemoryStore", () => {
 
       const results = store.listByTier("warm", 10);
       expect(Object.isFrozen(results)).toBe(true);
+    });
+  });
+
+  describe("listWarmCandidatesForPromotion (Phase 999.8 follow-up)", () => {
+    it("orders warm memories by backlink count DESC then accessed_at DESC", () => {
+      store = createTestStore();
+      const lowLink = store.insert(
+        { content: "low-link hub", source: "manual" },
+        randomEmbedding(),
+      );
+      const highLink = store.insert(
+        { content: "high-link hub", source: "manual" },
+        randomEmbedding(),
+      );
+      const noLinks = store.insert(
+        { content: "isolated", source: "manual" },
+        randomEmbedding(),
+      );
+      // Add 6 inbound links → highLink gets 6, lowLink gets 1
+      for (let i = 0; i < 6; i++) {
+        const src = store.insert(
+          { content: `src${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+        store.getGraphStatements().insertLink.run(
+          src.id,
+          highLink.id,
+          "ref",
+          new Date().toISOString(),
+        );
+      }
+      const oneSrc = store.insert(
+        { content: "one-src", source: "manual" },
+        randomEmbedding(),
+      );
+      store.getGraphStatements().insertLink.run(
+        oneSrc.id,
+        lowLink.id,
+        "ref",
+        new Date().toISOString(),
+      );
+
+      const warm = store.listWarmCandidatesForPromotion(100);
+      // highLink (6 backlinks) must come BEFORE lowLink (1) and noLinks (0)
+      const idsInOrder = warm.map((m) => m.id);
+      const highIdx = idsInOrder.indexOf(highLink.id);
+      const lowIdx = idsInOrder.indexOf(lowLink.id);
+      const noIdx = idsInOrder.indexOf(noLinks.id);
+      expect(highIdx).toBeGreaterThanOrEqual(0);
+      expect(highIdx).toBeLessThan(lowIdx);
+      expect(lowIdx).toBeLessThan(noIdx);
+    });
+
+    it("respects limit parameter", () => {
+      store = createTestStore();
+      for (let i = 0; i < 7; i++) {
+        store.insert(
+          { content: `entry${i}`, source: "manual" },
+          randomEmbedding(),
+        );
+      }
+      const result = store.listWarmCandidatesForPromotion(3);
+      expect(result).toHaveLength(3);
+    });
+
+    it("only returns warm-tier memories (excludes hot and cold)", () => {
+      store = createTestStore();
+      const e1 = store.insert(
+        { content: "warm-keeper", source: "manual" },
+        randomEmbedding(),
+      );
+      const e2 = store.insert(
+        { content: "promoted-to-hot", source: "manual" },
+        randomEmbedding(),
+      );
+      const e3 = store.insert(
+        { content: "archived-to-cold", source: "manual" },
+        randomEmbedding(),
+      );
+      store.updateTier(e2.id, "hot");
+      store.updateTier(e3.id, "cold");
+      const warm = store.listWarmCandidatesForPromotion(100);
+      expect(warm).toHaveLength(1);
+      expect(warm[0].id).toBe(e1.id);
+    });
+
+    it("returns frozen array", () => {
+      store = createTestStore();
+      store.insert({ content: "x", source: "manual" }, randomEmbedding());
+      const result = store.listWarmCandidatesForPromotion(10);
+      expect(Object.isFrozen(result)).toBe(true);
     });
   });
 
@@ -916,6 +1063,62 @@ describe("MemoryStore", () => {
       expect(rows[0].body).toBe("new body");
     });
 
+    it("listRecentMemoryChunks orders by file_mtime_ms DESC and respects limit", () => {
+      store = createTestStore();
+      const base = 1700000000000;
+      store.insertMemoryChunk({
+        path: "/ws/memory/oldest.md",
+        chunkIndex: 0,
+        heading: "Oldest",
+        body: "oldest body",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: base,
+        fileSha256: "old",
+        embedding: randomEmbedding384(),
+      });
+      store.insertMemoryChunk({
+        path: "/ws/memory/middle.md",
+        chunkIndex: 0,
+        heading: "Middle",
+        body: "middle body",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: base + 1000,
+        fileSha256: "mid",
+        embedding: randomEmbedding384(),
+      });
+      store.insertMemoryChunk({
+        path: "/ws/memory/newest.md",
+        chunkIndex: 0,
+        heading: "Newest",
+        body: "newest body",
+        tokenCount: 10,
+        scoreWeight: 0,
+        fileMtimeMs: base + 2000,
+        fileSha256: "new",
+        embedding: randomEmbedding384(),
+      });
+
+      const all = store.listRecentMemoryChunks(10);
+      expect(all).toHaveLength(3);
+      expect(all[0].path).toBe("/ws/memory/newest.md");
+      expect(all[0].body).toBe("newest body");
+      expect(all[0].lastModified).toBeInstanceOf(Date);
+      expect(all[0].lastModified.getTime()).toBe(base + 2000);
+      expect(all[2].path).toBe("/ws/memory/oldest.md");
+
+      const limited = store.listRecentMemoryChunks(2);
+      expect(limited).toHaveLength(2);
+      expect(limited[0].path).toBe("/ws/memory/newest.md");
+      expect(limited[1].path).toBe("/ws/memory/middle.md");
+    });
+
+    it("listRecentMemoryChunks returns empty array when no chunks present", () => {
+      store = createTestStore();
+      expect(store.listRecentMemoryChunks(10)).toHaveLength(0);
+    });
+
     it("MEM-02-S5: searchMemoryChunksFts finds inserted body text", () => {
       store = createTestStore();
       store.insertMemoryChunk({
@@ -931,6 +1134,180 @@ describe("MemoryStore", () => {
       });
       const results = store.searchMemoryChunksFts("Zaid", 10);
       expect(results.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("bumpAccess (Phase 100-fu)", () => {
+    // MS-B1: bumpAccess increments access_count by 1 and updates accessed_at
+    // to the supplied timestamp. Mirrors the SemanticSearch.updateAccessStmt
+    // semantics so non-search callers (GraphSearch graph walk) can keep heat
+    // metrics flowing on graph-walked neighbors.
+    it("MS-B1: increments access_count by 1 and updates accessed_at", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "bump target", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const before = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(before.access_count).toBe(0);
+
+      const stamp = "2026-04-27T12:34:56.000Z";
+      store.bumpAccess(entry.id, stamp);
+
+      const after = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(after.access_count).toBe(1);
+      expect(after.accessed_at).toBe(stamp);
+
+      // Bump again — confirm increment-by-1 (not set-to-1)
+      const stamp2 = "2026-04-27T13:00:00.000Z";
+      store.bumpAccess(entry.id, stamp2);
+      const after2 = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(after2.access_count).toBe(2);
+      expect(after2.accessed_at).toBe(stamp2);
+    });
+
+    // MS-B2: bumpAccess on a non-existent memory ID is a no-op — no exception,
+    // no row created. Matches the silently-tolerant behavior of the SemanticSearch
+    // UPDATE path (UPDATE...WHERE id=? against a missing row is a 0-row affect).
+    it("MS-B2: no-op on non-existent memory ID (no exception, no row created)", () => {
+      store = createTestStore();
+      const db = store.getDatabase();
+      const beforeCount = (db
+        .prepare("SELECT COUNT(*) AS n FROM memories")
+        .get() as { n: number }).n;
+
+      expect(() =>
+        store.bumpAccess("does-not-exist", "2026-04-27T00:00:00.000Z"),
+      ).not.toThrow();
+
+      const afterCount = (db
+        .prepare("SELECT COUNT(*) AS n FROM memories")
+        .get() as { n: number }).n;
+      expect(afterCount).toBe(beforeCount);
+    });
+
+    it("bumpAccess defaults accessed_at to now() when timestamp omitted", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "default ts", source: "manual" },
+        randomEmbedding(),
+      );
+
+      const beforeNow = Date.now();
+      store.bumpAccess(entry.id);
+      const afterNow = Date.now();
+
+      const row = store.getDatabase()
+        .prepare("SELECT access_count, accessed_at FROM memories WHERE id = ?")
+        .get(entry.id) as { access_count: number; accessed_at: string };
+      expect(row.access_count).toBe(1);
+      const stampMs = new Date(row.accessed_at).getTime();
+      expect(stampMs).toBeGreaterThanOrEqual(beforeNow);
+      expect(stampMs).toBeLessThanOrEqual(afterNow);
+    });
+  });
+
+  // Phase 100-fu — graph-centrality promotion. The TierManager queries
+  // backlink counts to decide whether a memory is a structural hub
+  // (target of many wikilink edges) and should be promoted to hot tier
+  // independent of direct access count.
+  describe("getBacklinkCount (Phase 100-fu)", () => {
+    // GBC-1: returns the exact count for a memory with N inbound links.
+    // Backlinks are inserted via the same memory_links table that
+    // graph-search uses, mirroring the production wiring.
+    it("GBC-1: returns correct count for a memory with N backlinks", () => {
+      store = createTestStore();
+      const target = store.insert(
+        { content: "hub memory", source: "manual" },
+        randomEmbedding(),
+      );
+
+      // Insert 3 source memories, each linking to `target`.
+      const stmts = store.getGraphStatements();
+      const linkAt = "2026-04-27T00:00:00.000Z";
+      for (let i = 0; i < 3; i++) {
+        const src = store.insert(
+          { content: `source ${i} linking to hub`, source: "manual" },
+          randomEmbedding(),
+        );
+        stmts.insertLink.run(src.id, target.id, target.id, linkAt);
+      }
+
+      expect(store.getBacklinkCount(target.id)).toBe(3);
+    });
+
+    // GBC-2: a memory that exists but has no inbound links returns 0
+    // (not undefined, not null, not an exception).
+    it("GBC-2: returns 0 for a memory with no backlinks", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "isolated", source: "manual" },
+        randomEmbedding(),
+      );
+
+      expect(store.getBacklinkCount(entry.id)).toBe(0);
+    });
+
+    // GBC-3: querying a non-existent ID returns 0 — same shape as the
+    // no-backlinks path. The COUNT(*) aggregate naturally yields 0 when
+    // the WHERE clause matches no rows.
+    it("GBC-3: returns 0 for a non-existent memory ID", () => {
+      store = createTestStore();
+      expect(store.getBacklinkCount("does-not-exist")).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 999.13 TZ-05 — DB writes stay UTC ISO (regression)
+  //
+  // Internal storage MUST stay UTC ISO 8601 with millisecond precision and
+  // trailing 'Z' — only agent-visible *rendering* converts to operator-local
+  // TZ via renderAgentVisibleTimestamp. Pillar B's TZ-04 conversions touch
+  // only the prompt-emission boundary (bridge.ts, context-summary.ts,
+  // conversation-brief.ts, dream-prompt-builder.ts) — never the storage
+  // layer. This regression pins the invariant against future drift.
+  // ---------------------------------------------------------------------------
+  describe("Phase 999.13 TZ-05 — DB writes stay UTC", () => {
+    const ISO_UTC_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+    it("createdAt/updatedAt/accessedAt are UTC ISO with millisecond precision and 'Z' suffix", () => {
+      store = createTestStore();
+      const entry = store.insert(
+        { content: "tz-05 regression", source: "manual" },
+        randomEmbedding(),
+      );
+
+      // All three timestamps must match the canonical UTC ISO format —
+      // never the agent-visible "YYYY-MM-DD HH:mm:ss ZZZ" format.
+      expect(entry.createdAt).toMatch(ISO_UTC_REGEX);
+      expect(entry.updatedAt).toMatch(ISO_UTC_REGEX);
+      expect(entry.accessedAt).toMatch(ISO_UTC_REGEX);
+
+      // Negative assertion — ensure no agent-visible TZ-aware token slipped
+      // into storage. The TZ-aware format has a SPACE separator and a TZ
+      // abbreviation suffix (PDT/PST/EST/UTC); the UTC ISO format has 'T'
+      // and ends in '.NNN Z'.
+      expect(entry.createdAt).not.toMatch(/ (PDT|PST|EST|UTC)$/);
+      expect(entry.createdAt).toContain("T"); // ISO separator
+    });
+
+    it("re-reading a written entry returns the same UTC ISO format (round-trip)", () => {
+      store = createTestStore();
+      const inserted = store.insert(
+        { content: "round-trip body", source: "manual" },
+        randomEmbedding(),
+      );
+      const read = store.getById(inserted.id);
+      expect(read).not.toBeNull();
+      expect(read!.createdAt).toMatch(ISO_UTC_REGEX);
+      expect(read!.createdAt).toBe(inserted.createdAt);
     });
   });
 });

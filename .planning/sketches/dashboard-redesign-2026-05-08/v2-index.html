@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClawCode Dashboard — v1 vs v2 Comparison</title>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,600,700,800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        display:['"Cabinet Grotesk"','sans-serif'],
+        sans:['Geist','sans-serif'],
+        mono:['"JetBrains Mono"','monospace'],
+      },
+      colors: {
+        bg:{base:'#0e0e12',s1:'#16161c',s2:'#1c1c24',s3:'#252530'},
+        fg:{1:'#f4f4f5',2:'#a1a1aa',3:'#71717a'},
+        accent:{green:'#10b981',blue:'#3b82f6',amber:'#f59e0b',red:'#ef4444',gold:'#eab308',pink:'#ff3366'},
+      },
+    },
+  },
+};
+</script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  *{box-sizing:border-box;}
+  body{font-family:'Geist',sans-serif;background:#0e0e12;color:#f4f4f5;}
+  .font-display{font-family:'Cabinet Grotesk',sans-serif;}
+  .font-mono{font-family:'JetBrains Mono',monospace;}
+  .card{background:#16161c;border:1px solid rgba(255,255,255,0.06);border-radius:14px;transition:border-color 150ms ease,box-shadow 150ms ease;}
+  .card:hover{border-color:rgba(255,255,255,0.12);box-shadow:0 8px 32px rgba(0,0,0,0.4);}
+  .link-card{display:block;background:#16161c;border:1px solid rgba(255,255,255,0.06);border-radius:14px;transition:all 150ms ease;cursor:pointer;text-decoration:none;color:inherit;}
+  .link-card:hover{border-color:rgba(16,185,129,0.3);box-shadow:0 8px 32px rgba(16,185,129,0.08);transform:translateY(-1px);}
+  .v1-card{background:#16161c;border:1px solid rgba(255,255,255,0.06);border-radius:14px;transition:all 150ms ease;cursor:pointer;text-decoration:none;color:inherit;}
+  .v1-card:hover{border-color:rgba(255,255,255,0.12);}
+  .badge{font-size:10px;font-family:'JetBrains Mono',monospace;padding:3px 8px;border-radius:6px;font-weight:500;}
+  .badge-new{background:rgba(16,185,129,0.12);color:#10b981;border:1px solid rgba(16,185,129,0.25);}
+  .badge-v2{background:rgba(59,130,246,0.1);color:#3b82f6;border:1px solid rgba(59,130,246,0.25);}
+  .badge-v1{background:rgba(113,113,122,0.1);color:#71717a;border:1px solid rgba(113,113,122,0.25);}
+  .compare-row{display:flex;align-items:flex-start;gap:16px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.04);}
+  .compare-row:last-child{border-bottom:none;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .fade-in{animation:fadeUp 250ms ease both;}
+  .stagger-1{animation-delay:60ms;}
+  .stagger-2{animation-delay:120ms;}
+  .stagger-3{animation-delay:180ms;}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- HEADER -->
+<header class="border-b border-white/5 px-6 md:px-12 py-4 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <span class="font-mono font-semibold text-accent-pink text-[18px]">{/}</span>
+    <span class="font-display font-bold text-fg-1 text-[16px]">ClawCode</span>
+    <span class="text-fg-3/40 text-[14px]">·</span>
+    <span class="text-[14px] text-fg-3">Dashboard Comparison</span>
+  </div>
+  <div class="flex items-center gap-2">
+    <span class="badge badge-v1">v1 ref</span>
+    <span class="text-fg-3/40">→</span>
+    <span class="badge badge-v2">v2 candidate</span>
+  </div>
+</header>
+
+<div class="max-w-6xl mx-auto px-6 md:px-12 py-12">
+
+  <!-- HERO -->
+  <div class="text-center mb-14 fade-in">
+    <div class="inline-flex items-center gap-2 text-[12px] font-mono text-accent-green bg-accent-green/8 border border-accent-green/20 px-3 py-1.5 rounded-full mb-6">
+      <div class="w-1.5 h-1.5 rounded-full bg-accent-green"></div>
+      Operator review · May 8, 2026
+    </div>
+    <h1 class="font-display text-[40px] md:text-[52px] font-extrabold text-fg-1 leading-tight mb-4">
+      Dashboard Redesign<br>
+      <span class="text-accent-green">v2</span> <span class="text-fg-3">·</span> <span class="text-fg-2 font-medium">Linear × Vercel aesthetic</span>
+    </h1>
+    <p class="text-[16px] text-fg-3 max-w-xl mx-auto leading-relaxed">
+      Addresses all 4 operator feedback items: mobile-first, Basic mode default, modern aesthetic (Cabinet Grotesk), and 3 new features (F26-F28).
+    </p>
+  </div>
+
+  <!-- ENTER V2 CTA -->
+  <div class="mb-14 fade-in stagger-1">
+    <a href="v2-fleet-basic.html" class="block bg-gradient-to-r from-accent-green/10 to-accent-blue/10 border border-accent-green/25 rounded-2xl p-8 text-center hover:border-accent-green/40 transition-all">
+      <div class="font-display text-[26px] font-bold text-fg-1 mb-2">Enter v2 Dashboard →</div>
+      <div class="text-[14px] text-fg-3">Opens Basic Mode (default) · Linear × Vercel aesthetic · Cabinet Grotesk display font</div>
+      <div class="flex items-center justify-center gap-4 mt-4 text-[12px] font-mono text-fg-3">
+        <span class="flex items-center gap-1.5"><i data-lucide="smartphone" class="w-3.5 h-3.5"></i> 375px mobile</span>
+        <span class="text-fg-3/40">·</span>
+        <span class="flex items-center gap-1.5"><i data-lucide="tablet" class="w-3.5 h-3.5"></i> 768px tablet</span>
+        <span class="text-fg-3/40">·</span>
+        <span class="flex items-center gap-1.5"><i data-lucide="monitor" class="w-3.5 h-3.5"></i> 1280px+</span>
+      </div>
+    </a>
+  </div>
+
+  <!-- V2 PAGES -->
+  <h2 class="font-display text-[20px] font-bold text-fg-1 mb-5 fade-in stagger-1">V2 Pages</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-14 fade-in stagger-2">
+    <a href="v2-fleet-basic.html" class="link-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-accent-green/10 flex items-center justify-center"><i data-lucide="layout-grid" class="w-4 h-4 text-accent-green"></i></div>
+        <div class="flex items-center gap-2">
+          <span class="badge badge-new">default</span>
+          <span class="badge badge-v2">v2</span>
+        </div>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-1">Fleet — Basic Mode</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">Default view. Glanceable, mobile-first. Answers "is anything broken?" in 2 seconds. Status banner, agent list, quick actions.</p>
+      <div class="mt-3 text-[11px] font-mono text-accent-green">v2-fleet-basic.html</div>
+    </a>
+    <a href="v2-fleet-advanced.html" class="link-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center"><i data-lucide="bar-chart-2" class="w-4 h-4 text-accent-blue"></i></div>
+        <span class="badge badge-v2">v2</span>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-1">Fleet — Advanced Mode</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">Full F01-F10 Tier 1 features. Tile grid with SLO gauges, cache hit, context budget, sparklines, MCP health. Mode toggle visible.</p>
+      <div class="mt-3 text-[11px] font-mono text-accent-green">v2-fleet-advanced.html</div>
+    </a>
+    <a href="v2-agent-detail.html" class="link-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-accent-amber/10 flex items-center justify-center"><i data-lucide="bot" class="w-4 h-4 text-accent-amber"></i></div>
+        <span class="badge badge-v2">v2</span>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-1">Agent Detail Inspector</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">Three-panel inspector for fin-acquisition. Config, live transcript (streaming), memory + SLO gauges + dream-pass queue.</p>
+      <div class="mt-3 text-[11px] font-mono text-accent-green">v2-agent-detail.html</div>
+    </a>
+    <a href="v2-config-editor.html" class="link-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-accent-gold/10 flex items-center justify-center"><i data-lucide="settings-2" class="w-4 h-4 text-accent-gold"></i></div>
+        <div class="flex items-center gap-2">
+          <span class="badge badge-new">F26 new</span>
+          <span class="badge badge-v2">v2</span>
+        </div>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-1">Config Editor</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">In-UI YAML config editor. Tabbed form (Identity/Model/Channels/Tools/MCP/Memory/Debug). YAML diff preview. Save hot-reload + restart modal.</p>
+      <div class="mt-3 text-[11px] font-mono text-accent-green">v2-config-editor.html</div>
+    </a>
+    <a href="v2-conversations.html" class="link-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-accent-pink/10 flex items-center justify-center"><i data-lucide="message-square" class="w-4 h-4 text-accent-pink"></i></div>
+        <div class="flex items-center gap-2">
+          <span class="badge badge-new">F27 new</span>
+          <span class="badge badge-v2">v2</span>
+        </div>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-1">Conversations View</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">Active streaming sessions + searchable past threads. Agent filter chips, tool call pills, typing cursor. Full-text search + filter.</p>
+      <div class="mt-3 text-[11px] font-mono text-accent-green">v2-conversations.html</div>
+    </a>
+    <a href="v2-tasks.html" class="link-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-accent-blue/10 flex items-center justify-center"><i data-lucide="check-square" class="w-4 h-4 text-accent-blue"></i></div>
+        <div class="flex items-center gap-2">
+          <span class="badge badge-new">F28 new</span>
+          <span class="badge badge-v2">v2</span>
+        </div>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-1">Task Board</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">Kanban with 6 columns (Backlog → Done). HTML5 drag-and-drop. Create task modal with full F28 spec. Task detail panel with history.</p>
+      <div class="mt-3 text-[11px] font-mono text-accent-green">v2-tasks.html</div>
+    </a>
+  </div>
+
+  <!-- V1 REFERENCE -->
+  <h2 class="font-display text-[20px] font-bold text-fg-1 mb-5">V1 Reference</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-14 fade-in stagger-3">
+    <a href="mockup-fleet.html" class="v1-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-fg-3/10 flex items-center justify-center"><i data-lucide="layout-grid" class="w-4 h-4 text-fg-3"></i></div>
+        <span class="badge badge-v1">v1</span>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-2 mb-1">Fleet Overview (v1)</h3>
+      <p class="text-[13px] text-fg-3">Fraunces serif, hot pink primary, radial gradients, dense editorial dark. Desktop-1440 only. Starting point for v2 feedback.</p>
+      <div class="mt-3 text-[11px] font-mono text-fg-3">mockup-fleet.html</div>
+    </a>
+    <a href="mockup-agent-detail.html" class="v1-card p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="w-8 h-8 rounded-lg bg-fg-3/10 flex items-center justify-center"><i data-lucide="bot" class="w-4 h-4 text-fg-3"></i></div>
+        <span class="badge badge-v1">v1</span>
+      </div>
+      <h3 class="font-display text-[15px] font-bold text-fg-2 mb-1">Agent Detail (v1)</h3>
+      <p class="text-[13px] text-fg-3">Three-panel inspector with decorative edge bar, serif headings. Proof of concept for the detail drawer layout.</p>
+      <div class="mt-3 text-[11px] font-mono text-fg-3">mockup-agent-detail.html</div>
+    </a>
+  </div>
+
+  <!-- COMPARISON TABLE -->
+  <h2 class="font-display text-[20px] font-bold text-fg-1 mb-5">v1 vs v2 Comparison</h2>
+  <div class="card p-6 mb-14 fade-in stagger-3">
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Typography</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: Fraunces serif italic — editorial gravitas, "advanced view vibes"</div>
+        <div class="text-[13px] text-accent-green">v2: Cabinet Grotesk geometric sans — modern startup, clean, distinctive. No serif.</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Primary accent</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: Hot pink #ff3366 everywhere — nav active, palette selection, hero metrics</div>
+        <div class="text-[13px] text-accent-green">v2: Emerald #10b981 primary, hot pink sparingly (streaming-only indicator). Refined blue for secondary actions.</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Mode</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: Advanced only — single dense power-user view</div>
+        <div class="text-[13px] text-accent-green">v2: Basic (default) + Advanced toggle. Basic = glanceable list, not display:none of advanced. Structurally different.</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Mobile</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: Desktop 1440px only — sidebar fixed, no touch targets, no bottom nav</div>
+        <div class="text-[13px] text-accent-green">v2: Mobile-first (375px default). Bottom tab nav, collapsible sidebar, touch targets ≥44px at all breakpoints.</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Background</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: #0a0a0e + radial gradient mesh + grain overlay — heavy, theatrical</div>
+        <div class="text-[13px] text-accent-green">v2: #0e0e12 (lighter) + solid surfaces — clean, breathable. No grain. No radial mesh.</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Ramy indicator</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: Crown badge absolute-positioned top-right — ornamental</div>
+        <div class="text-[13px] text-accent-green">v2: Minimal gold star (★) inline with agent name — elevated, not decorative.</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">New features</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: F01-F15 (Tier 1 + Tier 2)</div>
+        <div class="text-[13px] text-accent-green">v2: F01-F15 retained + F26 config editor + F27 conversations + F28 task board</div>
+      </div>
+    </div>
+    <div class="compare-row">
+      <div class="w-40 flex-shrink-0 text-[12px] font-mono text-fg-3 uppercase tracking-wider pt-0.5">Density</div>
+      <div class="flex-1">
+        <div class="text-[13px] text-fg-3 line-through mb-1">v1: 12px body text, tight spacing, many fields per tile</div>
+        <div class="text-[13px] text-accent-green">v2: 14-15px body, p-6 card padding, 4 fields max in basic mode. Generous line-height.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AESTHETIC SUMMARY -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-14 fade-in stagger-3">
+    <div class="card p-5">
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-3">Design direction</h3>
+      <p class="text-[13px] text-fg-3 leading-relaxed">Soft dark (Option A). Background #0e0e12. Emerald as primary accent. Cabinet Grotesk display. Geist body. JetBrains Mono data.</p>
+    </div>
+    <div class="card p-5">
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-3">Mobile breakpoints</h3>
+      <div class="space-y-1.5 text-[12px] font-mono">
+        <div class="flex gap-3"><span class="text-fg-3 w-12">375px</span><span class="text-fg-2">Single col, bottom nav, full-screen modals</span></div>
+        <div class="flex gap-3"><span class="text-fg-3 w-12">768px</span><span class="text-fg-2">2-col tiles, sidebar drawer</span></div>
+        <div class="flex gap-3"><span class="text-fg-3 w-12">1024px</span><span class="text-fg-2">Sidebar fixed, 2-3 col</span></div>
+        <div class="flex gap-3"><span class="text-fg-3 w-12">1280px</span><span class="text-fg-2">Full sidebar labels, 3-4 col</span></div>
+      </div>
+    </div>
+    <div class="card p-5">
+      <h3 class="font-display text-[15px] font-bold text-fg-1 mb-3">Features coverage</h3>
+      <div class="space-y-1.5 text-[13px]">
+        <div class="flex justify-between"><span class="text-fg-3">F01-F10 Tier 1</span><span class="text-accent-green">✓ fleet-advanced</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">F11-F15 Tier 2</span><span class="text-accent-green">✓ agent-detail</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">F26 Config editor</span><span class="text-accent-green">✓ config-editor</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">F27 Conversations</span><span class="text-accent-green">✓ conversations</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">F28 Task board</span><span class="text-accent-green">✓ tasks</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">Cmd+K palette</span><span class="text-accent-green">✓ all pages</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">Mode toggle</span><span class="text-accent-green">✓ all pages</span></div>
+        <div class="flex justify-between"><span class="text-fg-3">Mobile nav</span><span class="text-accent-green">✓ bottom tabs</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="text-center text-[12px] font-mono text-fg-3 pb-12">
+    v2 mockup · May 8, 2026 · ClawCode dashboard redesign
+  </div>
+</div>
+
+<script>lucide.createIcons();</script>
+</body>
+</html>

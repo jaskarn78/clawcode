@@ -165,6 +165,111 @@ export function getBindingsForAgent(
 }
 
 /**
+ * Phase 999.36 sub-bug C (D-09, D-10) — find a binding by sessionName.
+ *
+ * The subagent's sessionName is the SDK-level agent identity (e.g.
+ * `fin-acquisition-sub-OV9rkf`). When the LLM in a subagent context
+ * calls `clawcode_share_file` and passes `agent: <its own sessionName>`,
+ * the daemon's IPC handler uses this helper to resolve the actual
+ * Discord thread the subagent is bound to — overriding the otherwise-
+ * incorrect fallback to `agentConfig.channels[0]`.
+ *
+ * Returns undefined for non-subagent invocations (no binding has the
+ * given sessionName) — caller MUST fall through to existing channel
+ * resolution.
+ *
+ * Disambiguates the shared-workspace failure class: when two agents in
+ * the same workspace (e.g. fin-acquisition + finmentum-content-creator)
+ * spawn subagents, each subagent's sessionName is unique even though
+ * the parent agentName field on the binding is shared by the family.
+ * Looking up by sessionName picks the correct binding deterministically.
+ *
+ * @param registry - The current registry state
+ * @param sessionName - The subagent session name to look up
+ */
+export function getBindingForSession(
+  registry: ThreadBindingRegistry,
+  sessionName: string,
+): ThreadBinding | undefined {
+  return registry.bindings.find((b) => b.sessionName === sessionName);
+}
+
+/**
+ * Phase 999.36 sub-bug D — stamp lastDeliveryAt on a binding.
+ * Read → modify → atomic write. No-op if the threadId has no binding.
+ * Failure-mode: registry write rejection → returns { ok: false, reason }
+ * so caller (the spawner) can log without crashing the delivery path.
+ */
+export async function stampLastDeliveryAt(
+  registryPath: string,
+  threadId: string,
+  deliveredAt: number,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const registry = await readThreadRegistry(registryPath);
+  const idx = registry.bindings.findIndex((b) => b.threadId === threadId);
+  if (idx === -1) return { ok: false, reason: "no-binding" };
+  const existing = registry.bindings[idx]!;
+  const updated: ThreadBinding = { ...existing, lastDeliveryAt: deliveredAt };
+  const newRegistry: ThreadBindingRegistry = {
+    bindings: [
+      ...registry.bindings.slice(0, idx),
+      updated,
+      ...registry.bindings.slice(idx + 1),
+    ],
+    updatedAt: Date.now(),
+  };
+  try {
+    await writeThreadRegistry(registryPath, newRegistry);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
+  }
+}
+
+/**
+ * Phase 999.36 sub-bug D — one-time migration for pre-Phase-999.36 bindings.
+ *
+ * Bindings created before this phase lack `lastDeliveryAt`. After this
+ * phase deploys, the relay gate refuses to fire if lastDeliveryAt is null.
+ * For bindings that ALREADY had a relay event before deploy (completedAt
+ * is set), do nothing — they're terminal. For bindings with no completedAt
+ * AND no lastDeliveryAt, treat lastActivity as the delivery proxy
+ * (assumes pre-Phase-999.36 deliveries did happen, just weren't stamped).
+ *
+ * Run ONCE on daemon startup; idempotent (re-running is a no-op for
+ * already-migrated bindings).
+ *
+ * REMOVE AFTER 999.36+1 milestone closes — bindings will be naturally
+ * migrated by then.
+ *
+ * Returns count of bindings migrated for log visibility.
+ */
+export async function migrateBindingsForPhase999_36(
+  registryPath: string,
+): Promise<{ migrated: number; total: number }> {
+  const registry = await readThreadRegistry(registryPath);
+  let migrated = 0;
+  const updatedBindings = registry.bindings.map((b) => {
+    if (b.completedAt !== undefined && b.completedAt !== null) {
+      return b;
+    }
+    if (b.lastDeliveryAt !== undefined && b.lastDeliveryAt !== null) {
+      return b;
+    }
+    migrated++;
+    return { ...b, lastDeliveryAt: b.lastActivity };
+  });
+  if (migrated > 0) {
+    const newRegistry: ThreadBindingRegistry = {
+      bindings: updatedBindings,
+      updatedAt: Date.now(),
+    };
+    await writeThreadRegistry(registryPath, newRegistry);
+  }
+  return { migrated, total: registry.bindings.length };
+}
+
+/**
  * Type guard for Node.js system errors with a code property.
  */
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

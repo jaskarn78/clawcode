@@ -15,11 +15,19 @@ describe("DEFAULT_TIER_CONFIG", () => {
       hotDemotionDays: 7,
       coldRelevanceThreshold: 0.05,
       hotBudget: 20,
+      centralityPromoteThreshold: 5,
     });
   });
 
   it("is frozen (immutable)", () => {
     expect(Object.isFrozen(DEFAULT_TIER_CONFIG)).toBe(true);
+  });
+
+  // TC-A5: Phase 100-fu — graph-centrality threshold default is 5.
+  // Captures hub nodes in the wikilink graph (memories with >=5 inbound
+  // wikilinks are structurally important even if rarely directly accessed).
+  it("TC-A5: centralityPromoteThreshold default is 5", () => {
+    expect(DEFAULT_TIER_CONFIG.centralityPromoteThreshold).toBe(5);
   });
 });
 
@@ -71,6 +79,66 @@ describe("shouldPromoteToHot", () => {
     const accessedAt = new Date("2026-04-07T12:00:00Z").toISOString(); // 2 days ago
     expect(shouldPromoteToHot(4, accessedAt, now, customConfig)).toBe(false); // below 5
     expect(shouldPromoteToHot(5, accessedAt, now, customConfig)).toBe(true);
+  });
+
+  // Phase 100-fu — graph-centrality promotion path. Heavy-backlink hubs
+  // are structurally important (every backlink is a wikilink edge from
+  // some other memory) and should be promoted to hot tier even when their
+  // direct access_count is low. Production audit (fin-acquisition agent):
+  // 1,161 of 1,182 memories at access_count=0 despite 7,338 wikilink edges.
+
+  // TC-A1: at-or-above the centrality threshold => promote.
+  it("TC-A1: returns true when backlinkCount >= centralityPromoteThreshold (5)", () => {
+    const accessedAt = new Date("2025-01-01T00:00:00Z").toISOString(); // very old
+    // accessCount=0, ancient access — the access-based path returns false,
+    // forcing the centrality path to be the reason for the true result.
+    expect(shouldPromoteToHot(0, accessedAt, now, config, 5)).toBe(true);
+  });
+
+  // TC-A2: just below the threshold => no promotion. Confirms the
+  // boundary is `>=` not `>`.
+  it("TC-A2: returns false when backlinkCount < centralityPromoteThreshold", () => {
+    const accessedAt = now.toISOString();
+    expect(shouldPromoteToHot(0, accessedAt, now, config, 4)).toBe(false);
+  });
+
+  // TC-A3: back-compat — omitting the new param leaves all existing
+  // call sites operating exactly as before this fix.
+  it("TC-A3: backlinkCount=undefined behaves identically to pre-fix (only access path)", () => {
+    const accessedAt = new Date("2026-04-05T12:00:00Z").toISOString(); // 4 days ago
+    // Same inputs as the first happy-path test above — expect the same
+    // result with the new param omitted.
+    expect(shouldPromoteToHot(3, accessedAt, now, config)).toBe(true);
+
+    // Below access threshold + undefined backlinkCount must be false
+    // (no centrality fallback to rescue the row).
+    expect(shouldPromoteToHot(2, accessedAt, now, config)).toBe(false);
+
+    // Old access date + undefined backlinkCount must also be false.
+    const oldAccess = new Date("2026-03-30T12:00:00Z").toISOString(); // 10 days
+    expect(shouldPromoteToHot(100, oldAccess, now, config)).toBe(false);
+  });
+
+  // TC-A4: centrality wins over a stale + low-access record. This is the
+  // exact production scenario: a hub node at access_count=0 with an old
+  // accessed_at but heavy inbound links — must still promote.
+  it("TC-A4: high backlinkCount overrides low access AND old accessedAt", () => {
+    const ancient = new Date("2024-01-01T00:00:00Z").toISOString();
+    // 6 backlinks (above the default-5 threshold), accessCount=0,
+    // accessedAt 2+ years old — the access-based path returns false, and
+    // the centrality path returns true.
+    expect(shouldPromoteToHot(0, ancient, now, config, 6)).toBe(true);
+  });
+
+  // Custom centrality threshold is honored.
+  it("respects custom centralityPromoteThreshold", () => {
+    const customConfig: TierConfig = {
+      ...config,
+      centralityPromoteThreshold: 10,
+    };
+    const accessedAt = now.toISOString();
+    expect(shouldPromoteToHot(0, accessedAt, now, customConfig, 9)).toBe(false);
+    expect(shouldPromoteToHot(0, accessedAt, now, customConfig, 10)).toBe(true);
   });
 });
 

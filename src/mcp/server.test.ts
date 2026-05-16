@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { TOOL_DEFINITIONS, invokeWithCache } from "./server.js";
 import { TraceCollector, type Turn } from "../performance/trace-collector.js";
 import type { TraceStore } from "../performance/trace-store.js";
@@ -33,8 +34,21 @@ describe("TOOL_DEFINITIONS", () => {
     expect(TOOL_DEFINITIONS.list_agents.ipcMethod).toBe("status");
   });
 
-  it("has exactly 20 tools defined", () => {
-    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(20);
+  it("has exactly 22 tools defined", () => {
+    // Phase 100 follow-up — added schedule_reminder (was 21 after archive_thread).
+    expect(Object.keys(TOOL_DEFINITIONS).length).toBe(22);
+  });
+
+  it("defines archive_thread tool", () => {
+    expect(TOOL_DEFINITIONS.archive_thread).toBeDefined();
+    expect(TOOL_DEFINITIONS.archive_thread.description).toContain("Archive");
+    expect(TOOL_DEFINITIONS.archive_thread.ipcMethod).toBe("archive-discord-thread");
+  });
+
+  it("defines schedule_reminder tool", () => {
+    expect(TOOL_DEFINITIONS.schedule_reminder).toBeDefined();
+    expect(TOOL_DEFINITIONS.schedule_reminder.description).toContain("reminder");
+    expect(TOOL_DEFINITIONS.schedule_reminder.ipcMethod).toBe("schedule-reminder");
   });
 
   it("defines ask_advisor tool", () => {
@@ -335,5 +349,116 @@ describe("invokeWithCache + acquireToolSlot (v1.7 cleanup)", () => {
     const raw = vi.fn().mockResolvedValue({ ok: true });
     await invokeWithCache("memory_lookup", "alpha", { q: "x" }, raw, undefined);
     expect(raw).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Phase 999.2 Plan 02 — MCP tool aliases (D-RNX-01..04)
+//
+// Pins:
+//   1. Canonical names ask_agent / post_to_agent are registered.
+//   2. Old names send_message / send_to_agent remain registered as deprecated
+//      aliases whose description starts with [DEPRECATED — use {new} instead].
+//   3. Canonical name appears BEFORE the alias in the source file (insertion
+//      order = tools/list iteration order — controls LLM picking heuristic
+//      per D-RNX-04 verified against
+//      node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js:67-69).
+describe("Phase 999.2 Plan 02 — MCP tool aliases", () => {
+  const serverSource = readFileSync("src/mcp/server.ts", "utf8");
+
+  it("ask_agent is registered (canonical name)", () => {
+    expect(serverSource).toMatch(/server\.tool\(\s*"ask_agent"/);
+  });
+
+  it("send_message is registered as DEPRECATED alias (description prefix pinned)", () => {
+    const m = serverSource.match(
+      /server\.tool\(\s*"send_message",\s*\n?\s*"\[DEPRECATED — use ask_agent instead\]/,
+    );
+    expect(
+      m,
+      "send_message tool description must start with [DEPRECATED — use ask_agent instead]",
+    ).not.toBeNull();
+  });
+
+  it("ask_agent is registered BEFORE send_message (insertion order = tools/list order)", () => {
+    const askAt = serverSource.search(/server\.tool\(\s*"ask_agent"/);
+    const sendAt = serverSource.search(/server\.tool\(\s*"send_message"/);
+    expect(askAt).toBeGreaterThan(-1);
+    expect(sendAt).toBeGreaterThan(-1);
+    expect(
+      askAt,
+      "ask_agent must be registered before send_message",
+    ).toBeLessThan(sendAt);
+  });
+
+  it("post_to_agent is registered (canonical name)", () => {
+    expect(serverSource).toMatch(/server\.tool\(\s*"post_to_agent"/);
+  });
+
+  it("send_to_agent is registered as DEPRECATED alias (description prefix pinned)", () => {
+    const m = serverSource.match(
+      /server\.tool\(\s*"send_to_agent",\s*\n?\s*"\[DEPRECATED — use post_to_agent instead\]/,
+    );
+    expect(
+      m,
+      "send_to_agent tool description must start with [DEPRECATED — use post_to_agent instead]",
+    ).not.toBeNull();
+  });
+
+  it("post_to_agent is registered BEFORE send_to_agent (insertion order = tools/list order)", () => {
+    const postAt = serverSource.search(/server\.tool\(\s*"post_to_agent"/);
+    const sendAt = serverSource.search(/server\.tool\(\s*"send_to_agent"/);
+    expect(postAt).toBeGreaterThan(-1);
+    expect(sendAt).toBeGreaterThan(-1);
+    expect(
+      postAt,
+      "post_to_agent must be registered before send_to_agent",
+    ).toBeLessThan(sendAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 999.2 Plan 03 — ask_agent sync-reply MCP wrapper
+//
+// The pure-DI handler tests in src/manager/__tests__/ask-agent-ipc.test.ts
+// pin the IPC contract (response field populated when target running, error
+// propagation, mirror webhook calls). This block pins the MCP-wrapper-side
+// SHAPE — the exact text templates surfaced to the calling LLM:
+//
+//   1. mirror_to_target_channel: z.boolean().default(false) added to schema
+//   2. `${input.to} replied:` text template rendered when response present
+//      (D-SYN-02 — the 2026-04-29 smoking-gun bug fix)
+//   3. `is not running — no synchronous reply` template when response absent
+//      (D-SYN-03 — explicit offline path)
+//   4. `Failed to ask ${input.to}: ${msg}` template on caught error
+//      (D-SYN-05 — error propagation surface)
+//
+// Static-grep is sufficient because the templates are deterministic strings;
+// the IPC contract is already pinned upstream by the pure-DI handler tests.
+// ---------------------------------------------------------------------------
+describe("Phase 999.2 Plan 03 — ask_agent sync-reply MCP wrapper", () => {
+  const serverSource = readFileSync("src/mcp/server.ts", "utf8");
+
+  it("askAgentSchema includes mirror_to_target_channel: z.boolean().default(false)", () => {
+    expect(serverSource).toContain(
+      "mirror_to_target_channel: z.boolean().default(false)",
+    );
+  });
+
+  it("ask_agent MCP wrapper renders target reply with `${input.to} replied:` template (A2A-09 — fixes 2026-04-29 smoking-gun bug)", () => {
+    // The wrapper used to destructure {ok, messageId} and silently discard
+    // result.response. Plan 03 surfaces the response in the tool-result text.
+    expect(serverSource).toMatch(/\$\{[^}]+\} replied:/);
+    // And the line must reference result.response (not just any random text):
+    expect(serverSource).toMatch(/result\.response/);
+  });
+
+  it("ask_agent MCP wrapper renders offline-explicit text when response is undefined (A2A-12)", () => {
+    expect(serverSource).toContain(
+      "is not running — no synchronous reply",
+    );
+  });
+
+  it("ask_agent MCP wrapper renders `Failed to ask ${input.to}: ${msg}` on dispatch error (A2A-11)", () => {
+    expect(serverSource).toMatch(/Failed to ask \$\{[^}]+\}:/);
   });
 });

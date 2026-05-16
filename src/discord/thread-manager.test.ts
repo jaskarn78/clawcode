@@ -28,11 +28,16 @@ function makeAgentConfig(
     allowedModels: ["haiku", "sonnet", "opus"], // Phase 86 MODEL-01
     greetOnRestart: true, // Phase 89 GREET-07
     greetCoolDownMs: 300_000, // Phase 89 GREET-10
+    autoCompactAt: 0.7, // Phase 124 D-06
     memoryAutoLoad: true, // Phase 90 MEM-01
     memoryRetrievalTopK: 5, // Phase 90 MEM-03
     memoryScannerEnabled: true, // Phase 90 MEM-02
     memoryFlushIntervalMs: 900_000, // Phase 90 MEM-04
     memoryCueEmoji: "✅", // Phase 90 MEM-05
+    autoIngestAttachments: false, // Phase 999.43 D-09
+    ingestionPriority: "medium" as const, // Phase 999.43 D-01 Axis 1
+    settingSources: ["project"], // Phase 100 GSD-02
+    autoStart: true, // Phase 100 follow-up
     skills: [],
     soul: "You are a test agent.",
     identity: "Test identity.",
@@ -96,7 +101,7 @@ function makeMockSessionManager() {
     forwardToAgent: vi.fn(async (_name: string, _message: string) => {}),
     getAgentConfig: vi.fn((agentName: string) => configs.get(agentName)),
     getRunningAgents: vi.fn(() => [...running]),
-    sendToAgent: vi.fn(),
+    dispatchTurn: vi.fn(),
     streamFromAgent: vi.fn(),
     forkSession: vi.fn(),
     restartAgent: vi.fn(),

@@ -147,7 +147,7 @@ describe("clawcode latency", () => {
 
   it("emits json output with --json flag", async () => {
     await program.parseAsync(["node", "clawcode", "latency", "alpha", "--json"]);
-    const combined = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const combined = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     const report = makeReport();
     expect(combined).toContain(JSON.stringify(report, null, 2));
   });
@@ -163,7 +163,7 @@ describe("clawcode latency", () => {
 
   it("renders percentile table with four canonical segments", async () => {
     await program.parseAsync(["node", "clawcode", "latency", "alpha"]);
-    const combined = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const combined = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(combined).toContain("end_to_end");
     expect(combined).toContain("first_token");
     expect(combined).toContain("context_assemble");
@@ -176,7 +176,7 @@ describe("clawcode latency", () => {
 
   it("renders ms unit suffix on numeric cells", async () => {
     await program.parseAsync(["node", "clawcode", "latency", "alpha"]);
-    const combined = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const combined = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(combined).toContain("ms");
   });
 });
@@ -283,7 +283,7 @@ describe("clawcode latency — First Token block (Phase 54)", () => {
       "alpha",
       "--json",
     ]);
-    const combined = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const combined = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(combined).toContain('"first_token_headline"');
     expect(combined).toContain('"slo_status": "healthy"');
     logSpy.mockRestore();
@@ -298,7 +298,7 @@ describe("clawcode latency — First Token block (Phase 54)", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     registerLatencyCommand(program);
     await program.parseAsync(["node", "clawcode", "latency", "--all"]);
-    const combined = logSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    const combined = logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(combined).toContain("First Token Latency (alpha)");
     expect(combined).toContain("First Token Latency (bravo)");
     // Each table still renders.

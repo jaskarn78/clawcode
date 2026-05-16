@@ -25,6 +25,12 @@ import {
   type RunDreamPassIpcResponse,
 } from "../dream.js";
 
+// vitest 4 narrows `.mock.calls` to the inferred parameter tuple. Pin the
+// mock to the exact `sendIpc` signature so `calls[i]` reads as `[method,
+// params]` instead of `[]`. NonNullable peels off the optional wrapper on
+// RunDreamActionArgs.sendIpc.
+type SendIpcFn = NonNullable<RunDreamActionArgs["sendIpc"]>;
+
 function completedResponse(): RunDreamPassIpcResponse {
   return {
     agent: "fin-acquisition",
@@ -86,7 +92,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
   });
 
   it("CLI1: no flags → IPC params have idleBypass:false, force:false, modelOverride:undefined; exits 0 on completed", async () => {
-    const sendIpc = vi.fn(async () => completedResponse());
+    const sendIpc = vi.fn<SendIpcFn>(async () => completedResponse());
 
     const args: RunDreamActionArgs = {
       agent: "fin-acquisition",
@@ -109,7 +115,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
   });
 
   it("CLI2: --idle-bypass → idleBypass:true in IPC params", async () => {
-    const sendIpc = vi.fn(async () => completedResponse());
+    const sendIpc = vi.fn<SendIpcFn>(async () => completedResponse());
 
     await runDreamAction({
       agent: "fin-acquisition",
@@ -122,7 +128,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
   });
 
   it("CLI3: --force --model sonnet → force:true, modelOverride:'sonnet'", async () => {
-    const sendIpc = vi.fn(async () => completedResponse());
+    const sendIpc = vi.fn<SendIpcFn>(async () => completedResponse());
 
     await runDreamAction({
       agent: "fin-acquisition",
@@ -161,7 +167,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
   });
 
   it("CLI5: outcome.kind='failed' → exit 1, stderr contains error", async () => {
-    const sendIpc = vi.fn(async () => ({
+    const sendIpc = vi.fn<SendIpcFn>(async () => ({
       agent: "fin-acquisition",
       startedAt: "2026-04-25T12:00:00Z",
       outcome: { kind: "failed" as const, error: "dispatch boom" },
@@ -181,7 +187,7 @@ describe("clawcode dream — Phase 95 Plan 03 (CLI1-CLI7)", () => {
   });
 
   it("CLI6: outcome.kind='skipped' → exit 2, stderr contains skip reason", async () => {
-    const sendIpc = vi.fn(async () => ({
+    const sendIpc = vi.fn<SendIpcFn>(async () => ({
       agent: "fin-acquisition",
       startedAt: "2026-04-25T12:00:00Z",
       outcome: { kind: "skipped" as const, reason: "disabled" as const },

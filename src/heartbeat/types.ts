@@ -2,6 +2,8 @@ import type { SessionManager } from "../manager/session-manager.js";
 import type { Registry } from "../manager/types.js";
 import type { ThreadManager } from "../discord/thread-manager.js";
 import type { TaskStore } from "../tasks/store.js";
+import type { SecretsResolver } from "../manager/secrets-resolver.js";
+import type { BrokerStatusProvider } from "./checks/mcp-broker.js";
 
 /**
  * Health check status values.
@@ -27,6 +29,52 @@ export type CheckContext = {
   readonly config: HeartbeatConfig;
   readonly threadManager?: ThreadManager;
   readonly taskStore?: TaskStore;
+  /**
+   * Phase 104 plan 03 (SEC-05) — exposed to checks that build
+   * RecoveryDeps so the op-refresh recovery handler can invalidate the
+   * secrets cache before re-resolving stale auth-error values. Optional
+   * because most checks (auto-linker, fs-probe, etc.) don't need it; only
+   * mcp-reconnect builds RecoveryDeps. Tests for those unrelated checks
+   * leave it undefined and continue working unchanged.
+   */
+  readonly secretsResolver?: SecretsResolver;
+  /**
+   * Phase 108 (POOL-07) — daemon-side adapter exposing
+   * `broker.getPoolStatus()` to the mcp-broker heartbeat check. Optional
+   * because most checks (auto-linker, fs-probe, etc.) don't need it; only
+   * the mcp-broker check reads it. Tests for unrelated checks leave it
+   * undefined and continue working unchanged. **Intentionally narrow:
+   * NEVER add a dispatch / callTool / sendRequest method here — see
+   * checks/mcp-broker.ts header (rate-limit-budget invariant).**
+   */
+  readonly brokerStatusProvider?: BrokerStatusProvider;
+  /**
+   * Phase 124 Plan 04 T-02 — auto-trigger wiring. When present, the
+   * `context-fill` check fires this closure (fire-and-forget) whenever
+   * the per-agent `autoCompactAt` threshold is crossed AND the cooldown
+   * window has elapsed. Daemon constructs the closure as a thin wrapper
+   * around `handleCompactSession` with the same deps the IPC path uses,
+   * so both manual and auto paths flow through identical compaction
+   * semantics. UNDEFINED when the runner has not been wired (legacy /
+   * test path); the check then skips auto-trigger silently.
+   */
+  readonly compactSessionTrigger?: (agent: string) => Promise<void>;
+  /**
+   * Phase 124 Plan 04 T-02 — last-compaction ISO timestamp lookup. Used
+   * by the context-fill check to enforce the 5-min cooldown gate. Reads
+   * from the same `CompactionEventLog` the `heartbeat-status` IPC payload
+   * surfaces, so manual + auto compactions share one cooldown view.
+   */
+  readonly getLastCompactionAt?: (agent: string) => string | null;
+  /** Injectable clock — production uses Date.now (testability hook). */
+  readonly now?: () => number;
+  /**
+   * Phase 124 Plan 04 T-02 — auto-trigger cooldown window in
+   * milliseconds. Default 5 min (5*60*1000). Operator can tune via
+   * config in a future phase; today it's hard-coded at the daemon-side
+   * runner wiring.
+   */
+  readonly cooldownMs?: number;
 };
 
 /**
@@ -47,6 +95,17 @@ export type HeartbeatConfig = {
   readonly enabled: boolean;
   readonly intervalSeconds: number;
   readonly checkTimeoutSeconds: number;
+  /**
+   * Phase 999.12 HB-01 — per-check timeout override for the inbox check
+   * only (in milliseconds). Cross-agent turns commonly take 30-90s; the
+   * fleet-wide checkTimeoutSeconds (default 10s) generates false-positive
+   * critical alerts on the inbox check during an in-flight turn. Specified
+   * in milliseconds (rather than seconds) to disambiguate from
+   * `checkTimeoutSeconds` and align with millisecond-granular timeout
+   * primitives used elsewhere. Threaded from
+   * `defaults.heartbeatInboxTimeoutMs` (schema default 60_000).
+   */
+  readonly inboxTimeoutMs?: number;
   readonly contextFill: {
     readonly warningThreshold: number;
     readonly criticalThreshold: number;

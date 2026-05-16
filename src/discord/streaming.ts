@@ -91,6 +91,26 @@ export class ProgressiveMessageEditor {
   private readonly turnId: string | undefined;
   private firstVisibleTokenEmitted = false;
   private rateLimitWarnEmitted = false;
+  /**
+   * Phase 100-fu — in-flight serialization lock for editFn invocations.
+   *
+   * Bug fixed: editFn was previously invoked fire-and-forget (
+   * `void this.editFn(text).catch(...)`). When the first send was still in-
+   * flight (~500ms Discord network round-trip) and the throttle timer fired
+   * the next chunk, both calls reached bridge.ts's editFn implementation.
+   * Both saw `messageRef.current === null`, both called `channel.send`, and
+   * Discord showed TWO near-identical messages instead of ONE
+   * progressively-edited message.
+   *
+   * Fix: serialize through this `inFlight` promise chain. Each call awaits
+   * the previous before starting its own editFn body. Rejections are
+   * isolated — a failed call N never prevents call N+1 from starting (the
+   * await drains the rejection silently, then handleEditError runs).
+   *
+   * The chain is per-editor-instance, and editors are reconstructed per
+   * Turn, so the lock naturally resets at turn boundaries.
+   */
+  private inFlight: Promise<void> | null = null;
 
   constructor(options: ProgressiveEditorOptions) {
     this.editFn = options.editFn;
@@ -132,7 +152,7 @@ export class ProgressiveMessageEditor {
         }
       }
       const text = this.truncate(accumulated);
-      void this.editFn(text).catch((err) => this.handleEditError(err));
+      void this.invokeEditFn(text);
       return;
     }
 
@@ -143,10 +163,40 @@ export class ProgressiveMessageEditor {
         if (this.pendingText !== null && !this.disposed) {
           const text = this.truncate(this.pendingText);
           this.pendingText = null;
-          void this.editFn(text).catch((err) => this.handleEditError(err));
+          void this.invokeEditFn(text);
         }
       }, this.editIntervalMs);
     }
+  }
+
+  /**
+   * Phase 100-fu — serialize editFn invocations through an in-flight promise
+   * chain. Returns the promise representing this call so flush() (which
+   * awaits the editFn directly today) keeps the same await semantics.
+   *
+   * Errors from `editFn` are routed to `handleEditError` exactly as before
+   * (the prior `.catch` arm). Errors from a *previous* call are awaited but
+   * NOT re-thrown — they were already handled by their own catch arm; we
+   * only care about ordering, not error propagation between calls.
+   */
+  private invokeEditFn(text: string): Promise<void> {
+    const previous = this.inFlight;
+    const next = (async () => {
+      if (previous) {
+        try {
+          await previous;
+        } catch {
+          /* drained — prior call already handled its own error */
+        }
+      }
+      try {
+        await this.editFn(text);
+      } catch (err) {
+        this.handleEditError(err);
+      }
+    })();
+    this.inFlight = next;
+    return next;
   }
 
   /**
@@ -196,7 +246,10 @@ export class ProgressiveMessageEditor {
     if (this.pendingText !== null) {
       const text = this.truncate(this.pendingText);
       this.pendingText = null;
-      await this.editFn(text);
+      // Phase 100-fu — go through the serialization lock so flush() waits
+      // for any in-flight edit before sending the final text. Preserves the
+      // original "await editFn" semantics for callers awaiting flush().
+      await this.invokeEditFn(text);
     }
   }
 

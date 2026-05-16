@@ -42,6 +42,9 @@ import {
  * Phase 36-41 auto-linker). Pinned shape:
  *   - newWikilinks: from/to/rationale
  *   - promotionCandidates: chunkId/currentPath/rationale/priorityScore (0..100)
+ *     PLUS optional action / targetMode for Phase 115 D-10 row-3 detection
+ *     (mutating-vs-additive fork). Legacy LLM responses that omit these
+ *     fields are treated as additive (Row-2 semantics under D-10).
  *   - themedReflection: free-form narrative
  *   - suggestedConsolidations: sources[]/newPath/rationale
  */
@@ -59,6 +62,19 @@ export const dreamResultSchema = z.object({
       currentPath: z.string(),
       rationale: z.string(),
       priorityScore: z.number().min(0).max(100),
+      /**
+       * Phase 115 D-10 — optional action verb. Legacy schema omitted this
+       * field (treated as "add"). When the LLM emits "edit" or "merge",
+       * Phase 115 D-10 Row-3 detection routes the candidate to operator-
+       * required regardless of priorityScore.
+       */
+      action: z.enum(["add", "edit", "merge"]).optional(),
+      /**
+       * Phase 115 D-10 — optional target mode. "overwrite" implies the
+       * promotion is mutating (Row-3); "append" or absent implies additive
+       * (Row-2 default).
+       */
+      targetMode: z.enum(["append", "overwrite"]).optional(),
     }),
   ),
   themedReflection: z.string(),
@@ -132,19 +148,32 @@ export interface DreamDispatchResponse {
 
 export interface DreamPassLog {
   info(msg: string): void;
-  warn(msg: string): void;
+  /**
+   * Phase 107 DREAM-OUT-03 — pino-style structured warn. Accepts either:
+   *   - `(obj, msg)` — structured form (preferred): operators grep on
+   *     `component=dream-pass action=parse-failed agent=<name>` in journalctl.
+   *   - `(msg)` — string-only fallback for legacy callers.
+   *
+   * Single union signature (NOT TS overloads) so test stubs that only
+   * accept `(msg: string)` still satisfy the interface — TS overloads
+   * require the implementation to handle every overload shape.
+   */
+  warn(objOrMsg: Record<string, unknown> | string, msg?: string): void;
   error(msg: string): void;
 }
 
 export interface RunDreamPassDeps {
   readonly memoryStore: {
-    getRecentChunks(agent: string, limit: number): Promise<MemoryChunk[]>;
+    getRecentChunks(
+      agent: string,
+      limit: number,
+    ): Promise<readonly MemoryChunk[]>;
   };
   readonly conversationStore: {
     getRecentSummaries(
       agent: string,
       limit: number,
-    ): Promise<ConversationSummary[]>;
+    ): Promise<readonly ConversationSummary[]>;
   };
   readonly readFile: (path: string) => Promise<string>;
   readonly dispatch: (req: DreamDispatchRequest) => Promise<DreamDispatchResponse>;
@@ -228,15 +257,70 @@ export async function runDreamPass(
       maxOutputTokens: MAX_OUTPUT_TOKENS,
     });
 
+    // Phase 99 dream hotfix (2026-04-26): Haiku frequently wraps JSON output
+    // in markdown code fences (```json ... ```) AND/OR adds narrative prose
+    // ("Picking up where we left off, here's the dream pass: {...}") despite
+    // the system prompt explicitly asking for raw JSON.
+    // Strategy: locate the first '{', balance braces to find matching '}',
+    // extract that substring. Handles both fence-wrapped + prose-wrapped cases.
+    // Falls back to original raw text if no balanced object found.
+    const extractJsonObject = (raw: string): string => {
+      const firstBrace = raw.indexOf("{");
+      if (firstBrace === -1) return raw;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let i = firstBrace; i < raw.length; i++) {
+        const ch = raw[i];
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            return raw.slice(firstBrace, i + 1);
+          }
+        }
+      }
+      return raw.slice(firstBrace); // unbalanced — let JSON.parse fail with clearer error
+    };
+    const stripCodeFence = extractJsonObject;
+
     let parsedJson: unknown;
     try {
-      parsedJson = JSON.parse(dispatchResp.rawText);
+      parsedJson = JSON.parse(stripCodeFence(dispatchResp.rawText));
     } catch (parseErr) {
       const msg =
         parseErr instanceof Error ? parseErr.message : String(parseErr);
-      const errorText = `dream-result-schema-validation-failed: JSON parse failed (${msg})`;
-      deps.log.error(`dream-pass: ${agentName} ${errorText}`);
-      return { kind: "failed", error: errorText };
+      // Phase 107 DREAM-OUT-03 — log warn (not error) with structured fields.
+      // Operator surface: parse-failure means "model misbehaved", not a
+      // system bug. Cap responsePrefix at 80 chars (Unicode-safe slice via
+      // Array.from so emoji + multibyte chars don't get split mid-codepoint).
+      const responsePrefix = Array.from(dispatchResp.rawText)
+        .slice(0, 80)
+        .join("");
+      deps.log.warn(
+        {
+          component: "dream-pass",
+          action: "parse-failed",
+          responsePrefix,
+          agent: agentName,
+          err: msg,
+        },
+        "dream pass returned non-JSON; treating as no-op",
+      );
+      return { kind: "failed", error: `parse-failed: ${msg}` };
     }
 
     const validated = dreamResultSchema.safeParse(parsedJson);

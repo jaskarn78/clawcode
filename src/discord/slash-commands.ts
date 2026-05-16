@@ -27,15 +27,17 @@ import {
   type StringSelectMenuInteraction,
 } from "discord.js";
 import { execSync } from "node:child_process";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { statSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import type { RoutingTable } from "./types.js";
 import type { SessionManager } from "../manager/session-manager.js";
 import type { ResolvedAgentConfig } from "../shared/types.js";
 import type { EffortLevel } from "../config/schema.js";
 import type { SlashCommandDef } from "./slash-types.js";
-import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS } from "./slash-types.js";
+import { DEFAULT_SLASH_COMMANDS, CONTROL_COMMANDS, GSD_SLASH_COMMANDS } from "./slash-types.js";
 // Phase 93 Plan 01 — pure renderer for /clawcode-status daemon short-circuit.
-import { buildStatusData, renderStatus } from "./status-render.js";
+import { buildStatusData, renderStatus, renderUsageBars } from "./status-render.js";
+import type { RateLimitSnapshot } from "../usage/rate-limit-tracker.js";
 // Phase 94 Plan 07 — shared pure renderer for the capability-probe column on
 // /clawcode-tools (Discord) AND `clawcode mcp-status` (CLI). Reads the
 // list-mcp-status IPC payload (with 94-01 + 94-07 extensions) and produces
@@ -81,12 +83,19 @@ import { SOCKET_PATH } from "../manager/daemon.js";
 import type { RegistryEntry } from "../manager/types.js";
 import { getAgentForChannel } from "./router.js";
 import { ProgressiveMessageEditor } from "./streaming.js";
+import { wrapMarkdownTablesInCodeFence } from "./markdown-table-wrap.js";
 import type { Logger } from "pino";
 import { logger } from "../shared/logger.js";
 import type { TurnDispatcher } from "../manager/turn-dispatcher.js";
 import type { TurnOrigin } from "../manager/turn-origin.js";
 import { makeRootOrigin } from "../manager/turn-origin.js";
 import type { SkillsCatalog } from "../skills/types.js";
+// Phase 100 Plan 04 GSD-01..03 — long-runner /gsd-* slash dispatch pre-spawns
+// a subagent thread via SubagentThreadSpawner.spawnInThread. The spawner is
+// injected via the SlashCommandHandlerConfig (optional — when absent the
+// handler emits a graceful "unavailable" reply, mirroring Phase 87 CMD-05's
+// optional-DI pattern for ACL deny sets).
+import type { SubagentThreadSpawner } from "./subagent-thread-spawner.js";
 
 /**
  * Maximum Discord message length (API limit).
@@ -136,12 +145,24 @@ const MODEL_CONFIRM_TTL_MS = 30_000;
 const MAX_COMMANDS_PER_GUILD = 90;
 
 /**
- * Phase 93 Plan 01 — version sourced from src/cli/index.ts L118
- * (`.version("0.2.0")`). Hard-coded so the status renderer doesn't depend on
- * Commander's dynamic version surface (no circular import, no runtime cost).
- * Bump this in lockstep with the CLI when minting a release.
+ * Phase 100 Plan 04 GSD-01..03 — long-runner /gsd-* commands that auto-spawn
+ * a subagent thread when invoked in #admin-clawdy. Short-runners (gsd-debug,
+ * gsd-quick) are intentionally NOT in this set — they fall through to the
+ * existing control-command / agent-routed branch where formatCommandMessage
+ * rewrites their claudeCommand template ("/gsd:debug {issue}" / "/gsd:quick
+ * {task}") to the canonical SDK form for inline dispatch.
+ *
+ * Detection happens BEFORE the generic control-command dispatch in
+ * handleInteraction — see the 12th application of the inline-handler-short-
+ * circuit pattern (Phases 85/86/87/88/90/91/92/95/96).
  */
-const CLAWCODE_VERSION = "0.2.0";
+const GSD_LONG_RUNNERS: ReadonlySet<string> = new Set([
+  "gsd-autonomous",
+  "gsd-plan-phase",
+  "gsd-execute-phase",
+]);
+
+import { CLAWCODE_VERSION } from "../shared/version.js";
 
 /**
  * Phase 93 Plan 01 — best-effort short git sha for /clawcode-status. Mirrors
@@ -217,43 +238,6 @@ type ToolsIpcServer = {
 type ToolsIpcResponse = {
   readonly agent: string;
   readonly servers: ReadonlyArray<ToolsIpcServer>;
-};
-
-// ---------------------------------------------------------------------------
-// Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status IPC response shape.
-//
-// Matches the daemon's `list-sync-status` handler (src/manager/daemon.ts).
-// Duplicated here instead of imported so slash-commands stays decoupled
-// from the src/sync module graph (same discipline as ToolsIpcResponse).
-// ---------------------------------------------------------------------------
-
-type SyncStatusIpcConflict = {
-  readonly path: string;
-  readonly sourceHash: string;
-  readonly destHash: string;
-  readonly detectedAt: string;
-};
-
-type SyncStatusIpcLastCycle = {
-  readonly cycleId: string;
-  readonly status: string;
-  readonly filesAdded?: number;
-  readonly filesUpdated?: number;
-  readonly filesRemoved?: number;
-  readonly filesSkippedConflict?: number;
-  readonly bytesTransferred?: number;
-  readonly durationMs: number;
-  readonly timestamp: string;
-  readonly error?: string;
-  readonly reason?: string;
-};
-
-type SyncStatusIpcResponse = {
-  readonly authoritativeSide: "openclaw" | "clawcode";
-  readonly lastSyncedAt: string | null;
-  readonly conflictCount: number;
-  readonly conflicts: ReadonlyArray<SyncStatusIpcConflict>;
-  readonly lastCycle: SyncStatusIpcLastCycle | null;
 };
 
 /**
@@ -335,6 +319,19 @@ export type SlashCommandHandlerConfig = {
    * default — fail closed).
    */
   readonly adminUserIds?: readonly string[];
+  /**
+   * Phase 100 Plan 04 GSD-01..03 — optional subagent thread spawner used by
+   * the 12th inline-handler short-circuit for /gsd-* long-runners. When the
+   * dispatcher detects gsd-autonomous / gsd-plan-phase / gsd-execute-phase in
+   * #admin-clawdy, it pre-spawns a subagent thread via spawnInThread and
+   * passes the canonical /gsd:* slash as the subagent's first user message.
+   *
+   * Optional so tests + non-Discord wiring continue to work — when absent,
+   * the handler emits a "Subagent thread spawning unavailable" editReply and
+   * does NOT throw. Mirrors the optional-DI pattern used by aclDeniedByAgent
+   * (Phase 87 CMD-05) and skillsCatalog (Phase 83 EFFORT-05).
+   */
+  readonly subagentThreadSpawner?: SubagentThreadSpawner;
 };
 
 // ---------------------------------------------------------------------------
@@ -392,36 +389,6 @@ type SkillInstallOutcomeWire =
       readonly skill: string;
       readonly reason: string;
     };
-
-/**
- * Phase 92 Plan 04 — Format a DestructiveButtonOutcome for the operator.
- *
- * The IPC response is the wire-shape of cutover/types.ts DestructiveButtonOutcome
- * but typed loosely here to keep the slash-commands module decoupled from the
- * full union. Callers pass `{kind, error?, gapKind?}` after IPC dispatch.
- */
-function formatCutoverOutcome(outcome: {
-  kind: string;
-  error?: string;
-  gapKind?: string;
-}): string {
-  switch (outcome.kind) {
-    case "accepted-applied":
-      return `Cutover gap accepted and applied${outcome.gapKind ? ` (${outcome.gapKind})` : ""}. Pre-change snapshot recorded in the ledger.`;
-    case "accepted-apply-failed":
-      return `Apply failed${outcome.gapKind ? ` (${outcome.gapKind})` : ""}: ${outcome.error ?? "unknown error"}. Audit row appended.`;
-    case "rejected":
-      return `Cutover gap rejected${outcome.gapKind ? ` (${outcome.gapKind})` : ""}. Target unchanged; reject row recorded.`;
-    case "deferred":
-      return `Deferred${outcome.gapKind ? ` (${outcome.gapKind})` : ""}. Re-running verify will re-surface this gap.`;
-    case "expired":
-      return "The interaction expired before a button was clicked.";
-    case "invalid-customId":
-      return "Cutover button click failed: invalid customId or gap not found.";
-    default:
-      return `Cutover outcome: ${outcome.kind}`;
-  }
-}
 
 function renderInstallOutcome(
   outcome: SkillInstallOutcomeWire,
@@ -640,16 +607,56 @@ type DreamIpcResponse = {
 };
 
 /**
- * Phase 95 Plan 03 DREAM-07 — pure admin gate. Returns true when the
- * interaction's user.id is in the configured admin allowlist. Empty
- * allowlist → fail-closed (returns false).
+ * Phase 95 Plan 03 DREAM-07 / Phase 100-fu — pure admin gate.
+ *
+ * Returns true when EITHER:
+ *   1. The interaction's `user.id` is in the explicit `adminUserIds`
+ *      allowlist (back-compat path), OR
+ *   2. The interaction's `channelId` is bound (via `routingTable`) to a
+ *      resolved agent flagged `admin: true` (NEW channel-bound path).
+ *
+ * Both paths are independently sufficient. Empty allowlist + unbound
+ * channel + non-admin agent binding all fail-closed → returns false.
+ *
+ * Rationale: the daemon does not always populate `adminUserIds` at
+ * construction (see manager/daemon.ts SlashCommandHandler init), so an
+ * operator running `/clawcode-dream` from `#admin-clawdy` (a channel
+ * bound to an `admin: true` agent) was being rejected with
+ * "Admin-only command" despite the channel itself being trusted. The
+ * channel-bound path closes that gap without requiring extra config.
  */
 export function isAdminClawdyInteraction(
-  interaction: { readonly user: { readonly id: string } },
-  adminUserIds: readonly string[],
+  interaction: {
+    readonly user: { readonly id: string };
+    readonly channelId: string;
+  },
+  context: {
+    readonly adminUserIds: readonly string[];
+    readonly routingTable: {
+      readonly channelToAgent: ReadonlyMap<string, string>;
+    };
+    readonly resolvedAgents: readonly {
+      readonly name: string;
+      readonly admin: boolean;
+    }[];
+  },
 ): boolean {
-  if (adminUserIds.length === 0) return false;
-  return adminUserIds.includes(interaction.user.id);
+  // Path 1: explicit user-ID allowlist match (back-compat).
+  if (
+    context.adminUserIds.length > 0 &&
+    context.adminUserIds.includes(interaction.user.id)
+  ) {
+    return true;
+  }
+  // Path 2: channel-bound to an admin agent.
+  const agentName = context.routingTable.channelToAgent.get(
+    interaction.channelId,
+  );
+  if (agentName !== undefined) {
+    const agent = context.resolvedAgents.find((a) => a.name === agentName);
+    if (agent?.admin === true) return true;
+  }
+  return false;
 }
 
 /**
@@ -730,6 +737,230 @@ export function renderDreamEmbed(
   return embed;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 124 Plan 03 — /clawcode-session-compact helpers (admin gate + embed
+// renderer). Pure exported function so the slash-compact tests exercise the
+// embed shape without instantiating SlashCommandHandler. Mirrors the
+// /clawcode-dream helper shape (DreamIpcResponse + renderDreamEmbed).
+// ---------------------------------------------------------------------------
+
+/**
+ * IPC response shape for the daemon's `compact-session` method. Mirrors the
+ * `CompactSessionResult` discriminated union exported from
+ * `src/manager/daemon-compact-session-ipc.ts`. Re-declared here so the slash
+ * module doesn't pull in the manager's internal type graph (keeps the import
+ * direction clean — Discord layer reads daemon contract via IPC shape only).
+ */
+export type CompactSessionIpcResponse =
+  | {
+      readonly ok: true;
+      readonly tokens_before: number | null;
+      readonly tokens_after: number | null;
+      readonly summary_written: boolean;
+      readonly forked_to: string;
+      readonly memories_created: number;
+    }
+  | {
+      readonly ok: false;
+      readonly error:
+        | "DAEMON_NOT_READY"
+        | "AGENT_NOT_RUNNING"
+        | "AGENT_NOT_INITIALIZED"
+        | "ERR_TURN_TOO_LONG"
+        | "UNKNOWN";
+      readonly message?: string;
+    };
+
+/**
+ * Render the ephemeral embed for `/clawcode-session-compact`.
+ *
+ * Success (`ok:true`) → green (0x2ecc71), 5 fields populated from the IPC
+ * response (tokens_before, tokens_after, summary_written yes/no,
+ * forked_to, memories_created). `null` tokens render as `n/a`.
+ *
+ * Error (`ok:false`) → red (0xe74c3c), description carries the error code
+ * verbatim so the operator sees CLI parity (the same error names surface
+ * from `clawcode session compact` via Plan 124-02). Optional `message`
+ * appended as a second line.
+ *
+ * Pure function — no side effects, no IPC, no clock. Pinned by T03-H2,
+ * T03-H3, T04-E1 in slash-compact.test.ts.
+ */
+export function renderCompactEmbed(
+  agent: string,
+  response: CompactSessionIpcResponse,
+): EmbedBuilder {
+  if (response.ok) {
+    const embed = new EmbedBuilder()
+      .setTitle(`💠 Compaction complete: ${agent}`)
+      .setColor(0x2ecc71)
+      .setTimestamp();
+    const fmtTokens = (n: number | null): string =>
+      n === null ? "n/a" : String(n);
+    embed.addFields(
+      { name: "Tokens before", value: fmtTokens(response.tokens_before), inline: true },
+      { name: "Tokens after", value: fmtTokens(response.tokens_after), inline: true },
+      {
+        name: "Summary written",
+        value: response.summary_written ? "yes" : "no",
+        inline: true,
+      },
+      { name: "Forked to", value: `\`${response.forked_to}\``, inline: false },
+      {
+        name: "Memories created",
+        value: String(response.memories_created),
+        inline: true,
+      },
+    );
+    return embed;
+  }
+  // Error path — red embed; error code verbatim in description.
+  const embed = new EmbedBuilder()
+    .setTitle(`💠 Compaction failed: ${agent}`)
+    .setColor(0xe74c3c)
+    .setTimestamp();
+  const lines = [`\`${response.error}\``];
+  if (response.message !== undefined && response.message.length > 0) {
+    lines.push(response.message);
+  }
+  embed.setDescription(lines.join("\n"));
+  return embed;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 96 Plan 05 PFS- — /clawcode-probe-fs helpers (FsProbeOutcome embed
+// renderer). 11th application of the inline-handler-short-circuit pattern.
+// Pure exported function so the slash-commands tests exercise it without
+// spinning up the full SlashCommandHandler.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire shape of a single FsCapabilitySnapshot entry returned by the daemon's
+ * `probe-fs` IPC handler. Mirrors src/manager/persistent-session-handle.ts
+ * FsCapabilitySnapshot but re-declared here so this module doesn't reach into
+ * the manager's type graph (decoupling discipline).
+ */
+type FsCapabilitySnapshotWire = {
+  readonly status: "ready" | "degraded" | "unknown";
+  readonly mode: "rw" | "ro" | "denied";
+  readonly lastProbeAt: string;
+  readonly lastSuccessAt?: string;
+  readonly error?: string;
+};
+
+/**
+ * Wire shape of FsProbeOutcome (mirror of src/manager/fs-probe.ts). The
+ * snapshot is JSON-serialized as an array of [path, state] tuples (Maps don't
+ * round-trip through JSON-RPC). Optional `changes` field populated by the
+ * daemon when the operator passes a previous snapshot for diff rendering.
+ */
+type FsProbeOutcomeWire =
+  | {
+      readonly kind: "completed";
+      readonly snapshot: ReadonlyArray<readonly [string, FsCapabilitySnapshotWire]>;
+      readonly durationMs: number;
+      readonly changes?: ReadonlyArray<{
+        readonly path: string;
+        readonly from: string;
+        readonly to: string;
+      }>;
+    }
+  | { readonly kind: "failed"; readonly error: string };
+
+/**
+ * Phase 96 Plan 05 PFS- — themed filesystem-capability probe embed.
+ *
+ * Color palette mirrors the conflict-color literals used by other slash
+ * embeds (sync-status / dream):
+ *   completed (all ready):     0x2ecc71 (green)
+ *   completed (some degraded): 0xf1c40f (yellow)
+ *   failed:                    0xe74c3c (red)
+ *
+ * D-03 spec — three fields:
+ *   1. "Probed paths" — comma-list of canonical paths
+ *   2. "Ready / Degraded" — count summary (e.g. "2 ready / 1 degraded")
+ *   3. (optional) "Changes since last probe" — top 3 transitions
+ *
+ * Status emoji LOCKED per CRITICAL invariant:
+ *   ✓ ready · ⚠ degraded · ? unknown
+ * (Phase 96 uses simpler ✓/⚠ vs Phase 85 plan 03's ✅/❌ — filesystem has
+ * no failed/reconnecting analog so the simpler palette suffices.)
+ */
+export function renderProbeFsEmbed(
+  agent: string,
+  outcome: FsProbeOutcomeWire,
+): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setTitle(`Filesystem capability — ${agent}`)
+    .setTimestamp();
+
+  if (outcome.kind === "failed") {
+    embed.setColor(0xe74c3c);
+    embed.addFields({
+      name: "Error",
+      value: outcome.error,
+      inline: false,
+    });
+    return embed;
+  }
+
+  // outcome.kind === "completed"
+  const entries = outcome.snapshot;
+  const readyCount = entries.filter(([, s]) => s.status === "ready").length;
+  const degradedCount = entries.filter(
+    ([, s]) => s.status === "degraded",
+  ).length;
+  const unknownCount = entries.filter(
+    ([, s]) => s.status === "unknown",
+  ).length;
+
+  embed.setColor(degradedCount > 0 ? 0xf1c40f : 0x2ecc71);
+
+  // Field 1 — paths probed (truncate to 1024 char Discord field cap if huge)
+  const pathLines = entries.map(([path, state]) => {
+    const emoji =
+      state.status === "ready" ? "✓" : state.status === "degraded" ? "⚠" : "?";
+    return `${emoji} ${path}`;
+  });
+  const pathsValue =
+    pathLines.length > 0 ? pathLines.join("\n").slice(0, 1024) : "(none)";
+  embed.addFields({
+    name: "Probed paths",
+    value: pathsValue,
+    inline: false,
+  });
+
+  // Field 2 — counts summary
+  const countParts: string[] = [];
+  countParts.push(`${readyCount} ready`);
+  if (degradedCount > 0) countParts.push(`${degradedCount} degraded`);
+  if (unknownCount > 0) countParts.push(`${unknownCount} unknown`);
+  embed.addFields({
+    name: "Ready / Degraded",
+    value: countParts.join(" / "),
+    inline: false,
+  });
+
+  // Field 3 (optional) — Changes since last probe (top 3 transitions)
+  if (outcome.changes && outcome.changes.length > 0) {
+    const changeLines = outcome.changes
+      .slice(0, 3)
+      .map((c) => `${c.path}: ${c.from} → ${c.to}`);
+    embed.addFields({
+      name: "Changes since last probe",
+      value: changeLines.join("\n").slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  // Field 4 (footer info) — duration probed in
+  embed.setFooter({
+    text: `Probed in ${outcome.durationMs}ms`,
+  });
+
+  return embed;
+}
+
 /**
  * Handles Discord slash command registration and interaction dispatch.
  *
@@ -758,6 +989,12 @@ export class SlashCommandHandler {
    * (no admins recognized).
    */
   private readonly adminUserIds: readonly string[];
+  /**
+   * Phase 100 Plan 04 GSD-01..03 — optional subagent thread spawner used by
+   * handleGsdLongRunner. null when not wired (graceful fallback per
+   * SlashCommandHandlerConfig.subagentThreadSpawner JSDoc).
+   */
+  private readonly subagentThreadSpawner: SubagentThreadSpawner | null;
   private client: Client | null = null;
   private interactionHandler: ((interaction: Interaction) => void) | null = null;
 
@@ -783,6 +1020,8 @@ export class SlashCommandHandler {
       this.aclDeniedByAgent = null;
     }
     this.adminUserIds = Object.freeze([...(config.adminUserIds ?? [])]);
+    // Phase 100 Plan 04 GSD-01..03 — wire optional subagent thread spawner.
+    this.subagentThreadSpawner = config.subagentThreadSpawner ?? null;
   }
 
   /**
@@ -842,8 +1081,12 @@ export class SlashCommandHandler {
     }
 
     for (const guildId of guildIds) {
-      // Collect all commands across all agents for this guild
+      // Collect all commands across all agents for this guild.
+      // Phase 999.21 — `allCommands` is the TOP-LEVEL slash command set;
+      // entries with `subcommandOf` set route into `gsdSubcommands` instead
+      // and are emitted as a single composite Discord body item below.
       const allCommands: SlashCommandDef[] = [];
+      const gsdSubcommands: SlashCommandDef[] = [];
       const seenNames = new Set<string>();
 
       for (const agent of this.resolvedAgents) {
@@ -900,7 +1143,68 @@ export class SlashCommandHandler {
         const merged = mergeAndDedupe(agentCommands, nativeDefs);
 
         for (const cmd of merged) {
-          if (!seenNames.has(cmd.name)) {
+          // Phase 999.21 — route entries with `subcommandOf` into the nested
+          // GSD composite (single /get-shit-done top-level command) instead
+          // of allCommands. Entries WITHOUT subcommandOf with a `gsd-` flat
+          // name (legacy yaml entries on Admin Clawdy) are gracefully
+          // remapped: the `gsd-` prefix is stripped and the entry is rewritten
+          // with `subcommandOf: "get-shit-done"` so operators can leave their
+          // yaml unchanged through the migration. Non-GSD entries take the
+          // normal top-level dedup path.
+          if (cmd.subcommandOf) {
+            const key = `${cmd.subcommandOf}:${cmd.name}`;
+            if (!seenNames.has(key)) {
+              seenNames.add(key);
+              gsdSubcommands.push(cmd);
+            }
+          } else if (cmd.name.startsWith("gsd-")) {
+            const subName = cmd.name.replace(/^gsd-/, "");
+            const key = `get-shit-done:${subName}`;
+            if (!seenNames.has(key)) {
+              seenNames.add(key);
+              gsdSubcommands.push({
+                ...cmd,
+                name: subName,
+                subcommandOf: "get-shit-done",
+              });
+            }
+          } else if (!seenNames.has(cmd.name)) {
+            seenNames.add(cmd.name);
+            allCommands.push(cmd);
+          }
+        }
+      }
+
+      // Phase 100 follow-up — auto-inherit GSD_SLASH_COMMANDS for any guild
+      // that has at least one agent with `gsd?.projectDir` configured. Single
+      // source of truth (slash-types.ts); no per-agent yaml duplication.
+      //
+      // Phase 999.21 — GSD entries are now NESTED subcommands under a single
+      // /get-shit-done top-level command. They are NOT pushed into
+      // `allCommands` (which is the top-level set); instead they're collected
+      // into `gsdSubcommands` and emitted as ONE composite Discord body item
+      // below (type=1 SUB_COMMAND children). The same skip-and-collect logic
+      // is mirrored in the per-agent merge loop above (the dedup at L1124
+      // routes entries with subcommandOf into gsdSubcommands instead of
+      // allCommands) so any agent yaml entry that opts into the nested form
+      // also lands in the composite. seenNames keys for nested entries are
+      // namespaced as `${subcommandOf}:${name}` so they cannot collide with
+      // top-level command names.
+      const hasGsdEnabledAgent = this.resolvedAgents.some(
+        (a) => a.gsd?.projectDir,
+      );
+      if (hasGsdEnabledAgent) {
+        for (const cmd of GSD_SLASH_COMMANDS) {
+          // Phase 999.21 — every GSD_SLASH_COMMANDS entry has subcommandOf
+          // set, so route into gsdSubcommands. Defensive fallback: if a
+          // future entry lacks subcommandOf, fall back to top-level dedup.
+          if (cmd.subcommandOf) {
+            const key = `${cmd.subcommandOf}:${cmd.name}`;
+            if (!seenNames.has(key)) {
+              seenNames.add(key);
+              gsdSubcommands.push(cmd);
+            }
+          } else if (!seenNames.has(cmd.name)) {
             seenNames.add(cmd.name);
             allCommands.push(cmd);
           }
@@ -916,7 +1220,7 @@ export class SlashCommandHandler {
       }
 
       // Convert to Discord API format
-      const body = allCommands.map((cmd) => ({
+      const body: Array<Record<string, unknown>> = allCommands.map((cmd) => ({
         name: cmd.name,
         description: cmd.description,
         options: cmd.options.map((opt) => ({
@@ -936,7 +1240,35 @@ export class SlashCommandHandler {
               }
             : {}),
         })),
+        // Phase 100 follow-up — forward defaultMemberPermissions when defined
+        // so Discord hides the command from non-admin users. Spread-only;
+        // commands without the field stay byte-identical to the prior payload.
+        ...((cmd as { defaultMemberPermissions?: string }).defaultMemberPermissions !== undefined
+          ? { default_member_permissions: (cmd as { defaultMemberPermissions?: string }).defaultMemberPermissions }
+          : {}),
       }));
+
+      // Phase 999.21 — emit ONE composite top-level Discord body item for the
+      // collected GSD subcommands. Each child gets type=1 (SUB_COMMAND).
+      // Discord caps subcommand counts at 25 per top-level command — 19 fits
+      // comfortably. `default_member_permissions` is intentionally NOT set on
+      // the composite (none of the 19 GSD entries currently use the field;
+      // Discord scopes the bitmask at top-level commands only — even if a
+      // subcommand wanted one, Discord would reject it). claudeCommand text
+      // values on each subcommand stay BYTE-IDENTICAL pre/post — pinned by
+      // GS1l + GSDN-03 regression tests.
+      //
+      // Phase 999.32 — Discord-side composite suppressed. Operator hit
+      // friction with the 19-subcommand menu; consolidated into a SINGLE
+      // top-level `/gsd-do args:<subcommand + flags>` entry registered via
+      // DEFAULT_SLASH_COMMANDS. The dispatcher in handleInteraction parses
+      // the args' first token, rewrites commandName to `gsd-${first-token}`,
+      // and existing carve-outs (GSD_LONG_RUNNERS subagent-thread spawn,
+      // set-project inline handler) keep matching against the legacy flat
+      // names. GSD_SLASH_COMMANDS stays as the source-of-truth for what
+      // subcommand names are valid (used by the dispatcher's lookup).
+      // Setting `gsdSubcommands` aside so it's still typed but never emitted.
+      void gsdSubcommands;
 
       // Phase 87 CMD-07 — pre-flight cap assertion. Thrown BEFORE rest.put so
       // no partial registration lands; operators see the full over-cap error
@@ -993,7 +1325,83 @@ export class SlashCommandHandler {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     const channelId = interaction.channelId;
-    const commandName = interaction.commandName;
+    // Phase 999.21 — /get-shit-done nested subcommand entry-point rewrite.
+    // Discord delivers nested commands as commandName === "get-shit-done"
+    // with the actual command in interaction.options.getSubcommand(). Remap
+    // to the legacy flat `gsd-<sub>` form so every downstream dispatch carve-
+    // out (handleSetGsdProjectCommand, handleGsdLongRunner, agent-routed
+    // branch, GSD_LONG_RUNNERS lookup, cmdDef resolution) keeps working
+    // unchanged. The remap is the SINGLE rewrite point for the
+    // consolidation; every existing string-comparison against `gsd-*` names
+    // continues to match without modification downstream.
+    let commandName = interaction.commandName;
+    let gsdDoRewrittenArgs: string | null = null;
+    if (commandName === "get-shit-done") {
+      // Phase 999.21 legacy entry — kept for back-compat in case Discord's
+      // client cache still routes /get-shit-done despite Phase 999.32
+      // suppressing the composite registration. Translates the same way as
+      // the new gsd-do entry below: extract subcommand, rewrite commandName.
+      let sub: string | null = null;
+      try {
+        sub = interaction.options.getSubcommand(false);
+      } catch {
+        sub = null;
+      }
+      if (!sub) {
+        try {
+          await interaction.reply({
+            content: "Missing subcommand for /get-shit-done.",
+            ephemeral: true,
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      commandName = `gsd-${sub}`;
+    } else if (commandName === "gsd-do") {
+      // Phase 999.32 — single-entry GSD command. Parse the args' first token
+      // as the subcommand name and rewrite commandName to `gsd-${first-token}`
+      // so existing carve-outs (handleSetGsdProjectCommand,
+      // handleGsdLongRunner, agent-routed branch via formatCommandMessage)
+      // keep matching the legacy flat-name strings without modification.
+      // Remaining tokens become the new args value passed downstream.
+      const raw = interaction.options.getString("args", true).trim();
+      if (raw.length === 0) {
+        try {
+          await interaction.reply({
+            content:
+              "Missing args. Usage: `/gsd-do args:<subcommand> [flags...]` (e.g. `args:autonomous --from 100`)",
+            ephemeral: true,
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      const firstSpace = raw.search(/\s/);
+      const sub = firstSpace === -1 ? raw : raw.slice(0, firstSpace);
+      const rest = firstSpace === -1 ? "" : raw.slice(firstSpace + 1).trim();
+      // Light validation: subcommand must look like a slug (no shell
+      // metacharacters). The downstream formatCommandMessage forwards the
+      // claudeCommand text into the agent's prompt; the subcommand becomes
+      // a path segment in `/gsd:<sub>`. Reject obvious prompt-injection
+      // shapes (newlines, backticks) before they reach the agent context.
+      if (!/^[a-z][a-z0-9-]*$/i.test(sub)) {
+        try {
+          await interaction.reply({
+            content:
+              `Invalid subcommand "${sub}". Use letters/digits/hyphens only (e.g. autonomous, plan-phase, set-project).`,
+            ephemeral: true,
+          });
+        } catch {
+          /* expired */
+        }
+        return;
+      }
+      commandName = `gsd-${sub}`;
+      gsdDoRewrittenArgs = rest;
+    }
 
     // Phase 85 Plan 03 TOOL-06 / UI-01 — dedicated inline handler for
     // /clawcode-tools. Routes through the same IPC as a control command but
@@ -1067,35 +1475,6 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Phase 91 Plan 05 SYNC-08 — /clawcode-sync-status inline handler.
-    // Eighth application of the inline-handler-short-circuit-before-
-    // CONTROL_COMMANDS pattern established by /clawcode-tools (Phase 85)
-    // and extended by /clawcode-model (86), /clawcode-permissions (87),
-    // /clawcode-skills-browse + /clawcode-skills (88), /clawcode-plugins-browse
-    // and /clawcode-clawhub-auth (90). Routes through the daemon-direct
-    // `list-sync-status` IPC (zero LLM turn cost) and renders a native
-    // Discord EmbedBuilder via the pure buildSyncStatusEmbed function
-    // in sync-status-embed.ts. Carved out BEFORE the generic CONTROL_COMMANDS
-    // dispatch so the EmbedBuilder path can't be short-circuited by the
-    // text-formatting branch in handleControlCommand.
-    if (commandName === "clawcode-sync-status") {
-      await this.handleSyncStatusCommand(interaction);
-      return;
-    }
-
-    // Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — /clawcode-cutover-verify
-    // inline handler. Ninth application of the inline-handler-short-circuit-
-    // before-CONTROL_COMMANDS pattern (Phase 85/86/87/88/91). Renders one
-    // ephemeral embed per destructive cutover gap with Accept/Reject/Defer
-    // buttons (customId prefix `cutover-` — collision-safe with all existing
-    // namespaces). Carved out BEFORE the generic CONTROL_COMMANDS dispatch
-    // so the embed-batch path can't be short-circuited by the text-formatting
-    // branch in handleControlCommand.
-    if (commandName === "clawcode-cutover-verify") {
-      await this.handleCutoverVerifyCommand(interaction);
-      return;
-    }
-
     // Phase 95 Plan 03 DREAM-07 / UI-01 — /clawcode-dream inline handler.
     // 10th application of the inline-handler-short-circuit-before-
     // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92). Admin-only
@@ -1105,6 +1484,77 @@ export class SlashCommandHandler {
     // EmbedBuilder render via the pure renderDreamEmbed helper (above).
     if (commandName === "clawcode-dream") {
       await this.handleDreamCommand(interaction);
+      return;
+    }
+
+    // Phase 124 Plan 03 — /clawcode-session-compact inline handler.
+    // Admin-only ephemeral. Mirrors the /clawcode-dream pattern: gates on
+    // isAdminClawdyInteraction BEFORE deferReply so non-admins never see
+    // the IPC call land. Routes through the daemon's `compact-session` IPC
+    // method (Plan 124-01 daemon edge wires handleCompactSession). Render
+    // via the pure renderCompactEmbed helper exported below.
+    if (commandName === "clawcode-session-compact") {
+      await this.handleCompactCommand(interaction);
+      return;
+    }
+
+    // Phase 96 Plan 05 PFS- / UI-01 — /clawcode-probe-fs inline handler.
+    // 11th application of the inline-handler-short-circuit-before-
+    // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95). Admin-only
+    // ephemeral: gates BEFORE deferReply so non-admins never see the IPC
+    // call land. Routes through the daemon's `probe-fs` IPC method
+    // (Plan 96-05 daemon edge wires runFsProbe → writeFsSnapshot →
+    // setFsCapabilitySnapshot). EmbedBuilder render via the pure
+    // renderProbeFsEmbed helper (above). D-03 refresh trigger: operator
+    // forces re-probe immediately after ACL/group/systemd change to
+    // eliminate the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
+    // Phase 999.32 — /clawcode-probe-fs slash command removed (operator
+    // cleanup). The CLI subcommand `clawcode probe fs <agent>` and the
+    // daemon's `probe-fs` IPC method stay live; heartbeat fs-probe still
+    // runs every 60s for ambient refresh. The handleProbeFsCommand helper
+    // is left intact for future re-introduction (or removal in a
+    // dead-code sweep) but no slash command routes to it.
+
+    // Phase 103 OBS-07 / UI-01 — /clawcode-usage inline handler.
+    // 12th application of the inline-handler-short-circuit-before-
+    // CONTROL_COMMANDS pattern (Phases 85/86/87/88/90/91/92/95/96/100).
+    // Reads per-agent OAuth Max usage snapshots via the daemon-routed
+    // `list-rate-limit-snapshots` IPC method (NOT `rate-limit-status` —
+    // see Pitfall 5). Renders an EmbedBuilder via buildUsageEmbed so the
+    // reply is structured (UI-01 compliance — NOT free-text). Carved out
+    // BEFORE the generic CONTROL_COMMANDS dispatch so the EmbedBuilder
+    // path can't be short-circuited by the text-formatting branch in
+    // handleControlCommand. Zero LLM turn cost per invocation.
+    if (commandName === "clawcode-usage") {
+      await this.handleUsageCommand(interaction);
+      return;
+    }
+
+    // Phase 100 follow-up — /gsd-set-project inline handler. Routed BEFORE
+    // GSD_LONG_RUNNERS so the runtime project switcher never falls into the
+    // long-runner subagent-thread path. Validates the path option (absolute,
+    // exists, is-directory) and dispatches `set-gsd-project` IPC to the
+    // daemon, which persists to ~/.clawcode/manager/gsd-project-overrides.json
+    // and triggers an agent restart (gsd.projectDir is non-reloadable per
+    // Phase 100 GSD-07).
+    if (commandName === "gsd-set-project") {
+      await this.handleSetGsdProjectCommand(interaction, gsdDoRewrittenArgs);
+      return;
+    }
+
+    // Phase 100 Plan 04 GSD-01..03 / GSD-09 — 12th application of the inline-
+    // handler-short-circuit-before-CONTROL_COMMANDS pattern (Phases 85/86/87/
+    // 88/90/91/92/95/96). Long-runner GSD commands pre-spawn a subagent
+    // thread so the main channel stays free; the subagent inherits Admin
+    // Clawdy's settingSources (["project","user"] per Plan 100-02 + Plan
+    // 100-07) and dispatches the canonical /gsd:* slash inline because
+    // settingSources includes "user" (loads ~/.claude/commands/gsd/*.md per
+    // Plan 100-06). Short-runners (gsd-debug, gsd-quick) fall through to the
+    // legacy agent-routed branch below — their claudeCommand template
+    // ("/gsd:debug {issue}" / "/gsd:quick {task}") rewrites to the canonical
+    // SDK form via formatCommandMessage's placeholder substitution.
+    if (GSD_LONG_RUNNERS.has(commandName)) {
+      await this.handleGsdLongRunner(interaction, commandName, gsdDoRewrittenArgs);
       return;
     }
 
@@ -1149,21 +1599,43 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Defer reply immediately (allows up to 15 min for response)
+    // Defer reply immediately (allows up to 15 min for response).
+    // clawcode-status is ephemeral so the operator can dismiss it.
     try {
-      await interaction.deferReply();
+      await interaction.deferReply(
+        commandName === "clawcode-status" ? { ephemeral: true } : {},
+      );
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       this.log.error({ commandName, channelId, error: msg }, "failed to defer reply");
       return;
     }
 
-    // Find the command definition for this agent
+    // Find the command definition for this agent.
+    // Phase 999.21 — when the rewrite-at-entry remap fired (the operator
+    // invoked /get-shit-done <sub>), `commandName` is now `gsd-<sub>` for
+    // every downstream string match. cmdDef lookup must accept BOTH forms:
+    //   1. The legacy flat `gsd-<sub>` name (Admin Clawdy yaml entries
+    //      shipped pre-999.21 still carry these names directly).
+    //   2. The stripped `<sub>` name (GSD_SLASH_COMMANDS entries post-999.21
+    //      use the bare suffix).
+    // The dual-lookup keeps both back-compat (legacy yaml on Admin Clawdy)
+    // and the auto-inheritance path (GSD-enabled agent without a yaml block,
+    // e.g. fin-acquisition) working unchanged. The strip is gated on the
+    // rewrite-at-entry remap firing so non-GSD agent-routed commands still
+    // match by their full name without surprise prefix stripping.
     const agentConfig = this.resolvedAgents.find((a) => a.name === agentName);
     const agentCommands = agentConfig
       ? resolveAgentCommands(agentConfig.slashCommands)
       : DEFAULT_SLASH_COMMANDS;
-    const commandDef = agentCommands.find((c) => c.name === commandName);
+    const wasGsdNested = interaction.commandName === "get-shit-done";
+    const subName = wasGsdNested ? commandName.replace(/^gsd-/, "") : null;
+    const commandDef =
+      agentCommands.find((c) => c.name === commandName) ??
+      (subName ? agentCommands.find((c) => c.name === subName) : undefined) ??
+      (subName
+        ? GSD_SLASH_COMMANDS.find((c) => c.name === subName)
+        : undefined);
 
     if (!commandDef) {
       try {
@@ -1174,15 +1646,25 @@ export class SlashCommandHandler {
       return;
     }
 
-    // Extract options from the interaction
+    // Extract options from the interaction.
+    // Phase 999.32 — when invoked via /gsd-do, the dispatcher pre-parsed
+    // the rest-of-args. Bind that string to whatever option name cmdDef
+    // expects so formatCommandMessage's placeholder substitution works
+    // without needing the original interaction's option set.
     const options = new Map<string, string | number | boolean>();
-    for (const opt of commandDef.options) {
-      const value = interaction.options.get(opt.name);
-      if (value !== null && value !== undefined) {
-        // discord.js returns CommandInteractionOption; extract the value
-        const raw = value.value;
-        if (raw !== null && raw !== undefined) {
-          options.set(opt.name, raw);
+    if (gsdDoRewrittenArgs !== null) {
+      for (const opt of commandDef.options) {
+        options.set(opt.name, gsdDoRewrittenArgs);
+      }
+    } else {
+      for (const opt of commandDef.options) {
+        const value = interaction.options.get(opt.name);
+        if (value !== null && value !== undefined) {
+          // discord.js returns CommandInteractionOption; extract the value
+          const raw = value.value;
+          if (raw !== null && raw !== undefined) {
+            options.set(opt.name, raw);
+          }
         }
       }
     }
@@ -1203,6 +1685,35 @@ export class SlashCommandHandler {
     // a generic "Failed to read status" wipe.
     if (commandName === "clawcode-status") {
       try {
+        const agentCfg = this.resolvedAgents.find((a) => a.name === agentName);
+        const memBase = agentCfg?.memoryPath ?? "";
+
+        const newestMtime = (dir: string): number | undefined => {
+          try {
+            if (!existsSync(dir)) return undefined;
+            const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+            if (files.length === 0) return undefined;
+            return Math.max(...files.map((f) => statSync(join(dir, f)).mtimeMs));
+          } catch {
+            return undefined;
+          }
+        };
+
+        const lastDreamWikilinkCount = (dir: string): number | undefined => {
+          try {
+            if (!existsSync(dir)) return undefined;
+            const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+            if (files.length === 0) return undefined;
+            const content = readFileSync(join(dir, files[files.length - 1]!), "utf-8");
+            const matches = [...content.matchAll(/\*\*New wikilinks \((\d+)\):\*\*/g)];
+            if (matches.length === 0) return undefined;
+            return parseInt(matches[matches.length - 1]![1]!, 10);
+          } catch {
+            return undefined;
+          }
+        };
+
+        const dreamsDir = join(memBase, "dreams");
         const data = buildStatusData({
           sessionManager: this.sessionManager,
           resolvedAgents: this.resolvedAgents,
@@ -1210,8 +1721,29 @@ export class SlashCommandHandler {
           agentVersion: CLAWCODE_VERSION,
           commitSha: resolveCommitSha(),
           now: Date.now(),
+          lastConsolidationAt: newestMtime(join(memBase, "memory", "digests")),
+          lastDreamAt: newestMtime(dreamsDir),
+          lastDreamWikilinks: lastDreamWikilinkCount(dreamsDir),
         });
-        await interaction.editReply(renderStatus(data));
+        const baseRender = renderStatus(data);
+
+        // Phase 103 OBS-08 — append optional 5h+7d session/weekly bars
+        // when the per-agent RateLimitTracker has snapshots. Wrapped in
+        // try/catch (and renderUsageBars itself returns "" on no data,
+        // Pitfall 7) so the bar suffix is purely additive — a thrown
+        // accessor or missing tracker NEVER collapses the 9-line block.
+        let usageBarSuffix = "";
+        try {
+          const tracker =
+            this.sessionManager.getRateLimitTrackerForAgent(agentName);
+          if (tracker) {
+            usageBarSuffix = renderUsageBars(tracker.getAllSnapshots());
+          }
+        } catch {
+          // observational — bars are optional, never break status render
+        }
+
+        await interaction.editReply(baseRender + usageBarSuffix);
       } catch (error) {
         // Defense-in-depth: buildStatusData/renderStatus are pure and don't
         // throw under expected conditions (every accessor is try/catch'd
@@ -1230,7 +1762,22 @@ export class SlashCommandHandler {
 
     // Handle /effort directly — no need to route through the agent.
     // Phase 83 EFFORT-04 — validates against the full v2.2 level set.
+    // Phase 100 follow-up — restricted to #admin-clawdy + optional agent target.
     if (commandName === "clawcode-effort") {
+      // Channel guard — mirrors the /gsd-* admin-clawdy guard at
+      // handleGsdLongRunner (slash-commands.ts:1942). Effort changes are
+      // privileged: xhigh/max levels add real per-turn cost, and runaway
+      // effort on a high-volume agent (fin-acquisition's 30 cron schedules)
+      // is expensive. Concentrating the dial in one channel makes accidental
+      // bumps from miscellaneous channels impossible.
+      if (agentName !== "Admin Clawdy") {
+        try {
+          await interaction.editReply(
+            "`/clawcode-effort` is restricted to #admin-clawdy. Invoke from the admin channel and use `agent:` to target other agents.",
+          );
+        } catch { /* expired */ }
+        return;
+      }
       const level = options.get("level");
       const validLevels = ["low", "medium", "high", "xhigh", "max", "auto", "off"];
       if (typeof level !== "string" || !validLevels.includes(level)) {
@@ -1239,12 +1786,28 @@ export class SlashCommandHandler {
         } catch { /* expired */ }
         return;
       }
+      // Phase 100 follow-up — optional `agent:` lets the operator target any
+      // configured agent from #admin-clawdy. Default: the channel-bound agent
+      // (admin-clawdy itself, given the guard above passed).
+      const rawAgent = options.get("agent");
+      let resolvedTarget: string;
+      if (typeof rawAgent === "string" && rawAgent.length > 0) {
+        if (!this.sessionManager.getAgentConfig(rawAgent)) {
+          try {
+            await interaction.editReply(`Unknown agent: \`${rawAgent}\`.`);
+          } catch { /* expired */ }
+          return;
+        }
+        resolvedTarget = rawAgent;
+      } else {
+        resolvedTarget = agentName;
+      }
       try {
         this.sessionManager.setEffortForAgent(
-          agentName,
+          resolvedTarget,
           level as EffortLevel,
         );
-        await interaction.editReply(`Effort set to **${level}** for ${agentName}`);
+        await interaction.editReply(`Effort set to **${level}** for ${resolvedTarget}`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         await interaction.editReply(`Failed to set effort: ${msg}`);
@@ -1267,12 +1830,15 @@ export class SlashCommandHandler {
       // Non-fatal: continue even if this edit fails
     }
 
-    // Set up progressive editor for streaming updates
+    // Set up progressive editor for streaming updates.
+    // Phase 100 follow-up — wrap raw markdown tables in ```text``` fences
+    // so Discord renders monospace + column alignment.
     const editor = new ProgressiveMessageEditor({
       editFn: async (content: string) => {
-        const truncated = content.length > DISCORD_MAX_LENGTH
-          ? content.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
-          : content;
+        const wrapped = wrapMarkdownTablesInCodeFence(content);
+        const truncated = wrapped.length > DISCORD_MAX_LENGTH
+          ? wrapped.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+          : wrapped;
         await interaction.editReply(truncated);
       },
       editIntervalMs: 1500,
@@ -1441,82 +2007,111 @@ export class SlashCommandHandler {
     // runs for this surface.
     const nowDate = new Date();
     const now = nowDate.getTime();
-    const rows: readonly ProbeRowOutput[] = Object.freeze(
-      response.servers.map((s) => {
-        const stateLike: ProbeRowState = { capabilityProbe: s.capabilityProbe };
-        const alternatives = s.alternatives ?? [];
-        return buildProbeRow(s.name, stateLike, alternatives, nowDate);
-      }),
-    );
 
-    // D-11 pagination — Discord caps embeds at 25 fields; if the snapshot
-    // exceeds the cap, we still render only the first page in the embed
-    // (the select-menu pagination component is reserved for a future
-    // interactive plan; this plan keeps the read-only display surface).
-    const pages = paginateRows(rows, EMBED_LINE_CAP);
-    const firstPage = pages[0] ?? [];
+    const buildEmbed = (resp: ToolsIpcResponse): { embed: EmbedBuilder; row: ActionRowBuilder<ButtonBuilder> } => {
+      const rows: readonly ProbeRowOutput[] = Object.freeze(
+        resp.servers.map((s) => {
+          const stateLike: ProbeRowState = { capabilityProbe: s.capabilityProbe };
+          const alternatives = s.alternatives ?? [];
+          return buildProbeRow(s.name, stateLike, alternatives, new Date());
+        }),
+      );
 
-    const embed = new EmbedBuilder()
-      .setTitle(`MCP Tools · ${agentName}`)
-      .setColor(resolveEmbedColor(response.servers));
+      const pages = paginateRows(rows, EMBED_LINE_CAP);
+      const firstPage = pages[0] ?? [];
 
-    if (pages.length > 1) {
-      embed.setFooter({
-        text: `Showing first ${EMBED_LINE_CAP} of ${rows.length} servers (Discord embed cap)`,
-      });
-    }
+      const e = new EmbedBuilder()
+        .setTitle(`MCP Tools · ${agentName}`)
+        .setColor(resolveEmbedColor(resp.servers));
 
-    for (let i = 0; i < firstPage.length; i++) {
-      const row = firstPage[i]!;
-      const s = response.servers[i]!;
-      // Connect-test status emoji (Phase 85) — keeps backwards-compat with
-      // the existing field-name shape; the capability-probe emoji is
-      // surfaced INSIDE the value so both axes show side-by-side.
-      const connectEmoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
-      // Only annotate optional servers that aren't ready — a ready optional
-      // doesn't need the annotation (operator cares about "what's down, and
-      // does it matter?").
-      const optSuffix = s.optional && s.status !== "ready" ? " (optional)" : "";
-      const lastSuccess = s.lastSuccessAt
-        ? `${formatRelativeTime(now - s.lastSuccessAt)} ago`
-        : "never";
-      // TOOL-04 end-to-end — pass the lastError string VERBATIM into the
-      // embed field. No rewording, no wrapping. Plan 01's readiness module
-      // captures the raw transport error; we just render it.
-      const errLine = s.lastError ? `\nerror: ${s.lastError}` : "";
-
-      // Phase 94 Plan 07 D-11 — capability probe column. Status emoji +
-      // last-good ISO + relative + recovery suggestion (when degraded).
-      // Lines composed conditionally so a "ready" server stays compact.
-      const probeLines: string[] = [];
-      const probeLastGood = row.lastSuccessIso
-        ? `last good: ${row.lastSuccessIso}${row.lastSuccessRelative ? ` (${row.lastSuccessRelative})` : ""}`
-        : "last good: never";
-      probeLines.push(`probe: ${row.statusEmoji} ${row.status} — ${probeLastGood}`);
-      if (row.recoverySuggestion) {
-        probeLines.push(row.recoverySuggestion);
-      }
-      // D-07 / TOOL-12 — Healthy alternatives line ONLY for non-ready
-      // servers (the renderer suppresses the array for ready servers).
-      if (row.alternatives.length > 0) {
-        probeLines.push(`Healthy alternatives: ${row.alternatives.join(", ")}`);
+      if (pages.length > 1) {
+        e.setFooter({
+          text: `Showing first ${EMBED_LINE_CAP} of ${rows.length} servers (Discord embed cap)`,
+        });
       }
 
-      embed.addFields({
-        name: `${connectEmoji} ${s.name}${optSuffix}`,
-        value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}\n${probeLines.join("\n")}${errLine}`,
-        inline: false,
-      });
-    }
+      for (let i = 0; i < firstPage.length; i++) {
+        const row = firstPage[i]!;
+        const s = resp.servers[i]!;
+        const connectEmoji = STATUS_EMOJI[s.status] ?? STATUS_EMOJI.unknown!;
+        const optSuffix = s.optional && s.status !== "ready" ? " (optional)" : "";
+        const lastSuccess = s.lastSuccessAt
+          ? `${formatRelativeTime(now - s.lastSuccessAt)} ago`
+          : "never";
+        const errLine = s.lastError ? `\nerror: ${s.lastError}` : "";
+
+        const probeLines: string[] = [];
+        const probeLastGood = row.lastSuccessIso
+          ? `last good: ${row.lastSuccessIso}${row.lastSuccessRelative ? ` (${row.lastSuccessRelative})` : ""}`
+          : "last good: never";
+        probeLines.push(`probe: ${row.statusEmoji} ${row.status} — ${probeLastGood}`);
+        if (row.recoverySuggestion) {
+          probeLines.push(row.recoverySuggestion);
+        }
+        if (row.alternatives.length > 0) {
+          probeLines.push(`Healthy alternatives: ${row.alternatives.join(", ")}`);
+        }
+
+        e.addFields({
+          name: `${connectEmoji} ${s.name}${optSuffix}`,
+          value: `status: ${s.status}\nlast success: ${lastSuccess}\nfailures: ${s.failureCount}\n${probeLines.join("\n")}${errLine}`,
+          inline: false,
+        });
+      }
+
+      const refreshRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`tools-refresh:${agentName}`)
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Secondary),
+      );
+
+      return { embed: e, row: refreshRow };
+    };
+
+    const { embed, row: refreshRow } = buildEmbed(response);
 
     try {
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [embed], components: [refreshRow] });
     } catch (error) {
       this.log.error(
         { command: "clawcode-tools", error: (error as Error).message },
         "failed to send tools embed",
       );
+      return;
     }
+
+    // 5-minute refresh collector — lets the operator re-check without re-running the command.
+    let refreshReply: import("discord.js").Message | undefined;
+    try {
+      refreshReply = await interaction.fetchReply() as import("discord.js").Message;
+    } catch {
+      return;
+    }
+    const collector = refreshReply.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      filter: (i: ButtonInteraction) =>
+        i.user.id === interaction.user.id &&
+        i.customId === `tools-refresh:${agentName}`,
+      time: 5 * 60 * 1000,
+    });
+
+    collector.on("collect", async (btn: ButtonInteraction) => {
+      try {
+        await btn.deferUpdate();
+      } catch {
+        return;
+      }
+      try {
+        const refreshed = (await sendIpcRequest(SOCKET_PATH, "list-mcp-status", {
+          agent: agentName,
+        })) as ToolsIpcResponse;
+        const { embed: freshEmbed, row: freshRow } = buildEmbed(refreshed);
+        await btn.editReply({ embeds: [freshEmbed], components: [freshRow] });
+      } catch {
+        /* silent — collector just skips failed refreshes */
+      }
+    });
   }
 
   /**
@@ -1537,7 +2132,15 @@ export class SlashCommandHandler {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     // Admin gate FIRST — no IPC, no defer for non-admins.
-    if (!isAdminClawdyInteraction(interaction, this.adminUserIds)) {
+    // Phase 100-fu — pass full context so channel-bound admin agents
+    // grant admin access without requiring an explicit user-ID allowlist.
+    if (
+      !isAdminClawdyInteraction(interaction, {
+        adminUserIds: this.adminUserIds,
+        routingTable: this.routingTable,
+        resolvedAgents: this.resolvedAgents,
+      })
+    ) {
       try {
         await interaction.reply({
           content: "Admin-only command",
@@ -1596,51 +2199,584 @@ export class SlashCommandHandler {
   }
 
   /**
-   * Phase 91 Plan 05 SYNC-08 — handle /clawcode-sync-status.
+   * Phase 124 Plan 03 — handle /clawcode-session-compact.
    *
-   * Reads the OpenClaw ↔ ClawCode sync snapshot via the daemon-routed
-   * `list-sync-status` IPC method (zero LLM turn cost) and replies with a
-   * native Discord EmbedBuilder built by the pure buildSyncStatusEmbed
-   * function (src/discord/sync-status-embed.ts).
-   *
-   * Reply is always ephemeral (operator-only view — conflicts include file
-   * paths that shouldn't leak into public channels). IPC failures surface
-   * verbatim in an ephemeral error message so operators see the real root
-   * cause instead of a sanitised "Sync status unavailable" placeholder.
-   *
-   * Note: unlike /clawcode-tools this command is fleet-level (not per-agent).
-   * It reads `~/.clawcode/manager/sync-state.json` which is the single
-   * source-of-truth for the fin-acquisition sync topology. No `agent`
-   * option is accepted at registration time.
+   * Admin-only ephemeral. Mirrors handleDreamCommand structurally:
+   *   1. Admin gate via isAdminClawdyInteraction BEFORE deferReply — non-admins
+   *      get an instant "Admin-only command" reply (zero IPC, zero LLM cost).
+   *   2. deferReply ephemerally so Discord doesn't time out the interaction
+   *      while the daemon performs compaction (which can take several seconds
+   *      for a multi-MB session JSONL).
+   *   3. T-03 will replace the placeholder editReply below with the actual
+   *      `sendIpcRequest(SOCKET_PATH, "compact-session", {agent})` dispatch.
+   *   4. T-04 will add error-code propagation + thrown-IPC handling.
    */
-  private async handleSyncStatusCommand(
+  private async handleCompactCommand(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
+    // Admin gate FIRST — no IPC, no defer for non-admins.
+    if (
+      !isAdminClawdyInteraction(interaction, {
+        adminUserIds: this.adminUserIds,
+        routingTable: this.routingTable,
+        resolvedAgents: this.resolvedAgents,
+      })
+    ) {
+      try {
+        await interaction.reply({
+          content: "Admin-only command",
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const agent = interaction.options.getString("agent", true);
+
     try {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     } catch (error) {
       this.log.error(
-        { command: "clawcode-sync-status", error: (error as Error).message },
-        "failed to defer sync-status reply",
+        { command: "clawcode-session-compact", error: (error as Error).message },
+        "failed to defer compact reply",
       );
       return;
     }
 
-    let response: SyncStatusIpcResponse;
+    // T-03/T-04 — dispatch the daemon `compact-session` IPC. The daemon
+    // returns a discriminated union (`ok:true | ok:false` with one of four
+    // named error codes); on a thrown IPC error we synthesize an UNKNOWN
+    // entry so the embed renderer has a single uniform path. CLI parity:
+    // the same named codes surface from `clawcode session compact` (Plan
+    // 124-02), so the operator sees the same vocabulary in both surfaces.
+    let response: CompactSessionIpcResponse;
     try {
       response = (await sendIpcRequest(
         SOCKET_PATH,
-        "list-sync-status",
-        {},
-      )) as SyncStatusIpcResponse;
+        "compact-session",
+        { agent },
+      )) as CompactSessionIpcResponse;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(
-        { command: "clawcode-sync-status", error: msg },
-        "list-sync-status IPC failed",
+        { command: "clawcode-session-compact", agent, error: msg },
+        "compact-session IPC failed",
+      );
+      response = { ok: false, error: "UNKNOWN", message: msg };
+    }
+    try {
+      await interaction.editReply({
+        embeds: [renderCompactEmbed(agent, response)],
+      });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-session-compact", error: (error as Error).message },
+        "failed to send compact embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 96 Plan 05 PFS- / UI-01 — handle /clawcode-probe-fs.
+   *
+   * Admin-only ephemeral. Gates on isAdminClawdyInteraction BEFORE deferring
+   * the reply so non-admins receive an instant "Admin-only command" reply
+   * (zero IPC + zero LLM turn cost — mirrors handleDreamCommand). Admin
+   * invocations defer ephemerally, dispatch through the daemon's `probe-fs`
+   * IPC method (which invokes runFsProbe → writeFsSnapshot →
+   * setFsCapabilitySnapshot at the daemon edge), and render the
+   * FsProbeOutcome via the pure renderProbeFsEmbed helper.
+   *
+   * D-03 refresh trigger: operator runs `/clawcode-probe-fs <agent>` after
+   * ACL/group/systemd change to force re-probe BEFORE asking user to retry.
+   * Eliminates the 60s heartbeat-stale window per RESEARCH.md Pitfall 7.
+   *
+   * D-04 silent: After probe completes, NO Discord broadcast post. Operator
+   * inspects via this slash response only (ephemeral) or `clawcode fs-status`
+   * CLI. Capability change reflects in next turn's stable-prefix re-render.
+   *
+   * Discord/CLI parity invariant: Both this slash and `clawcode probe-fs`
+   * CLI invoke the SAME daemon IPC primitive ("probe-fs") which routes
+   * through runFsProbe (96-01); identical FsProbeOutcome rendered to both
+   * surfaces (RESEARCH.md Validation Architecture Dim 6).
+   */
+  private async handleProbeFsCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    // Admin gate FIRST — no IPC, no defer for non-admins.
+    // Phase 100-fu — pass full context so channel-bound admin agents
+    // grant admin access without requiring an explicit user-ID allowlist.
+    if (
+      !isAdminClawdyInteraction(interaction, {
+        adminUserIds: this.adminUserIds,
+        routingTable: this.routingTable,
+        resolvedAgents: this.resolvedAgents,
+      })
+    ) {
+      try {
+        await interaction.reply({
+          content: "Admin-only command",
+          flags: MessageFlags.Ephemeral,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    const agent = interaction.options.getString("agent", true);
+
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-probe-fs", error: (error as Error).message },
+        "failed to defer probe-fs reply",
+      );
+      return;
+    }
+
+    let outcome: FsProbeOutcomeWire;
+    try {
+      outcome = (await sendIpcRequest(SOCKET_PATH, "probe-fs", {
+        agent,
+      })) as FsProbeOutcomeWire;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-probe-fs", agent, error: msg },
+        "probe-fs IPC failed",
       );
       try {
-        await interaction.editReply(`Sync status unavailable: ${msg}`);
+        await interaction.editReply({
+          content: `probe-fs error: ${msg}`,
+        });
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.editReply({
+        embeds: [renderProbeFsEmbed(agent, outcome)],
+      });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-probe-fs", error: (error as Error).message },
+        "failed to send probe-fs embed",
+      );
+    }
+  }
+
+  /**
+   * Phase 100 Plan 04 GSD-01..03 / GSD-09 — handle long-runner /gsd-* slash
+   * commands by pre-spawning a subagent thread.
+   *
+   * Flow:
+   *   1. Defer reply within the 3s Discord interaction-token window
+   *      (RESEARCH.md Pitfall 4 — deferReply MUST be the FIRST async call).
+   *   2. Channel-bound-to-admin-clawdy guard (CONTEXT.md lock-in: only
+   *      Admin Clawdy responds to /gsd-* slashes).
+   *   3. Resolve the cmdDef from admin-clawdy's slashCommands list (Plan 07
+   *      adds the 5 entries; this method trusts that contract).
+   *   4. Build the canonical /gsd:* string via formatCommandMessage (existing
+   *      helper at the bottom of this file). For "/gsd:autonomous {args}"
+   *      with args="--from 100" → produces "/gsd:autonomous --from 100".
+   *   5. Pre-spawn a subagent thread named gsd:<short>:<phaseArg>; the
+   *      canonical /gsd:* string flows into spawnInThread.task as the
+   *      subagent's first user message, which the SDK auto-dispatches
+   *      because settingSources includes "user" (loads ~/.claude/commands/
+   *      gsd/*.md per Plan 100-06 symlinks).
+   *   6. EditReply with thread URL + ack message.
+   *
+   * Phase 99-M auto-relay (Plan 100-05 extension) handles the parent-side
+   * completion summary on subagent session end — out of scope for Plan 04.
+   *
+   * Spawn errors are surfaced verbatim via err.message (Phase 85 TOOL-04
+   * precedent). Missing spawner DI emits a graceful "unavailable" reply.
+   *
+   * @param interaction — the Discord ChatInputCommandInteraction
+   * @param commandName — the slash command name (gsd-autonomous /
+   *                      gsd-plan-phase / gsd-execute-phase per
+   *                      GSD_LONG_RUNNERS)
+   */
+  private async handleGsdLongRunner(
+    interaction: ChatInputCommandInteraction,
+    commandName: string,
+    /**
+     * Phase 999.32 — when the operator invoked via /gsd-do args:<sub> ...,
+     * the dispatcher pre-parsed the rest-of-args into this string. We treat
+     * it as the value for whatever option the cmdDef expects ({args}, {phase},
+     * {task}, {issue}) so formatCommandMessage's placeholder substitution
+     * still produces the canonical /gsd:<sub> ... slash. null when the
+     * operator went through the legacy /get-shit-done composite path
+     * (Discord nested subcommand UI) — in that case, options come from
+     * interaction.options.get(name) as before.
+     */
+    gsdDoRewrittenArgs: string | null = null,
+  ): Promise<void> {
+    // Step 1 — defer FIRST (before any other I/O). 3s race-safe.
+    try {
+      await interaction.deferReply({ ephemeral: false });
+    } catch (error) {
+      this.log.error(
+        { command: commandName, error: (error as Error).message },
+        "failed to defer /gsd-* reply",
+      );
+      return;
+    }
+
+    // Step 2 — capability-based guard. Phase 100 follow-up: replaced the
+    // hardcoded `agentName !== "Admin Clawdy"` check with a check on the
+    // channel-bound agent's `gsd?.projectDir` field. Any agent the operator
+    // has GSD-enabled (Admin Clawdy, fin-acquisition, future agents) passes;
+    // any non-GSD agent (personal, fin-tax, etc.) gets a clear rejection
+    // mentioning what's missing so operators know how to fix it.
+    const channelId = interaction.channelId;
+    const agentName = getAgentForChannel(this.routingTable, channelId);
+    const agentConfig = agentName
+      ? this.resolvedAgents.find((a) => a.name === agentName)
+      : undefined;
+    if (!agentConfig?.gsd?.projectDir) {
+      try {
+        await interaction.editReply(
+          `\`/gsd-*\` commands are restricted to GSD-enabled agents. ` +
+            `This channel's agent (\`${agentName ?? "unknown"}\`) has no \`gsd.projectDir\` configured. ` +
+            `Set one via \`/gsd-set-project path:<abs-path>\` or add a \`gsd:\` block to clawcode.yaml.`,
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Step 3 — resolve cmdDef. First check the agent's own slashCommands
+    // list (legacy yaml-defined entries on Admin Clawdy still win), then fall
+    // back to GSD_SLASH_COMMANDS so any GSD-enabled agent without a yaml
+    // block (e.g. fin-acquisition) finds its cmdDef via the auto-inheritance
+    // path. Mirrors the seenNames dedup at register time — first match wins.
+    //
+    // Phase 999.21 — GSD_SLASH_COMMANDS entries now use the stripped suffix
+    // for `name` (e.g. "autonomous"); the rewrite-at-entry remap leaves
+    // `commandName` as the legacy `gsd-<sub>` form for downstream match
+    // back-compat, so lookups against GSD_SLASH_COMMANDS must strip the
+    // `gsd-` prefix. The agent's own slashCommands are checked under both
+    // forms (legacy yaml entries still use the `gsd-*` flat name; future
+    // yaml entries may use the stripped form with subcommandOf set).
+    const subName = commandName.replace(/^gsd-/, "");
+    const cmdDef =
+      agentConfig.slashCommands.find((c) => c.name === commandName) ??
+      agentConfig.slashCommands.find((c) => c.name === subName) ??
+      GSD_SLASH_COMMANDS.find((c) => c.name === subName);
+    if (!cmdDef) {
+      try {
+        await interaction.editReply(`Unknown command: /${commandName}`);
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Step 4 — extract option values + build canonical /gsd:* string.
+    // Phase 999.32 — when invoked via /gsd-do, the dispatcher passes the
+    // pre-parsed rest-of-args; bind it to whatever option name cmdDef
+    // expects (the operator typed one free-form string; substitute it for
+    // every {args} / {phase} / {task} / {issue} placeholder uniformly).
+    const options = new Map<string, string | number | boolean>();
+    if (gsdDoRewrittenArgs !== null) {
+      for (const opt of cmdDef.options) {
+        options.set(opt.name, gsdDoRewrittenArgs);
+      }
+    } else {
+      for (const opt of cmdDef.options) {
+        const v = interaction.options.get(opt.name);
+        if (v !== null && v !== undefined && v.value !== null && v.value !== undefined) {
+          options.set(opt.name, v.value);
+        }
+      }
+    }
+    const canonicalSlash = formatCommandMessage(cmdDef, options);
+
+    // Step 5 — build thread name: gsd:autonomous:100 / gsd:plan:100 /
+    // gsd:execute:100. shortName maps the Discord-compatible name back to
+    // the short canonical form: gsd-autonomous → autonomous;
+    // gsd-plan-phase → plan; gsd-execute-phase → execute.
+    const phaseArgRaw = String(
+      options.get("phase") ?? options.get("args") ?? "",
+    ).trim();
+    const phaseArg = phaseArgRaw.length > 0 ? phaseArgRaw.split(/\s+/)[0]! : "";
+    const shortName = commandName.replace(/^gsd-/, "").replace(/-phase$/, "");
+    const threadName = phaseArg
+      ? `gsd:${shortName}:${phaseArg}`
+      : `gsd:${shortName}`;
+
+    // Step 6 — graceful fallback when spawner not wired.
+    if (!this.subagentThreadSpawner) {
+      try {
+        await interaction.editReply(
+          "Subagent thread spawning unavailable (no Discord bridge).",
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Step 7 — pre-spawn subagent thread; surface verbatim error on failure.
+    // `agentConfig.name` is non-null here (we returned early at Step 2 when
+    // agentConfig was undefined). Use it instead of `agentName` so TS narrows
+    // the type without an extra non-null assertion.
+    const parentAgentName = agentConfig.name;
+    try {
+      const result = await this.subagentThreadSpawner.spawnInThread({
+        parentAgentName,
+        threadName,
+        task: canonicalSlash,
+      });
+      const threadUrl = `https://discord.com/channels/${interaction.guildId}/${result.threadId}`;
+      try {
+        await interaction.editReply(
+          `🚀 Spawned ${threadName} subthread for ${canonicalSlash}\nThread: ${threadUrl}\n_Working in subthread; main channel summary on completion._`,
+        );
+      } catch {
+        /* expired */
+      }
+      this.log.info(
+        {
+          command: commandName,
+          threadId: result.threadId,
+          threadName,
+          parentAgent: parentAgentName,
+        },
+        "/gsd-* long-runner subthread spawned",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: commandName, error: msg },
+        "/gsd-* long-runner spawn failed",
+      );
+      try {
+        await interaction.editReply(`Failed to spawn /gsd-* subthread: ${msg}`);
+      } catch {
+        /* expired */
+      }
+    }
+  }
+
+  /**
+   * Phase 100 follow-up — `/gsd-set-project` runtime project switcher.
+   *
+   * Lets an operator change a GSD-enabled agent's `gsd.projectDir` at runtime
+   * without editing clawcode.yaml or restarting the daemon. The slash handler
+   * does the validation (absolute path, exists, is-directory), then dispatches
+   * `set-gsd-project` IPC to the daemon. The daemon persists the override to
+   * `~/.clawcode/manager/gsd-project-overrides.json` and triggers an agent
+   * restart (gsd.projectDir is non-reloadable per Phase 100 GSD-07).
+   *
+   * Capability gate: any agent with `gsd?.projectDir` configured can switch
+   * its OWN project. No admin-clawdy guard — there's no destructive cross-
+   * agent surface, only a per-agent project root rebind.
+   *
+   * Path validation order (fail-fast):
+   *   1. `path.isAbsolute(p)` — reject relative paths
+   *   2. `statSync(p)` — reject ENOENT (path doesn't exist)
+   *   3. `stats.isDirectory()` — reject regular files / symlinks-to-files
+   *
+   * On success: ephemeral reply confirming the new projectDir + agent restart.
+   * On IPC failure: ephemeral reply with verbatim error (operator-debuggable).
+   */
+  private async handleSetGsdProjectCommand(
+    interaction: ChatInputCommandInteraction,
+    /**
+     * Phase 999.32 — when invoked via /gsd-do args:set-project /abs/path,
+     * the dispatcher pre-parsed everything after `set-project` into this
+     * string. When non-null, used as the path value instead of reading
+     * the `path` option (which doesn't exist on the gsd-do interaction).
+     */
+    gsdDoRewrittenArgs: string | null = null,
+  ): Promise<void> {
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    } catch (error) {
+      this.log.error(
+        { command: "gsd-set-project", error: (error as Error).message },
+        "failed to defer gsd-set-project reply",
+      );
+      return;
+    }
+
+    const channelId = interaction.channelId;
+    const agentName = getAgentForChannel(this.routingTable, channelId);
+    const agentConfig = agentName
+      ? this.resolvedAgents.find((a) => a.name === agentName)
+      : undefined;
+
+    // Capability gate — only GSD-enabled agents can switch their project.
+    if (!agentConfig?.gsd?.projectDir) {
+      try {
+        await interaction.editReply(
+          `\`/gsd-set-project\` requires a GSD-enabled agent. ` +
+            `This channel's agent (\`${agentName ?? "unknown"}\`) is not a GSD agent ` +
+            `(no \`gsd.projectDir\` configured).`,
+        );
+      } catch {
+        /* expired */
+      }
+      return;
+    }
+
+    // Read the required `path` option (or use the rewritten args from
+    // /gsd-do).
+    const path =
+      gsdDoRewrittenArgs !== null
+        ? gsdDoRewrittenArgs
+        : interaction.options.getString("path", true);
+    if (!path || typeof path !== "string") {
+      try {
+        await interaction.editReply(
+          "`/gsd-set-project` requires a `path:` option (absolute directory path).",
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    // Validation step 1 — must be absolute.
+    if (!isAbsolute(path)) {
+      try {
+        await interaction.editReply(
+          `\`${path}\` is not an absolute path. Provide a path that starts with \`/\`.`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    // Validation step 2 + 3 — must exist and be a directory.
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        await interaction.editReply(
+          `Path \`${path}\` does not exist or is not accessible: ${msg}`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+    if (!stats.isDirectory()) {
+      try {
+        await interaction.editReply(
+          `Path \`${path}\` is not a directory. \`gsd.projectDir\` must point at a directory.`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    // Dispatch `set-gsd-project` IPC. The daemon side is in daemon.ts —
+    // persists to gsd-project-overrides.json + restarts the agent.
+    // `agentConfig.name` is non-null here (we returned early at the capability
+    // gate when agentConfig was undefined). Use it instead of `agentName`.
+    const targetAgent = agentConfig.name;
+    try {
+      await sendIpcRequest(SOCKET_PATH, "set-gsd-project", {
+        agent: targetAgent,
+        projectDir: path,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "gsd-set-project", agent: targetAgent, error: msg },
+        "set-gsd-project IPC failed",
+      );
+      try {
+        await interaction.editReply(
+          `Failed to set GSD project for \`${targetAgent}\`: ${msg}`,
+        );
+      } catch { /* expired */ }
+      return;
+    }
+
+    try {
+      await interaction.editReply(
+        `GSD project set to \`${path}\` for \`${targetAgent}\`. ` +
+          `Restarting agent — new sessions will use this directory.`,
+      );
+    } catch { /* expired */ }
+  }
+
+  /**
+   * Phase 103 OBS-07 / UI-01 — /clawcode-usage inline handler.
+   *
+   * Routes through the daemon-direct `list-rate-limit-snapshots` IPC method
+   * (zero LLM turn cost) and renders a native Discord EmbedBuilder via the
+   * pure buildUsageEmbed function in usage-embed.ts. The 12th application
+   * of the inline-handler-short-circuit-before-CONTROL_COMMANDS pattern.
+   *
+   * Resolves target agent from the optional `agent:` arg, falling back to
+   * the channel's bound agent. Mirrors the /clawcode-tools agent-resolution
+   * idiom verbatim — operators can target any agent from any channel by
+   * passing `agent:`, but the default is the channel's binding (so users
+   * in a per-agent channel just type /clawcode-usage with no args).
+   *
+   * Pitfall 5 closure: this IPC name is `list-rate-limit-snapshots`, NOT
+   * `rate-limit-status` (the latter is the SEPARATE Discord outbound
+   * rate-limiter token-bucket IPC).
+   *
+   * Pitfall 7 closure: empty snapshots render the "No usage data yet"
+   * graceful path inside buildUsageEmbed — never an empty embed.
+   */
+  private async handleUsageCommand(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const explicitAgent = interaction.options.get("agent")?.value;
+    const targetAgent =
+      typeof explicitAgent === "string" && explicitAgent.length > 0
+        ? explicitAgent
+        : getAgentForChannel(this.routingTable, interaction.channelId);
+
+    if (!targetAgent) {
+      try {
+        await interaction.reply({
+          content:
+            "This channel is not bound to an agent and no agent was provided.",
+          ephemeral: true,
+        });
+      } catch {
+        /* interaction may have expired */
+      }
+      return;
+    }
+
+    try {
+      await interaction.deferReply({ ephemeral: false });
+    } catch (error) {
+      this.log.error(
+        { command: "clawcode-usage", error: (error as Error).message },
+        "failed to defer usage reply",
+      );
+      return;
+    }
+
+    let snapshots: readonly RateLimitSnapshot[];
+    try {
+      const response = (await sendIpcRequest(
+        SOCKET_PATH,
+        "list-rate-limit-snapshots",
+        { agent: targetAgent },
+      )) as { snapshots?: readonly RateLimitSnapshot[] };
+      snapshots = response.snapshots ?? [];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { command: "clawcode-usage", error: msg },
+        "list-rate-limit-snapshots IPC failed",
+      );
+      try {
+        await interaction.editReply(`Failed to read usage: ${msg}`);
       } catch {
         /* interaction may have expired */
       }
@@ -1648,233 +2784,24 @@ export class SlashCommandHandler {
     }
 
     // Dynamic import keeps the slash-commands module graph decoupled from
-    // sync-status-embed's discord.js EmbedBuilder reach; mirrors the
-    // Phase 88 skills-browse pattern (lazy load when the command actually
-    // fires, keeps cold-start import graph smaller).
-    const { buildSyncStatusEmbed } = await import("./sync-status-embed.js");
+    // usage-embed's discord.js EmbedBuilder reach; mirrors the Phase 91
+    // sync-status pattern (lazy-load when the command actually fires).
+    const { buildUsageEmbed } = await import("./usage-embed.js");
 
-    // Shape-align conflict entries with SyncConflict — the daemon returns
-    // only open conflicts (resolvedAt omitted); the embed consumer expects
-    // resolvedAt: null on every entry. Map once, pass immutably.
-    const embed = buildSyncStatusEmbed({
-      authoritativeSide: response.authoritativeSide,
-      lastSyncedAt: response.lastSyncedAt,
-      conflicts: response.conflicts.map((c) => ({
-        path: c.path,
-        sourceHash: c.sourceHash,
-        destHash: c.destHash,
-        detectedAt: c.detectedAt,
-        resolvedAt: null,
-      })),
-      lastCycle: response.lastCycle,
-      now: new Date(),
+    const embed = buildUsageEmbed({
+      agent: targetAgent,
+      snapshots,
+      now: Date.now(),
     });
 
     try {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       this.log.error(
-        { command: "clawcode-sync-status", error: (error as Error).message },
-        "failed to send sync-status embed",
+        { command: "clawcode-usage", error: (error as Error).message },
+        "failed to send usage embed",
       );
     }
-  }
-
-  /**
-   * Phase 92 Plan 04 CUT-06 / CUT-07 / UI-01 — /clawcode-cutover-verify
-   * inline handler.
-   *
-   * Renders the destructive-fix embed flow: queries the daemon for the
-   * agent's pending DestructiveCutoverGap[], renders ONE ephemeral embed per
-   * gap (or batched if > 10 — first pass emits up to 25 individual embeds
-   * per Claude's-Discretion), and sets up a button collector that filters
-   * `i.customId.startsWith("cutover-")` for collision-safe routing.
-   *
-   * On button click, the customId is dispatched via IPC `cutover-button-action`
-   * to the daemon's pure handleCutoverButtonActionIpc which routes through
-   * applyDestructiveFix or audit-only ledger row per the operator's choice.
-   *
-   * Plan 92-06 will wire the `cutover-verify-summary` IPC method that returns
-   * the actual gap list. For Plan 92-04 first-pass, the IPC may return an
-   * empty list — operator sees an "all clear" message in that case.
-   */
-  private async handleCutoverVerifyCommand(
-    interaction: ChatInputCommandInteraction,
-  ): Promise<void> {
-    try {
-      await interaction.deferReply({ ephemeral: true });
-    } catch (error) {
-      this.log.error(
-        {
-          command: "clawcode-cutover-verify",
-          error: (error as Error).message,
-        },
-        "failed to defer cutover-verify reply",
-      );
-      return;
-    }
-
-    // Resolve agent: explicit option > channel binding.
-    const agentArg = interaction.options.getString("agent", false);
-    const agentName =
-      agentArg ??
-      getAgentForChannel(this.routingTable, interaction.channelId);
-    if (!agentName) {
-      try {
-        await interaction.editReply(
-          "This channel is not bound to an agent. Pass `agent:<name>` explicitly.",
-        );
-      } catch {
-        /* expired */
-      }
-      return;
-    }
-
-    // Query daemon for pending destructive gaps. Plan 92-06 wires the
-    // verify-summary IPC; first-pass implementations may return an empty
-    // list while the gap source is being constructed.
-    let gaps: ReadonlyArray<unknown> = [];
-    try {
-      const resp = (await sendIpcRequest(
-        SOCKET_PATH,
-        "cutover-verify-summary",
-        { agent: agentName },
-      )) as { gaps?: ReadonlyArray<unknown> };
-      gaps = Array.isArray(resp?.gaps) ? resp.gaps : [];
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(
-        { command: "clawcode-cutover-verify", agent: agentName, error: msg },
-        "cutover-verify-summary IPC failed (Plan 92-06 wires this)",
-      );
-      try {
-        await interaction.editReply(
-          `Cutover verify is not yet wired (Plan 92-06): ${msg}`,
-        );
-      } catch {
-        /* expired */
-      }
-      return;
-    }
-
-    if (gaps.length === 0) {
-      try {
-        await interaction.editReply(
-          `No destructive cutover gaps for **${agentName}** — all clear.`,
-        );
-      } catch {
-        /* expired */
-      }
-      return;
-    }
-
-    // Lazy-import the renderer so the slash-commands cold-start graph stays
-    // independent of the cutover module surface (mirrors the sync-status
-    // embed lazy-import pattern above).
-    const { renderDestructiveGapEmbed } = await import(
-      "../cutover/destructive-embed-renderer.js"
-    );
-    const { CUTOVER_BUTTON_PREFIX } = await import("../cutover/types.js");
-
-    // Cap at 25 embeds for first pass (Claude's-Discretion: paginate-on-overflow
-    // deferred). Discord allows up to 10 embeds per single message; we send
-    // each gap as its own ephemeral followUp so each carries its own button row.
-    const MAX_GAPS = 25;
-    const renderable = gaps.slice(0, MAX_GAPS) as ReadonlyArray<{
-      kind: string;
-      identifier: string;
-      severity: string;
-    }>;
-
-    // Render the first gap as the deferred reply edit; subsequent gaps as
-    // followUp messages so each retains its own component row + button TTL.
-    let firstSent = false;
-    for (const gapRaw of renderable) {
-      // Cast through unknown — the renderer asserts the gap shape via its
-      // exhaustive switch + assertNever fallthrough, so a malformed shape
-      // throws synchronously rather than silently rendering an empty embed.
-      try {
-        const rendered = renderDestructiveGapEmbed(
-          agentName,
-          gapRaw as Parameters<typeof renderDestructiveGapEmbed>[1],
-        );
-        if (!firstSent) {
-          await interaction.editReply({
-            embeds: [rendered.embed],
-            components: rendered.components.map((row) => row),
-          });
-          firstSent = true;
-        } else {
-          await interaction.followUp({
-            embeds: [rendered.embed],
-            components: rendered.components.map((row) => row),
-            ephemeral: true,
-          });
-        }
-      } catch (renderErr) {
-        const msg =
-          renderErr instanceof Error ? renderErr.message : String(renderErr);
-        this.log.warn(
-          {
-            command: "clawcode-cutover-verify",
-            gap: gapRaw,
-            error: msg,
-          },
-          "cutover gap render failed (skipping)",
-        );
-      }
-    }
-
-    // Set up a button collector with prefix-startsWith filter. Note: this
-    // collects on the channel (not the message) so followUp embeds also
-    // route through this filter.
-    const channel = interaction.channel;
-    if (!channel) return;
-    const collector = channel.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      filter: (i: ButtonInteraction) =>
-        i.user.id === interaction.user.id &&
-        i.customId.startsWith(CUTOVER_BUTTON_PREFIX),
-      // 30-minute TTL per Claude's-Discretion (operators may step away to
-      // verify content before clicking Accept on outdated-memory-file).
-      time: 30 * 60 * 1000,
-    });
-
-    collector.on("collect", async (btn: ButtonInteraction) => {
-      try {
-        await btn.deferUpdate();
-      } catch {
-        /* may be expired */
-      }
-      try {
-        const outcome = (await sendIpcRequest(
-          SOCKET_PATH,
-          "cutover-button-action",
-          { customId: btn.customId, agent: agentName },
-        )) as { kind: string; error?: string; gapKind?: string };
-
-        const reply = formatCutoverOutcome(outcome);
-        try {
-          await btn.followUp({ content: reply, ephemeral: true });
-        } catch {
-          /* expired */
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.log.warn(
-          { command: "clawcode-cutover-verify", error: msg },
-          "cutover-button-action IPC failed",
-        );
-        try {
-          await btn.followUp({
-            content: `Cutover action failed: ${msg}`,
-            ephemeral: true,
-          });
-        } catch {
-          /* expired */
-        }
-      }
-    });
   }
 
   /**
@@ -3268,7 +4195,7 @@ export class SlashCommandHandler {
     const isFleet = cmd.name === "clawcode-fleet";
 
     try {
-      await interaction.deferReply({ ephemeral: !isFleet });
+      await interaction.deferReply({ ephemeral: true });
     } catch (error) {
       this.log.error(
         { command: cmd.name, error: (error as Error).message },
@@ -3336,6 +4263,19 @@ export class SlashCommandHandler {
           hasActiveTurn: (n) => this.sessionManager.hasActiveTurn(n),
           dispatch: (origin, n, msg) => dispatcher.dispatch(origin, n, msg),
           log: this.log,
+        });
+        await interaction.editReply(reply);
+      } else if (ipcMethod === "set-verbose-level") {
+        // Phase 117 Plan 117-11 T04 — per-channel verbose toggle. Routes the
+        // operator's level choice (on/off/status) through the daemon IPC
+        // handler (T05) which upserts via VerboseState and returns the
+        // resulting {level, updatedAt}. Reply is ephemeral (inherited from
+        // the deferReply at the top of this method).
+        const reply = await handleVerboseSlash({
+          channelId: interaction.channelId,
+          level: interaction.options.getString("level", true),
+          sendIpc: (method, params) =>
+            sendIpcRequest(SOCKET_PATH, method, params) as Promise<unknown>,
         });
         await interaction.editReply(reply);
       } else if (ipcMethod === "agent-create") {
@@ -3492,10 +4432,12 @@ export class SlashCommandHandler {
 
     const editor = new ProgressiveMessageEditor({
       editFn: async (content: string) => {
+        // Phase 100 follow-up — wrap raw markdown tables in ```text``` fences.
+        const wrapped = wrapMarkdownTablesInCodeFence(content);
         const truncated =
-          content.length > DISCORD_MAX_LENGTH
-            ? content.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
-            : content;
+          wrapped.length > DISCORD_MAX_LENGTH
+            ? wrapped.slice(0, DISCORD_MAX_LENGTH - 3) + "..."
+            : wrapped;
         await interaction.editReply(truncated);
       },
       editIntervalMs: 1500,
@@ -3833,4 +4775,68 @@ export function buildFleetEmbed(
           : 0xffff00;
 
   return { title: "Fleet Status", color, fields, timestamp: new Date().toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 117 Plan 117-11 T04 — pure handler for /clawcode-verbose.
+//
+// Exported so tests can drive the command logic without spinning up a real
+// Discord interaction pipeline (mirror of handleInterruptSlash / handleSteerSlash
+// at slash-commands.ts:~4324). `handleControlCommand` wires it in-process
+// against `sendIpcRequest` and the slash interaction's deferred ephemeral
+// reply.
+//
+// The IPC daemon-side handler (T05) returns { level, updatedAt } on success
+// or surfaces a JSON-RPC error (caught upstream → editReply "Command failed").
+// This handler renders the user-visible reply text only; the caller wraps
+// it in editReply so the ephemeral-ness inherited from deferReply is
+// preserved (we DO NOT call reply() here — second reply would throw
+// InteractionAlreadyReplied).
+// ---------------------------------------------------------------------------
+
+/** Successful response payload from the `set-verbose-level` IPC method. */
+export type VerboseSlashIpcResult = {
+  readonly level: "normal" | "verbose";
+  readonly updatedAt: string;
+};
+
+/** Inputs for the pure verbose-slash handler. */
+export type VerboseSlashDeps = {
+  readonly channelId: string;
+  /** "on" | "off" | "status" — the operator's level choice from the slash option. */
+  readonly level: string;
+  /** Test-injectable IPC sender. Production binds this to `sendIpcRequest(SOCKET_PATH, ...)`. */
+  readonly sendIpc: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<unknown>;
+};
+
+/**
+ * Render the ephemeral reply text for `/clawcode-verbose`.
+ *
+ * Returns:
+ *   - "verbose: verbose for this channel"    — level=on  → IPC sets verbose
+ *   - "verbose: normal for this channel"     — level=off → IPC sets normal
+ *   - "verbose: <level> (last changed <ts>)" — level=status → IPC reads current
+ *   - "verbose: <error string>"              — IPC handler returned { error: ... }
+ *
+ * Never throws — IPC transport errors bubble to handleControlCommand's outer
+ * catch (which renders "Command failed: <msg>").
+ */
+export async function handleVerboseSlash(
+  deps: VerboseSlashDeps,
+): Promise<string> {
+  const { channelId, level, sendIpc } = deps;
+  const response = (await sendIpc("set-verbose-level", {
+    channelId,
+    level,
+  })) as VerboseSlashIpcResult | { readonly error: string };
+  if ("error" in response) {
+    return `verbose: ${response.error}`;
+  }
+  if (level === "status") {
+    return `verbose: ${response.level} (last changed ${response.updatedAt})`;
+  }
+  return `verbose: ${response.level} for this channel`;
 }
