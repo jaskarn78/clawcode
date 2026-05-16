@@ -351,6 +351,25 @@ export class DocumentStore {
     return Object.freeze(rows.map((r) => r.source));
   }
 
+  /**
+   * Phase 999.43 Plan 04 — list every `source` in the `documents` provenance
+   * table (NOT `document_chunks` — `listSources` above is keyed on the
+   * chunks table). Used by Plan 04's `reclassify-docs` IPC handler to walk
+   * every ingested document in an agent's store and apply a glob rule.
+   *
+   * Includes pre-Plan-01-backfill placeholder rows (source_kind =
+   * "manual_pre_999_43") — operators can target those explicitly with a
+   * rule like `*=medium` to retroactively assign defaults. Returns rows in
+   * insertion order (no ORDER BY); callers that need deterministic order
+   * should sort.
+   */
+  listDocumentSources(): readonly string[] {
+    const rows = this.stmts.listAllDocumentsSources.all() as ReadonlyArray<{
+      source: string;
+    }>;
+    return Object.freeze(rows.map((r) => r.source));
+  }
+
   /** Delete chunks for a source from both tables. Returns count deleted. */
   private deleteChunksForSource(source: string): number {
     // Get chunk IDs first for vec table deletion

@@ -260,6 +260,36 @@ export const IPC_METHODS = [
   //                    content_class, agent_weight, content_weight }
   // Response (err):  { ok: false, skipped: false, error: string }
   "auto-ingest-attachment",
+  // Phase 999.43 Plan 04 — three override surfaces (Discord emoji, MCP
+  // tool, CLI) converge on ONE daemon write path per
+  // feedback_silent_path_bifurcation.md.
+  //
+  //   set-doc-priority             — by source filepath (MCP + CLI)
+  //   set-doc-priority-by-message  — by Discord message_id (emoji branch)
+  //   reclassify-docs              — bulk glob rule (CLI only)
+  //
+  // D-08 sandbox is enforced at the daemon handler (Layer-2 defense-in-
+  // depth) based on a `who: "operator"|"agent"` discriminator. The MCP
+  // tool's `z.enum(["medium","low"])` schema is Layer-1 (Phase 999.43 D-08
+  // LOCKED VERBATIM — agents cannot escalate own doc beyond MEDIUM).
+  //
+  // Request shapes:
+  //   set-doc-priority:            { agent, source, level: high|medium|low,
+  //                                  who: operator|agent, callerAgent?,
+  //                                  reason? }
+  //   set-doc-priority-by-message: { agent, message_id, level, who,
+  //                                  callerAgent?, reason? }
+  //   reclassify-docs:             { agent, rule: "<pattern>=<level>",
+  //                                  who: operator }
+  //
+  // Responses:
+  //   set-doc-priority(-by-message):  { ok:true,  source, old_level,
+  //                                     new_level, who }
+  //                                   { ok:false, error }
+  //   reclassify-docs:                { ok:true,  updated: number }
+  "set-doc-priority",
+  "set-doc-priority-by-message",
+  "reclassify-docs",
   "search-documents",
   "delete-document",
   "list-documents",

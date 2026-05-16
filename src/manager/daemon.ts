@@ -11481,6 +11481,99 @@ async function routeMethod(
       );
     }
 
+    // Phase 999.43 Plan 04 T01 — single set-doc-priority write surface.
+    // Two entrypoints (by source + by message_id) and one bulk variant
+    // delegate to handlers in `src/manager/set-doc-priority-handler.ts`.
+    // D-08 sandbox + Phase 90 isolation enforced in the handler — agents
+    // cannot escalate own doc beyond MEDIUM; agents cannot mutate docs
+    // they did not ingest. Audit log at `${memoryPath}/audit-priority-
+    // changes.jsonl` (writeAuditLog inside the handler). All runtime log
+    // lines from this path carry tag `phase999.43-priority` (grep target
+    // for `journalctl -u clawcode -g phase999.43-priority`).
+    case "set-doc-priority": {
+      const { handleSetDocPriority } = await import(
+        "./set-doc-priority-handler.js"
+      );
+      const agentName = validateStringParam(params, "agent");
+      const source = validateStringParam(params, "source");
+      const levelRaw = validateStringParam(params, "level");
+      if (levelRaw !== "high" && levelRaw !== "medium" && levelRaw !== "low") {
+        throw new ManagerError(`invalid level '${levelRaw}'`);
+      }
+      const whoRaw = typeof params.who === "string" ? params.who : "operator";
+      const who: "operator" | "agent" =
+        whoRaw === "agent" ? "agent" : "operator"; // default operator
+      const callerAgent =
+        typeof params.callerAgent === "string" ? params.callerAgent : undefined;
+      const reason =
+        typeof params.reason === "string" ? params.reason : undefined;
+
+      return await handleSetDocPriority(
+        { agent: agentName, source, level: levelRaw, who, callerAgent, reason },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getAgentMemoryPath: (a) =>
+            configs.find((c) => c.name === a)?.memoryPath,
+          logger,
+        },
+      );
+    }
+
+    case "set-doc-priority-by-message": {
+      const { handleSetDocPriorityByMessage } = await import(
+        "./set-doc-priority-handler.js"
+      );
+      const agentName = validateStringParam(params, "agent");
+      const messageId = validateStringParam(params, "message_id");
+      const levelRaw = validateStringParam(params, "level");
+      if (levelRaw !== "high" && levelRaw !== "medium" && levelRaw !== "low") {
+        throw new ManagerError(`invalid level '${levelRaw}'`);
+      }
+      const whoRaw = typeof params.who === "string" ? params.who : "operator";
+      const who: "operator" | "agent" =
+        whoRaw === "agent" ? "agent" : "operator";
+      const callerAgent =
+        typeof params.callerAgent === "string" ? params.callerAgent : undefined;
+      const reason =
+        typeof params.reason === "string" ? params.reason : undefined;
+
+      return await handleSetDocPriorityByMessage(
+        {
+          agent: agentName,
+          message_id: messageId,
+          level: levelRaw,
+          who,
+          callerAgent,
+          reason,
+        },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getAgentMemoryPath: (a) =>
+            configs.find((c) => c.name === a)?.memoryPath,
+          logger,
+        },
+      );
+    }
+
+    case "reclassify-docs": {
+      const { handleReclassifyDocs } = await import(
+        "./set-doc-priority-handler.js"
+      );
+      const agentName = validateStringParam(params, "agent");
+      const rule = validateStringParam(params, "rule");
+      // CLI-only entry point — `who` is always "operator" regardless of
+      // what the caller sends. Keeps the audit-trail discriminator honest.
+      return await handleReclassifyDocs(
+        { agent: agentName, rule, who: "operator" },
+        {
+          getDocumentStore: (a) => manager.getDocumentStore(a),
+          getAgentMemoryPath: (a) =>
+            configs.find((c) => c.name === a)?.memoryPath,
+          logger,
+        },
+      );
+    }
+
 
     case "search-documents": {
       const agentName = validateStringParam(params, "agent");
