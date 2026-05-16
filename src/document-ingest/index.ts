@@ -108,7 +108,13 @@ export async function ingest(
     if (page.text !== undefined && page.text.length > 0) {
       pageTexts.push(page.text);
     } else if (page.imageBuffer !== undefined) {
-      const r = await ocrPage(page.imageBuffer, { taskHint: opts.taskHint });
+      // Phase 101 Plan 02 T03/T04 — thread the operator's explicit backend
+      // override through to ocrPage so D-08 Mistral selectability + per-tier
+      // overrides work end-to-end from the ingest_document MCP tool.
+      const r = await ocrPage(page.imageBuffer, {
+        taskHint: opts.taskHint,
+        backend: opts.backend,
+      });
       pageTexts.push(r.text);
       if (ocrUsed === "none") ocrUsed = r.backend;
     }

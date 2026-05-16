@@ -11159,6 +11159,7 @@ async function routeMethod(
       try {
         ingestResult = await ingestDocumentEngine(fileBuffer, filePath, {
           taskHint,
+          backend,
         });
       } catch (err) {
         // T05 — fail-mode alerts for the two engine-side terminal errors:
@@ -11187,7 +11188,7 @@ async function routeMethod(
         }
         throw err;
       }
-      void backend; // backend is honored at the ocrPage level via setAllowMistralOcr / explicit dispatch (T03)
+      // `backend` is now threaded through ingestDocumentEngine → ocrPage above.
 
       // Structured extraction (U4) when extract != 'text'.
       let structured: unknown | undefined;

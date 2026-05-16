@@ -45,6 +45,15 @@ export type IngestOptions = {
   readonly taskHint?: TaskHint;
   readonly extract?: "text" | "structured" | "both";
   readonly force?: boolean;
+  /**
+   * Phase 101 Plan 02 T03/T04 — explicit OCR backend override threaded
+   * through from `ingest_document` MCP tool → daemon → engine → ocrPage.
+   * When set to `'mistral'`, gated by `setAllowMistralOcr()` per D-08
+   * (throws `"Mistral OCR backend disabled in config"` when the config
+   * boolean is false; otherwise invokes the stub which throws
+   * `"not yet implemented"`). When unset, the three-tier auto-chain runs.
+   */
+  readonly backend?: OcrBackend;
 };
 
 /** One structured ingestion telemetry record (one per `ingest()` call). */

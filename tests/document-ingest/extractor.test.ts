@@ -200,3 +200,52 @@ describe("T03 Mistral OCR stub (D-08)", () => {
     ).rejects.toThrow(/Mistral OCR backend not yet implemented \(D-08/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// T04 follow-up — backend threading through the engine entrypoint (advisor fix)
+// ---------------------------------------------------------------------------
+
+describe("T04 backend threading: ingest() → ocrPage (D-08 selectability)", () => {
+  afterEach(() => setAllowMistralOcr(() => false));
+
+  it("threads backend: 'mistral' through ingest() to ocrPage and rejects when allowMistralOcr=false", async () => {
+    // Lazy-import the engine here so the test doesn't pay the cost when
+    // the surrounding describe blocks run in isolation.
+    const { ingest } = await import("../../src/document-ingest/index.js");
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+
+    setAllowMistralOcr(() => false);
+
+    // Use the existing PNG fixture so the image handler runs and the
+    // engine actually invokes ocrPage (text handlers short-circuit before
+    // the OCR layer, hiding the backend dispatch).
+    const fixturePath = join(
+      process.cwd(),
+      "tests/fixtures/document-ingest/sample.png",
+    );
+    const buf = await readFile(fixturePath);
+
+    await expect(
+      ingest(buf, "sample.png", { backend: "mistral" }),
+    ).rejects.toThrow(/Mistral OCR backend disabled in config/);
+  });
+
+  it("threads backend: 'mistral' through ingest() to ocrPage and reaches the stub when allowMistralOcr=true", async () => {
+    const { ingest } = await import("../../src/document-ingest/index.js");
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+
+    setAllowMistralOcr(() => true);
+
+    const fixturePath = join(
+      process.cwd(),
+      "tests/fixtures/document-ingest/sample.png",
+    );
+    const buf = await readFile(fixturePath);
+
+    await expect(
+      ingest(buf, "sample.png", { backend: "mistral" }),
+    ).rejects.toThrow(/Mistral OCR backend not yet implemented \(D-08/);
+  });
+});
