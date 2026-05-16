@@ -191,6 +191,11 @@ import { extractStructured, IngestError as DocIngestError } from "../document-in
 import type { ExtractionSchemaName } from "../document-ingest/schemas/index.js";
 import type { OcrBackend, TaskHint } from "../document-ingest/types.js";
 import { setAllowMistralOcr } from "../document-ingest/ocr/index.js";
+// Phase 101 Plan 02 T05 — fail-mode alerts to admin-clawdy (U7, SC-7).
+import {
+  setIngestAlertDeps,
+  recordIngestAlert,
+} from "../document-ingest/alerts.js";
 import { GraphSearch } from "../memory/graph-search.js";
 import { invokeMemoryLookup } from "./memory-lookup-handler.js";
 // Phase 115 sub-scope 7 — lazy-load memory tools (T01).
@@ -3797,6 +3802,38 @@ export async function startDaemon(
   setAllowMistralOcr(
     () => config.defaults.documentIngest?.allowMistralOcr ?? false,
   );
+
+  // Phase 101 Plan 02 T05 — wire the U7 ingest-alerts surface. Logger
+  // is the shared daemon logger. `postToAdminClawdy` uses the existing
+  // webhookManagerRef (same closure pattern as triggerDeliveryFn at
+  // line 3112) so a stall before WebhookManager wiring lands a pino
+  // log only — never crashes on a null reference.
+  setIngestAlertDeps({
+    logger,
+    postToAdminClawdy: async (msg: string) => {
+      const wm = webhookManagerRef.current;
+      if (wm && wm.hasWebhook("admin-clawdy")) {
+        await wm.send("admin-clawdy", msg);
+        return;
+      }
+      const bot = botDirectSenderRef.current;
+      const adminCfg = resolvedAgents.find((a) => a.name === "admin-clawdy");
+      if (bot && adminCfg) {
+        // admin-clawdy doesn't expose its channelId on the resolved
+        // config; fall back to a pino-only path when no webhook + no
+        // routable channel id is available.
+        logger.warn(
+          { tag: "phase101-ingest-alert", msg },
+          "phase101 admin-clawdy alert: no webhook + bot-direct missing channel id",
+        );
+        return;
+      }
+      logger.warn(
+        { tag: "phase101-ingest-alert", msg },
+        "phase101 admin-clawdy alert: no sender wired",
+      );
+    },
+  });
 
   const browserCfg = config.defaults.browser;
   const browserManager = new BrowserManager({
@@ -11118,9 +11155,38 @@ async function routeMethod(
       // Run the Phase 101 engine to get text + telemetry. Pass the explicit
       // backend override (if provided) through; the engine forwards it to
       // ocrPage when image-bearing handlers fire.
-      const ingestResult = await ingestDocumentEngine(fileBuffer, filePath, {
-        taskHint,
-      });
+      let ingestResult;
+      try {
+        ingestResult = await ingestDocumentEngine(fileBuffer, filePath, {
+          taskHint,
+        });
+      } catch (err) {
+        // T05 — fail-mode alerts for the two engine-side terminal errors:
+        // max-pages-exceeded (DoS guard) and mistral-disabled (D-08 gate).
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/MAX_PAGES/.test(msg)) {
+          await recordIngestAlert({
+            docSlug,
+            type: "unknown",
+            reason: "max-pages-exceeded",
+            severity: "error",
+            agent: agentName,
+          }).catch(() => {
+            /* alerts never poison the ingest path */
+          });
+        } else if (/Mistral OCR backend disabled/.test(msg)) {
+          await recordIngestAlert({
+            docSlug,
+            type: "unknown",
+            reason: "mistral-disabled",
+            severity: "error",
+            agent: agentName,
+          }).catch(() => {
+            /* alerts never poison the ingest path */
+          });
+        }
+        throw err;
+      }
       void backend; // backend is honored at the ocrPage level via setAllowMistralOcr / explicit dispatch (T03)
 
       // Structured extraction (U4) when extract != 'text'.
@@ -11134,9 +11200,20 @@ async function routeMethod(
           );
         } catch (err) {
           if (err instanceof DocIngestError) {
-            // T05 hooks `recordIngestAlert` here. For now, the error
-            // surfaces to the caller as a ManagerError so the MCP tool's
-            // catch block formats it.
+            // T05 — fail-mode alert (extraction-missing-required).
+            const missingFields = (err as DocIngestError & {
+              missingFields?: readonly string[];
+            }).missingFields;
+            await recordIngestAlert({
+              docSlug,
+              type: ingestResult.telemetry.type,
+              reason: "extraction-missing-required",
+              severity: "error",
+              missingFields,
+              agent: agentName,
+            }).catch(() => {
+              /* alerts never poison the ingest path */
+            });
             throw new ManagerError(
               `structured extraction failed: ${err.message}`,
             );
@@ -11201,8 +11278,23 @@ async function routeMethod(
       // The vec_document_chunks vec0 table is int8[384] — Float32 embeddings
       // would fail the MATCH operator's type check.
       const embeddings: Int8Array[] = [];
-      for (const chunk of chunks) {
-        embeddings.push(await embedder.embedV2(chunk.content));
+      try {
+        for (const chunk of chunks) {
+          embeddings.push(await embedder.embedV2(chunk.content));
+        }
+      } catch (err) {
+        // T05 — fail-mode alert (embedder-failure).
+        await recordIngestAlert({
+          docSlug,
+          type: ingestResult.telemetry.type,
+          reason: "embedder-failure",
+          severity: "error",
+          agent: agentName,
+        }).catch(() => {
+          /* alerts never poison the ingest path */
+        });
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new ManagerError(`embedder.embedV2 failed: ${msg}`);
       }
 
       const result = docStore.ingest(source, chunks, embeddings);
