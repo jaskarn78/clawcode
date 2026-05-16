@@ -120,6 +120,38 @@ No CONTEXT.md exists for Phase 101 yet (this phase is pre-discuss). Constraints 
 6. **Documents don't auto-feed Phase 90 memory pipeline.** Once ingested into `vec_document_chunks`, the next turn's pre-turn RRF retrieval doesn't see them.
 7. **No fail-mode taxonomy.** When OCR returns 12% confidence garbage, the agent silently uses it. No structured failure to operator.
 
+### Critical Findings (post-advisor review 2026-05-16)
+
+These were surfaced by reviewer call after the initial draft; they are blocking inputs to Plan 01 scope and to U6 implementation.
+
+**CF-1 (BLOCKING for U6): Phase 90 time-window filter will silently expire document chunks.**
+`src/memory/memory-chunks.ts:166-175` defines `applyTimeWindowFilter` — chunks survive the filter iff `c.path` includes `/memory/vault/` OR `/memory/procedures/` OR `file_mtime_ms >= now - days*86_400_000` (default 14 days per Phase 90 D-24). Document-derived chunks written under a `path: "document:pon-2024-1040"` convention would fall out of Phase 90 RRF retrieval **14 days after ingestion**. This silently defeats SC-6 and breaks the operator's "agent should know about Pon's tax return next month" expectation.
+
+**Resolution (locked in Plan 03 scope):** Extend `applyTimeWindowFilter` allow-list to also exempt paths matching prefix `document:`. One-line code change (`if (c.path.startsWith("document:")) return true;`) in `src/memory/memory-chunks.ts`. Add regression test (`document:*` chunks survive 365-day filter). The alternative — stamping `file_mtime_ms` forward on every retrieval — is fragile and pollutes the time-decay signal for genuinely-old MEMORY.md chunks. The path-prefix allow-list mirrors the proven vault/procedures pattern exactly. [VERIFIED: src/memory/memory-chunks.ts:166-175]
+
+**CF-2 (BLOCKING for Plan 01): `daemon.ts:11011` hardcodes v1 MiniLM embeddings.**
+The current `ingest-document` IPC calls `embedder.embed(chunk.content)` which `src/memory/embedder.ts:121-123` resolves to `embedV1()` (MiniLM, Float32Array). Even after Phase 115 cutover ships, this call site stays on v1. The `vec_document_chunks` schema is also pinned to `float[384]` (not `int8[384]`).
+
+**Resolution (locked in Plan 01 scope):**
+- Switch the `ingest-document` IPC and the new `ingest_document` MCP tool path to call `embedder.embedV2(chunk.content)` (returns `Int8Array`).
+- Migrate `vec_document_chunks` schema from `float[384] distance_metric=cosine` to `int8[384] distance_metric=cosine`. New tables can adopt int8 directly — no dual-write dance is needed because DocumentStore has no v1 history that needs preserving (operator confirms in CONTEXT.md whether any prior `vec_document_chunks` rows exist that need re-embedding; baseline assumption: zero, because Phase 49's ingest_document was rarely used).
+- This applies to **`vec_document_chunks` AND any cross-ingested `vec_memory_chunks` writes from U6** — those writes go to `vec_memory_chunks_v2` (Phase 115 v2 table) iff agent's migration phase ≥ `dual-write`. **Decision needed in CONTEXT.md:** if agent is on Phase 115 idle, does U6 cross-ingest force a Phase 115 dual-write transition for that agent, or does U6 write v1 only and rely on the Phase 115 cutover to backfill? Cleanest: U6 cross-ingest auto-flips the agent to `dual-write` for the document path only.
+
+**CF-3 (BLOCKING for Plan 04 scope): U6 and U8 are mutually-substituting if U6 ships.**
+The initial draft contradicted itself: §4 Q3 recommended "always cross-ingest into memory_chunks" (U6 carries retrieval) while §4 Q5 noted "if U6 is solid, U8 becomes redundant." The cleanly-resolved position:
+
+- **U6 (cross-ingest into memory pipeline) carries the retrieval path** — Phase 90 RRF + the U9 reranker on the memory-chunks surface gives operator-turn retrieval coverage. This is the primary surface the operator actually uses.
+- **U8 (hybrid-RRF on DocumentStore) ONLY matters for the direct `search-documents` MCP tool** (operator/agent issuing `search_documents(query, source=X)` to scope retrieval to a specific document). That surface today does pure cosine.
+- **Decision:** DROP U8 from Phase 101 scope. Plan 04 contains U9 only (~1 day, ~100 LOC) and shrinks from 2 days to 1 day. The `search-documents` MCP tool stays cosine-only for now; if operator hits precision regressions on direct document-scoped search, re-open as Phase 101.5 (would be ~120 LOC + schema migration on `document_chunks_fts`).
+
+**Note:** `document_chunks_fts` does NOT exist today. The original draft called U8 "mirror an existing pattern" but `src/documents/store.ts:213-217` shows only `document_chunks` and `vec_document_chunks` — `*_fts` is greenfield for the document path. This is captured here so the (deferred) follow-up phase doesn't assume mirror-cost.
+
+**CF-4 (advisory): `@anthropic-ai/tokenizer` 0.0.4 is pre-1.0 (last modified 2026-02-10 per npm registry).**
+The draft recommended switching the chunker from word-heuristic to tokenizer-accurate via this package. The package IS maintained (npm version 0.0.4, modified 2026-02-10 [VERIFIED: npm registry 2026-05-16]) but pre-1.0 signals breaking-change risk. Acceptable fallback if the package surface shifts: use the SDK's `client.messages.countTokens(...)` endpoint per Anthropic's documented count-tokens API — slower (network hop) but stable. **Recommendation:** stay with `@anthropic-ai/tokenizer` for synchronous chunker use (it's already in stack); document the count-tokens fallback in Plan 01 as a code comment so future readers see the alternative.
+
+**CF-5 (advisory): Plan 05 (operator UAT) assumes Pon truth file exists.**
+The 0.5-day Plan 05 estimate assumes the operator has produced `tests/fixtures/pon-2024-truth.json` (the curated `ExtractedTaxReturn` truth values to compare structured extraction against). This is operator work, not Claude work. **Resolution:** add an explicit `checkpoint:human-verify` task at the head of Plan 02 — "operator builds Pon truth fixture for SC-8" — that blocks downstream tasks until the file lands. Without this, Plan 02's "≥ 95% field accuracy" gate is unmeasurable.
+
 ---
 
 ## 2. Cutting-Edge 2026 RAG Stack — by dimension
@@ -272,7 +304,7 @@ const reranker = await pipeline('text-classification', 'Xenova/bge-reranker-base
 | Hybrid retrieval (docs) | **NONE** (pure cosine) | vec + BM25 + RRF | **Mirror Phase 90 pattern on DocumentStore** |
 | Reranker | **NONE** | bge-reranker-v2-m3 / Cohere rerank-3 | Add `Xenova/bge-reranker-base` via existing transformers.js runtime |
 | Structured extraction | None | Anthropic tool-use + zod schemas | Add per-type schemas, Sonnet tool-use call |
-| Memory pipeline integration | DocumentStore is islanded | Auto cross-ingest into `memory_chunks` so Phase 90 RRF sees docs | Hook `ingest_document` to also write `memory_chunks` rows |
+| Memory pipeline integration | DocumentStore is islanded; time-window filter would expire docs after 14d | Auto cross-ingest into `memory_chunks` so Phase 90 RRF sees docs; allow-list `document:*` paths in filter | Hook `ingest_document` to also write `memory_chunks` rows + CF-1 filter fix |
 | MCP tool surface | `ingest-document` IPC only | `ingest_document(path, hint, extract)` end-to-end | New MCP tool wraps full pipeline |
 | Fail-mode alerts | Silent | Trigger-engine to admin-clawdy | Mirror Phase 127 `recordStall` pattern |
 
@@ -313,10 +345,10 @@ const reranker = await pipeline('text-classification', 'Xenova/bge-reranker-base
 **Risk:** Low.
 
 #### U6: Auto cross-ingest into memory pipeline [SC-6]
-**What:** When `ingest_document` writes to `document_chunks` + `vec_document_chunks`, also write extracted text to `memory_chunks` + `vec_memory_chunks` + `memory_chunks_fts` so Phase 90 hybrid-RRF surfaces it on subsequent turns. Use a `source: 'document:<doc-slug>'` chunk-path convention so retrieval can identify document-derived chunks.
-**Why for ClawCode:** This is the load-bearing architectural decision. Without it, the operator's "agent should know about Pon's tax return on the next turn" expectation fails.
-**Cost:** ~80 LOC — DocumentStore.ingest gets a side-effect hook into MemoryStore. 1 day plan.
-**Risk:** MEDIUM — dual-write means doubled storage. Mitigation: write reduced chunks (top sections only) to memory_chunks if storage pressure surfaces.
+**What:** When `ingest_document` writes to `document_chunks` + `vec_document_chunks`, also write extracted text to `memory_chunks` + `vec_memory_chunks` (or `vec_memory_chunks_v2` per CF-2) + `memory_chunks_fts` so Phase 90 hybrid-RRF surfaces it on subsequent turns. Use a `path: 'document:<doc-slug>'` chunk-path convention so retrieval can identify document-derived chunks. **Includes the CF-1 fix:** extend `applyTimeWindowFilter` allow-list to exempt `document:` paths so documents don't expire from RRF after 14 days.
+**Why for ClawCode:** This is the load-bearing architectural decision and the primary retrieval surface (per CF-3, U6 obviates U8 for the operator-turn retrieval path). Without it, "agent should know about Pon's tax return next month" fails twice (once because documents aren't in memory_chunks, once because the time-window filter would expire them).
+**Cost:** ~80 LOC (cross-write hook) + 1 LOC + test (time-window allow-list) + (per CF-2) 0-30 LOC depending on Phase 115 migration phase coordination. 1.5 day plan.
+**Risk:** MEDIUM — dual-write means doubled storage. Mitigation: write reduced chunks (top sections only) to memory_chunks if storage pressure surfaces. The time-window allow-list fix (CF-1) is itself low-risk (mirrors vault/procedures pattern exactly).
 
 #### U7: Fail-mode alerts to admin-clawdy [SC-7]
 **What:** When ingestion fails (OCR confidence < threshold, structured-extract validation fails twice, vision API rejects payload), emit a structured event via trigger-engine to admin-clawdy. Reuse Phase 127 `recordStall` JSONL writer pattern.
@@ -324,12 +356,6 @@ const reranker = await pipeline('text-classification', 'Xenova/bge-reranker-base
 **Cost:** ~60 LOC. 0.5 day plan.
 
 ### Tier 2 — Quality win, low cost (RECOMMEND ship in Phase 101 Plan 4; can split if surface area large)
-
-#### U8: Hybrid-RRF + FTS5 on DocumentStore [SC-9]
-**What:** Add `document_chunks_fts` virtual table (FTS5, mirrors `memory_chunks_fts`). Extend DocumentStore.search to issue parallel vec + FTS queries and RRF-fuse via copy of `src/memory/memory-retrieval.ts:rrfFuse`.
-**Why:** -49% retrieval failure rate per Anthropic benchmark — same compute envelope (FTS5 is in-process, RRF is pure JS).
-**Cost:** ~120 LOC + schema migration + tests. 1.5 day plan.
-**Risk:** Low — mirroring proven Phase 90 pattern.
 
 #### U9: Local cross-encoder reranker [SC-10]
 **What:** Add `src/documents/reranker.ts` using `Xenova/bge-reranker-base` via `@huggingface/transformers` `text-classification` pipeline. Apply over top-20 RRF candidates, keep top-5 for return.
@@ -341,7 +367,8 @@ const reranker = await pipeline('text-classification', 'Xenova/bge-reranker-base
 
 | Item | Why deferred |
 |------|--------------|
-| Embedding upgrade (bge-m3 / jina-v3) | Phase 115's bge-small int8 isn't even cut-over yet; +3-5 MTEB is dwarfed by reranker (+10-30% precision). Re-open if U8+U9 don't close Pon precision. |
+| **U8: Hybrid-RRF + FTS5 on DocumentStore** | Per CF-3, U6 carries operator-turn retrieval via Phase 90 RRF on `memory_chunks`. U8 only matters for the direct `search-documents` MCP tool. Defer to Phase 101.5 if operator hits precision regressions on direct document-scoped search. ~120 LOC follow-up. `document_chunks_fts` is greenfield (not yet built). |
+| Embedding upgrade (bge-m3 / jina-v3) | Phase 115's bge-small int8 isn't even cut-over yet; +3-5 MTEB is dwarfed by reranker (+10-30% precision). Re-open if U9 (alone) doesn't close Pon precision. |
 | ColPali / ColQwen2 visual late-interaction | Multi-vector storage rework + ONNX patchy. Re-open at >10K visual-only docs/agent. |
 | Late chunking (Jina v3) | Requires long-context embedding model (8192-token) — not in current stack. |
 | Contextual retrieval (Anthropic 2024) | Adds Haiku pre-pass per chunk ~$0.005/doc. Worth doing AFTER U1-U9 ship; cleaner as a separate phase. |
@@ -385,12 +412,11 @@ The 2026-04-28 failure: scanned 24-page tax return PDF → subagent fell back to
 6. **OCR fallback (U2 — Claude vision):** Pages 21-24 sent in 1 batch of 4 (well under 8/2000px ceiling) to Claude Haiku 4.5 with prompt "Extract all visible text verbatim, preserving table structure as Markdown." Returns clean text.
 7. **Chunking:** Combined OCR output chunked by section (Schedule A, B, C, D, E header markers) via tokenizer-accurate recursive splitter. Tables treated as atomic chunks (don't split mid-row).
 8. **Embedding (Phase 115 v2):** bge-small-en-v1.5 int8 over each chunk. Stored in `vec_document_chunks` (int8 column — new Phase 101 schema migration).
-9. **Hybrid index (U8):** chunk text also written to `document_chunks_fts` FTS5 for BM25.
-10. **Memory cross-ingest (U6):** chunks also written to `memory_chunks` + `vec_memory_chunks` + `memory_chunks_fts` with `path="document:pon-2024-1040"`. Phase 90 RRF retrieval will see them on next turn.
-11. **Structured extraction (U4):** Anthropic Sonnet tool-use call with the OCR text + `ExtractedTaxReturn` zod-derived JSON schema. Returns typed JSON: `{ year: 2024, taxpayer: "Pon", box1Wages: 97400, scheduleC: { netProfit: 12300, expenses: [...] }, backdoorRoth: { amount: 7000 }, ... }`. Zod validates; on fail retry once with the error.
-12. **File write (existing Phase 100-fu `verify-file-writes`):** Markdown summary written to `/agents/fin-acquisition/documents/pon-2024-1040.md`. Structured JSON written to `/agents/fin-acquisition/documents/pon-2024-1040.json`. Both writes verified by stat-after-write.
-13. **MCP tool returns:** `{ source: "pon-2024-1040.pdf", text_path: "...", structured_path: "...", structured_data: { ... }, chunks_created: 47, pages: 24, ocr_used: ["tesseract:1-20", "claude-vision:21-24"], api_cost_usd: 0.038, p50_chunk_embed_ms: 28 }`.
-14. **Next operator turn ("what was Pon's Schedule C net?"):** Phase 90 RRF retrieval fires pre-turn. vec match on "Schedule C net" + FTS BM25 match on "Schedule C" + path-derived score-weight 0 (no vault/procedures bonus on `document:` path) → top-20 → U9 bge-reranker over (query, candidate) pairs → top-5 → `<memory-context>` block injected. Agent answers: "Pon's Schedule C net profit was $12,300" with citation to chunk in the ingested doc.
+9. **Memory cross-ingest (U6):** chunks also written to `memory_chunks` + `vec_memory_chunks` (`_v2` per CF-2) + `memory_chunks_fts` with `path="document:pon-2024-1040"`. Phase 90 RRF retrieval (vec + BM25 + RRF, time-window filter exempts `document:*` per CF-1) will see them on next turn AND every turn thereafter.
+10. **Structured extraction (U4):** Anthropic Sonnet tool-use call with the OCR text + `ExtractedTaxReturn` zod-derived JSON schema. Returns typed JSON: `{ year: 2024, taxpayer: "Pon", box1Wages: 97400, scheduleC: { netProfit: 12300, expenses: [...] }, backdoorRoth: { amount: 7000 }, ... }`. Zod validates; on fail retry once with the error.
+11. **File write (existing Phase 100-fu `verify-file-writes`):** Markdown summary written to `/agents/fin-acquisition/documents/pon-2024-1040.md`. Structured JSON written to `/agents/fin-acquisition/documents/pon-2024-1040.json`. Both writes verified by stat-after-write.
+12. **MCP tool returns:** `{ source: "pon-2024-1040.pdf", text_path: "...", structured_path: "...", structured_data: { ... }, chunks_created: 47, pages: 24, ocr_used: ["tesseract:1-20", "claude-vision:21-24"], api_cost_usd: 0.038, p50_chunk_embed_ms: 28 }`.
+13. **Next operator turn ("what was Pon's Schedule C net?"):** Phase 90 RRF retrieval fires pre-turn. vec match on "Schedule C net" + FTS BM25 match on "Schedule C" + path-derived score-weight 0 (no vault/procedures bonus on `document:` path) → top-20 → U9 bge-reranker over (query, candidate) pairs → top-5 → `<memory-context>` block injected. Agent answers: "Pon's Schedule C net profit was $12,300" with citation to chunk in the ingested doc.
 
 **Failure modes that close (mapping to gaps from §1):**
 
@@ -415,29 +441,34 @@ Recommended split for Phase 101 (4 plans, sequenced by dependency):
 - U1: type detection + handler dispatch
 - U2: OCR fallback (Tesseract primary + Claude vision fallback)
 - U3: page-batching with sharp + 8-page/1568px ceiling
-- Deploy-side: `tesseract-ocr` install on clawdy via `scripts/deploy-clawdy.sh` precheck
-- **Estimate:** 3-4 days, ~600 LOC, 4-6 tasks
-- **Gate:** Pon's 24-page scanned PDF round-trips text without error.
+- **CF-2: switch `daemon.ts:11011` and the new MCP tool path from `embedder.embed()` (v1 MiniLM) to `embedder.embedV2()` (bge-small int8)** — explicit code change, ~5 LOC
+- **CF-2: migrate `vec_document_chunks` from `float[384] cosine` to `int8[384] cosine`** — schema migration (one-time recreate; no v1 history in DocumentStore per baseline assumption)
+- **CF-2 coordination check:** confirm in CONTEXT.md whether U6's cross-write into `vec_memory_chunks` requires auto-flipping the agent to Phase 115 `dual-write` for the document path; default: yes, auto-flip on first document ingestion
+- Deploy-side: `tesseract-ocr` + `poppler-utils` install on clawdy via `scripts/deploy-clawdy.sh` precheck
+- **Estimate:** 3-4 days, ~650 LOC, 5-7 tasks
+- **Gate:** Pon's 24-page scanned PDF round-trips text without error; new chunks stored as int8 in `vec_document_chunks`.
 
 ### Plan 02 — Structured extraction + MCP tool
+- **CF-5: `checkpoint:human-verify` task at head — operator produces `tests/fixtures/pon-2024-truth.json` (curated truth values for SC-8 gate)** — blocks downstream tasks until file lands
 - U4: zod-derived schemas (`ExtractedTaxReturn` first) + Anthropic tool-use call
 - U5: `ingest_document` MCP tool wrapping U1-U4 + existing IPC
 - U7: fail-mode alerts via trigger-engine (Phase 127 pattern)
-- **Estimate:** 2-3 days, ~400 LOC, 3-4 tasks
+- **Estimate:** 2-3 days, ~400 LOC, 4-5 tasks (incl. checkpoint)
 - **Gate:** Pon UAT — `ExtractedTaxReturn` field accuracy ≥ 95% vs operator truth values.
 
 ### Plan 03 — Memory pipeline integration
-- U6: auto cross-ingest into `memory_chunks` + `vec_memory_chunks` + `memory_chunks_fts`
+- U6: auto cross-ingest into `memory_chunks` + `vec_memory_chunks` (or `_v2` per CF-2) + `memory_chunks_fts`
+- **CF-1: extend `applyTimeWindowFilter` in `src/memory/memory-chunks.ts` to allow-list `path` prefixes matching `document:`** — 1 LOC + regression test (365-day filter keeps `document:*` chunks)
 - Phase 90 RRF surfaces document chunks on subsequent turns
 - New telemetry for ingest p50/p95 + chunk counts + api cost
-- **Estimate:** 1.5 days, ~250 LOC, 2-3 tasks
-- **Gate:** Day-after-ingest "what was Pon's Schedule C net?" returns cited answer from doc chunks.
+- **Estimate:** 1.5 days, ~260 LOC, 3 tasks
+- **Gate:** Day-after-ingest "what was Pon's Schedule C net?" returns cited answer from doc chunks; **14-day-old ingested document still surfaces in Phase 90 RRF** (CF-1 regression test passes).
 
-### Plan 04 — Retrieval quality upgrade
-- U8: hybrid-RRF + FTS5 on DocumentStore (mirror Phase 90)
-- U9: local bge-reranker-base via existing transformers.js runtime
-- **Estimate:** 2 days, ~350 LOC, 3 tasks
-- **Gate:** retrieval p95 ≤ 200ms, precision@5 measurably improved on a synthetic financial-doc Q&A test set.
+### Plan 04 — Retrieval quality upgrade (U9 only — U8 deferred per CF-3)
+- U9: local `Xenova/bge-reranker-base` via existing `@huggingface/transformers` runtime; applied over Phase 90 RRF top-20 candidates, keep top-5
+- Wave 0 smoke-test: `pipeline('text-classification', 'Xenova/bge-reranker-base')` loads + scores a (query, passage) pair end-to-end. If this fails at runtime, U9 splits to a follow-up phase.
+- **Estimate:** 1 day, ~100 LOC + warmup hook, 2 tasks
+- **Gate:** retrieval p95 ≤ 200ms with reranker; precision@5 measurably improved on a synthetic financial-doc Q&A test set.
 
 ### Plan 05 — operator-deploy + UAT verification (autonomous: false)
 - Deploy via `scripts/deploy-clawdy.sh`
@@ -471,7 +502,7 @@ These need operator input at `/gsd:discuss-phase 101`:
    - A) Always cross-ingest every document chunk → memory_chunks (storage doubled, simplest)
    - B) Cross-ingest only structured-summary chunks (top sections, table of contents, key totals) — saves storage, may miss long-tail queries
    - C) Cross-ingest gated by document type — tax returns full, brokerage statements summary-only
-   - **Research recommendation:** (A) for Phase 101 simplicity; revisit if memory_chunks growth becomes a pain point.
+   - **Research recommendation:** (A) for Phase 101 simplicity; revisit if memory_chunks growth becomes a pain point. **Locked finding (CF-1):** cross-ingested chunks must use `path: "document:<slug>"` AND the time-window filter must be extended to exempt this prefix — see Plan 03 task list.
 
 4. **Reranker (U9) in Phase 101 or split?**
    - A) Include in Plan 04 of Phase 101 (recommended)
@@ -479,9 +510,7 @@ These need operator input at `/gsd:discuss-phase 101`:
    - **Research recommendation:** (A) — same ONNX runtime as embedder, ~1 day plan, biggest precision win per dollar.
 
 5. **Hybrid-RRF on DocumentStore (U8) in Phase 101 or split?**
-   - A) Include in Plan 04
-   - B) Defer — DocumentStore stays cosine-only short term; cross-ingest into memory_chunks (U6) gives Phase 90's hybrid for free on that path
-   - **Research recommendation:** (B) is defensible — if U6 is solid, U8 becomes redundant for retrieval (Phase 90 RRF on memory_chunks IS the retrieval path). U8 ONLY matters for direct `search-documents` IPC calls. **Lean toward (B) — defer U8** unless operator uses the direct documents-search MCP tool heavily.
+   - **RESOLVED (CF-3): defer U8 to Phase 101.5.** U6 (cross-ingest into memory_chunks) carries operator-turn retrieval via Phase 90 RRF, making U8 redundant for that surface. U8 only matters for the direct `search-documents` MCP tool — re-open if operator hits precision regressions on document-scoped search. This shrinks Plan 04 to U9 only (1 day instead of 2).
 
 6. **`ExtractedTaxReturn` schema scope for Pon UAT:**
    - Operator-curated field list. Suggested initial: `taxYear`, `taxpayerName`, `box1Wages`, `scheduleC: { netProfit, grossReceipts, expenses[] }`, `backdoorRoth: { amount, year }`, `iraDeduction`, `qbi: { deduction }`. Operator adds fields as needs surface.
@@ -568,7 +597,7 @@ Phase 101 is a **greenfield phase** — no rename, refactor, or migration. The n
 | SC-6 | document ingestion writes to `memory_chunks` + Phase 90 RRF surfaces it | integration | `npm test -- src/memory/__tests__/document-memory-bridge.test.ts` | ❌ Wave 0 |
 | SC-7 | OCR low-confidence emits trigger-engine alert | unit | `npm test -- src/documents/__tests__/fail-mode-alerts.test.ts` | ❌ Wave 0 |
 | SC-8 | Pon UAT — 24-page scanned PDF produces matching `ExtractedTaxReturn` | UAT (manual + scripted) | `scripts/uat/pon-tax-return.sh` (new) | ❌ Wave 0 — operator-curated truth file |
-| SC-9 | hybrid RRF over document_chunks improves precision@5 vs cosine-only | unit | `npm test -- src/documents/__tests__/hybrid-retrieval.test.ts` | ❌ Wave 0 (only if Plan 04 includes U8) |
+| SC-9 | (DEFERRED to Phase 101.5 per CF-3) — hybrid RRF over document_chunks improves precision@5 vs cosine-only | unit | `npm test -- src/documents/__tests__/hybrid-retrieval.test.ts` | N/A — not in Phase 101 scope |
 | SC-10 | reranker orders 20 candidates correctly on synthetic relevance set | unit | `npm test -- src/documents/__tests__/reranker.test.ts` | ❌ Wave 0 |
 
 ### Sampling Rate
@@ -582,10 +611,10 @@ Phase 101 is a **greenfield phase** — no rename, refactor, or migration. The n
 - [ ] `src/documents/__tests__/page-batcher.test.ts` — covers SC-3
 - [ ] `src/documents/__tests__/structured-extract.test.ts` — covers SC-4
 - [ ] `src/mcp/__tests__/ingest-document-tool.test.ts` — covers SC-5
-- [ ] `src/memory/__tests__/document-memory-bridge.test.ts` — covers SC-6
+- [ ] `src/memory/__tests__/document-memory-bridge.test.ts` — covers SC-6 (incl. CF-1 regression: `document:*` chunks survive 365-day time-window filter)
 - [ ] `src/documents/__tests__/fail-mode-alerts.test.ts` — covers SC-7
 - [ ] `scripts/uat/pon-tax-return.sh` + `tests/fixtures/pon-2024-1040.pdf` + `tests/fixtures/pon-2024-truth.json` — covers SC-8
-- [ ] `src/documents/__tests__/hybrid-retrieval.test.ts` — covers SC-9
+- ~~`src/documents/__tests__/hybrid-retrieval.test.ts` — covers SC-9~~ (DEFERRED per CF-3 — moves to Phase 101.5)
 - [ ] `src/documents/__tests__/reranker.test.ts` — covers SC-10
 - [ ] Test fixtures directory: small text-PDF, small scanned-PDF (synthetic), small docx, small xlsx, sample image
 
@@ -654,7 +683,8 @@ Phase 101 is a **greenfield phase** — no rename, refactor, or migration. The n
 | A3 | Mistral OCR 3 vendor benchmarks (74% win rate, 96.6% tables) are accurate | §2.1 | Vendor-reported; not third-party verified. Only matters if Mistral becomes Tier 4 escape hatch |
 | A4 | Anthropic batch image limit "stricter 2000px on >20 image batches" still current | §2.1, §6 | If Anthropic loosens, page-batching constraint relaxes — no failure mode, just suboptimal batches |
 | A5 | bge-reranker-base ONNX via `text-classification` pipeline works in `@huggingface/transformers` 4.2.0 | §2.6 | If incompatible at runtime, U9 falls back to skip-rerank — Plan 04 ships without it. Smoke-test in Wave 0. |
-| A6 | Operator's `fin-acquisition` agent currently runs Phase 115 v1 (MiniLM) not v2 (bge-small int8) | §1 baseline | If already on v2, no change to plan; if cutover stuck, document ingestion should still use v2 directly (DocumentStore is greenfield for v2) |
+| A6 | Operator's `fin-acquisition` agent currently runs Phase 115 v1 (MiniLM) not v2 (bge-small int8) | §1 baseline | If already on v2, no change to plan; if cutover stuck, document ingestion uses v2 directly per CF-2 (DocumentStore is greenfield for v2) |
+| A9 | No prior `vec_document_chunks` rows exist that need re-embedding when migrating to int8 schema (CF-2) | §CF-2 | If rows exist, Plan 01 needs a tiny one-shot re-embed pass instead of a clean schema recreate. Operator probes per-agent DB to confirm during discuss-phase. |
 | A7 | `ExtractedTaxReturn` field accuracy ≥ 95% on Pon truth values | §5 | Setting too low/high — operator confirms in CONTEXT.md |
 | A8 | Memory ceiling 500MB/agent at 50K chunks | §5 | Off by factor 2× either way is fine; instrumentation in Plan 03 surfaces actuals |
 
