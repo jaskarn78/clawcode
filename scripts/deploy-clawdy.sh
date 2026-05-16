@@ -105,8 +105,30 @@ if [ -z "$PASSWORD" ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Phase 101 D-01 — Tesseract CLI precheck on $HOST
+# ---------------------------------------------------------------------------
+# The document-ingestion pipeline (Phase 101) uses Tesseract as the Tier-1
+# OCR backend for scanned PDFs (fall-back is in-process tesseract.js WASM
+# at ~2x cost). Tesseract is NOT installed by default on Debian/Ubuntu, so
+# we fail-fast on a missing binary with a one-line apt-install hint rather
+# than silently letting the daemon route every scanned PDF through the
+# slower WASM path.
+#
+# Skipped under --dry-run (the dry-run preview already prints intent).
+if [ "$DRY_RUN" = 0 ]; then
+  if ! ssh "$HOST" 'which tesseract' >/dev/null 2>&1; then
+    echo "✗ Phase 101 D-01: tesseract-ocr not installed on $HOST" >&2
+    echo "  Document OCR (scanned-PDF Tier-1 backend) requires it." >&2
+    echo "  Fix:  ssh $HOST 'sudo apt-get install -y tesseract-ocr'" >&2
+    echo "  Then re-run: $0" >&2
+    exit 1
+  fi
+fi
+
 if [ "$DRY_RUN" = 1 ]; then
   echo "DRY RUN — would execute:"
+  echo "  ssh $HOST 'which tesseract'  # Phase 101 D-01 precheck"
   [ "$DO_BUILD" = 1 ]   && echo "  npm run build"
   echo "  rsync -avz $DIST_FILE $REMOTE_USER@$HOST:$STAGING_PATH"
   if [ -d "$REPO_ROOT/dist/dashboard/spa" ]; then
